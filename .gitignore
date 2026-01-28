@@ -54,4 +54,4 @@ coverage.html
 tmp/
 temp/
 -p/
-.claude/*
+.claude/

@@ -1,0 +1,57 @@
+# ============================================
+# GTD API - Git Ignore
+# ============================================
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Keys & Secrets (sensitive credentials)
+keys/
+
+# Documentation (internal only)
+docs/
+
+# Frontend (separate deployment)
+frontend/
+
+# Binaries
+bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Go
+*.test
+*.out
+go.work
+go.work.sum
+vendor/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Coverage
+coverage.out
+coverage.html
+
+# Temporary files
+tmp/
+temp/
+-p/
+.claude/*

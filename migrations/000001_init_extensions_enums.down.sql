@@ -1,0 +1,15 @@
+DROP TYPE IF EXISTS ocr_status;
+DROP TYPE IF EXISTS liveness_status;
+DROP TYPE IF EXISTS identity_doc_type;
+DROP TYPE IF EXISTS disbursement_provider;
+DROP TYPE IF EXISTS transfer_status;
+DROP TYPE IF EXISTS transfer_type;
+DROP TYPE IF EXISTS callback_type;
+DROP TYPE IF EXISTS refund_status;
+DROP TYPE IF EXISTS fee_type;
+DROP TYPE IF EXISTS payment_provider;
+DROP TYPE IF EXISTS payment_status;
+DROP TYPE IF EXISTS payment_type;
+DROP TYPE IF EXISTS transaction_status;
+DROP TYPE IF EXISTS transaction_type;
+DROP TYPE IF EXISTS product_type;

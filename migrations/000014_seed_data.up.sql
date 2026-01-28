@@ -1,0 +1,248 @@
+-- ============================================
+-- Migration 000014: Seed Data
+-- Sample data for development/testing
+-- ============================================
+
+-- ============================================
+-- ADMIN USERS
+-- ============================================
+
+-- Sample admin user (password: admin123)
+-- Password hash generated with bcrypt cost 10
+INSERT INTO admin_users (email, password_hash, name, role) VALUES
+('admin@gtd.co.id', '$2a$10$YourBcryptHashHere', 'Super Admin', 'superadmin')
+ON CONFLICT (email) DO NOTHING;
+
+-- ============================================
+-- CLIENTS
+-- ============================================
+
+INSERT INTO clients (client_id, name, api_key, sandbox_key, callback_url, callback_secret, ip_whitelist) VALUES
+('ppob-id', 'PPOB.id', 'gb_live_ppob_abc123xyz', 'gb_sandbox_ppob_abc123xyz', 'https://ppob.id/api/callback/gtd', 'gb_secret_ppob_xyz789', ARRAY['103.xxx.xxx.xxx']),
+('seaply', 'Seaply.co', 'gb_live_seaply_def456uvw', 'gb_sandbox_seaply_def456uvw', 'https://seaply.co/api/callback/gtd', 'gb_secret_seaply_uvw456', ARRAY['103.yyy.yyy.yyy'])
+ON CONFLICT (client_id) DO NOTHING;
+
+-- ============================================
+-- PAYMENT METHODS
+-- ============================================
+
+INSERT INTO payment_methods (type, code, name, provider, fee_type, fee_flat, fee_percent, min_amount, max_amount, expired_duration, display_order, is_active, payment_instruction) VALUES
+-- Virtual Account - Direct
+('VA', '014', 'BCA Virtual Account', 'pakailink', 'flat', 4500, 0, 10000, 50000000, 86400, 1, true,
+'{
+  "atm": ["Masukkan kartu ATM dan PIN", "Pilih menu Transfer > BCA Virtual Account", "Masukkan nomor VA", "Konfirmasi pembayaran"],
+  "mobileBanking": ["Login ke BCA Mobile", "Pilih m-Transfer > BCA Virtual Account", "Masukkan nomor VA", "Konfirmasi dengan PIN"],
+  "internetBanking": ["Login ke KlikBCA", "Pilih Transfer Dana > Transfer ke BCA Virtual Account", "Masukkan nomor VA", "Konfirmasi dengan KeyBCA"]
+}'::jsonb),
+
+('VA', '002', 'BRI Virtual Account', 'bri_direct', 'flat', 4000, 0, 10000, 50000000, 86400, 2, true,
+'{
+  "atm": ["Masukkan kartu ATM dan PIN", "Pilih menu Transaksi Lain > Pembayaran > Lainnya", "Masukkan kode BRIVA (88908) + nomor VA", "Konfirmasi pembayaran"],
+  "mobileBanking": ["Login ke BRI Mobile", "Pilih Mobile Banking BRI > Pembayaran > BRIVA", "Masukkan nomor VA", "Konfirmasi dengan PIN"],
+  "internetBanking": ["Login ke Internet Banking BRI", "Pilih Pembayaran > BRIVA", "Masukkan nomor VA", "Konfirmasi dengan mToken"]
+}'::jsonb),
+
+('VA', '009', 'BNI Virtual Account', 'bni_direct', 'flat', 4000, 0, 10000, 50000000, 86400, 3, true,
+'{
+  "atm": ["Masukkan kartu ATM dan PIN", "Pilih menu Lainnya > Transfer > Rekening Tabungan", "Masukkan nomor VA", "Konfirmasi pembayaran"],
+  "mobileBanking": ["Login ke BNI Mobile Banking", "Pilih Transfer > Virtual Account Billing", "Masukkan nomor VA", "Konfirmasi dengan PIN"],
+  "internetBanking": ["Login ke BNI Internet Banking", "Pilih Transfer > Transfer ke BNI Virtual Account", "Masukkan nomor VA", "Konfirmasi dengan mToken"]
+}'::jsonb),
+
+('VA', '008', 'Mandiri Virtual Account', 'mandiri_direct', 'flat', 4000, 0, 10000, 50000000, 86400, 4, true,
+'{
+  "atm": ["Masukkan kartu ATM dan PIN", "Pilih menu Bayar/Beli > Lainnya > Multi Payment", "Masukkan kode perusahaan (89661) + nomor VA", "Konfirmasi pembayaran"],
+  "mobileBanking": ["Login ke Livin by Mandiri", "Pilih Bayar > Multipayment", "Masukkan kode perusahaan + nomor VA", "Konfirmasi dengan PIN"],
+  "internetBanking": ["Login ke Mandiri Internet Banking", "Pilih Bayar > Multipayment", "Masukkan kode perusahaan + nomor VA", "Konfirmasi dengan MPIN"]
+}'::jsonb),
+
+('VA', '490', 'Bank Neo Virtual Account', 'bnc_direct', 'flat', 4000, 0, 10000, 50000000, 86400, 5, true,
+'{
+  "mobileBanking": ["Login ke Bank Neo Mobile", "Pilih Transfer > Virtual Account", "Masukkan nomor VA", "Konfirmasi dengan PIN"],
+  "internetBanking": ["Login ke Bank Neo Internet Banking", "Pilih Transfer > Virtual Account", "Masukkan nomor VA", "Konfirmasi"]
+}'::jsonb),
+
+-- Virtual Account - Via Pakailink
+('VA', '451', 'BSI Virtual Account', 'pakailink', 'flat', 4500, 0, 10000, 50000000, 86400, 6, true,
+'{
+  "atm": ["Masukkan kartu ATM dan PIN", "Pilih menu Transfer", "Masukkan nomor VA", "Konfirmasi pembayaran"],
+  "mobileBanking": ["Login ke BSI Mobile", "Pilih Transfer", "Masukkan nomor VA", "Konfirmasi dengan PIN"]
+}'::jsonb),
+
+('VA', '028', 'OCBC Virtual Account', 'pakailink', 'flat', 4500, 0, 10000, 50000000, 86400, 7, true,
+'{
+  "mobileBanking": ["Login ke OCBC Mobile", "Pilih Transfer", "Masukkan nomor VA", "Konfirmasi dengan PIN"],
+  "internetBanking": ["Login ke OCBC Internet Banking", "Pilih Transfer", "Masukkan nomor VA", "Konfirmasi"]
+}'::jsonb),
+
+('VA', '022', 'CIMB Niaga Virtual Account', 'pakailink', 'flat', 4500, 0, 10000, 50000000, 86400, 8, true,
+'{
+  "atm": ["Masukkan kartu ATM dan PIN", "Pilih menu Transfer", "Masukkan nomor VA", "Konfirmasi pembayaran"],
+  "mobileBanking": ["Login ke Octo Mobile", "Pilih Transfer", "Masukkan nomor VA", "Konfirmasi dengan PIN"]
+}'::jsonb),
+
+('VA', '013', 'Permata Virtual Account', 'pakailink', 'flat', 4500, 0, 10000, 50000000, 86400, 9, true,
+'{
+  "atm": ["Masukkan kartu ATM dan PIN", "Pilih menu Transaksi Lainnya > Pembayaran > Pembayaran Lainnya", "Masukkan nomor VA", "Konfirmasi pembayaran"],
+  "mobileBanking": ["Login ke PermataMobile X", "Pilih Bayar Tagihan", "Masukkan nomor VA", "Konfirmasi dengan PIN"]
+}'::jsonb),
+
+('VA', '147', 'Bank Muamalat Virtual Account', 'pakailink', 'flat', 4500, 0, 10000, 50000000, 86400, 10, true,
+'{
+  "atm": ["Masukkan kartu ATM dan PIN", "Pilih menu Transfer", "Masukkan nomor VA", "Konfirmasi pembayaran"],
+  "mobileBanking": ["Login ke Muamalat DIN", "Pilih Transfer", "Masukkan nomor VA", "Konfirmasi dengan PIN"]
+}'::jsonb),
+
+-- E-Wallet
+('EWALLET', 'DANA', 'DANA', 'dana_direct', 'percent', 0, 1.50, 1000, 10000000, 1800, 11, true,
+'{
+  "desktop": ["Klik tombol Bayar dengan DANA", "Login dengan akun DANA", "Konfirmasi pembayaran"],
+  "mobile": ["Buka aplikasi DANA", "Scan QR atau klik link pembayaran", "Konfirmasi dengan PIN"]
+}'::jsonb),
+
+('EWALLET', 'OVO', 'OVO', 'ovo_direct', 'percent', 0, 2.00, 1000, 10000000, 1800, 12, true,
+'{
+  "steps": ["Push notification akan dikirim ke aplikasi OVO", "Buka aplikasi OVO", "Konfirmasi pembayaran dengan PIN"]
+}'::jsonb),
+
+('EWALLET', 'GOPAY', 'GoPay', 'midtrans', 'percent', 0, 2.00, 1000, 10000000, 1800, 13, true,
+'{
+  "steps": ["Buka aplikasi Gojek", "Tap Bayar dan scan QR code", "Konfirmasi pembayaran dengan PIN"]
+}'::jsonb),
+
+('EWALLET', 'SHOPEEPAY', 'ShopeePay', 'midtrans', 'percent', 0, 2.00, 1000, 10000000, 1800, 14, true,
+'{
+  "steps": ["Buka aplikasi Shopee", "Tap ShopeePay dan scan QR code", "Konfirmasi pembayaran dengan PIN"]
+}'::jsonb),
+
+-- QRIS
+('QRIS', 'MPM', 'QRIS', 'dana_direct', 'percent', 0, 0.70, 1000, 10000000, 1800, 15, true,
+'{
+  "steps": ["Buka aplikasi e-wallet atau mobile banking", "Pilih menu Scan QR / QRIS", "Scan QR code", "Konfirmasi pembayaran"],
+  "supportedApps": ["GoPay", "OVO", "DANA", "LinkAja", "ShopeePay", "Mobile Banking"]
+}'::jsonb),
+
+-- Retail
+('RETAIL', 'INDOMARET', 'Indomaret', 'xendit', 'flat', 5000, 0, 10000, 5000000, 86400, 16, true,
+'{
+  "steps": ["Kunjungi gerai Indomaret terdekat", "Sampaikan untuk pembayaran Xendit", "Berikan kode pembayaran", "Bayar sesuai nominal", "Simpan struk sebagai bukti"]
+}'::jsonb),
+
+('RETAIL', 'ALFAMART', 'Alfamart', 'xendit', 'flat', 5000, 0, 10000, 5000000, 86400, 17, true,
+'{
+  "steps": ["Kunjungi gerai Alfamart terdekat", "Sampaikan untuk pembayaran Xendit", "Berikan kode pembayaran", "Bayar sesuai nominal", "Simpan struk sebagai bukti"]
+}'::jsonb)
+ON CONFLICT (type, code) DO NOTHING;
+
+-- ============================================
+-- BANK CODES (106 banks)
+-- ============================================
+
+INSERT INTO bank_codes (code, short_name, name, swift_code, support_va, support_disbursement) VALUES
+('002', 'BRI', 'Bank BRI', 'BRINIDJA', false, true),
+('008', 'MANDIRI', 'Bank Mandiri', 'BMRIIDJA', false, true),
+('009', 'BNI', 'Bank BNI', 'BNINIDJA', false, true),
+('011', 'DANAMON', 'Bank Danamon Indonesia', 'BDINIDJA', true, true),
+('013', 'PERMATA', 'Bank Permata', 'BBBAIDJA', true, true),
+('014', 'BCA', 'Bank BCA', 'CENAIDJA', true, true),
+('016', 'MAYBANK', 'Bank Maybank Indonesia', 'IBBKIDJA', false, true),
+('019', 'PANIN', 'Bank Panin', 'PINBIDJA', false, true),
+('022', 'CIMB', 'Bank CIMB Niaga', 'BNIAIDJA', true, true),
+('023', 'UOB', 'Bank UOB Indonesia', 'BBIJIDJA', false, true),
+('028', 'OCBC', 'Bank OCBC Indonesia', 'NISPIDJA', true, true),
+('031', 'CITIBANK', 'Citibank, N.A', 'CITIIDJX', false, true),
+('032', 'JPM', 'JP. Morgan Chase Bank, N.A', 'CHASIDJX', false, false),
+('033', 'BOA', 'Bank of America, N.A', 'BOFAID2X', false, false),
+('036', 'CCB', 'China Construction Bank Indonesia', 'MCORIDJA', false, true),
+('037', 'AGI', 'Bank Artha Graha Internasional', 'ARTGIDJA', false, true),
+('040', 'BANGKOK', 'Bangkok Bank', 'BKKBIDJA', false, false),
+('042', 'MUFG', 'MUFG Bank, Ltd.', 'BOTKIDJX', false, true),
+('046', 'DBS', 'Bank DBS Indonesia', 'DBSBIDJA', false, true),
+('047', 'BRP', 'Bank Resona Perdania', 'BPIAIDJA', false, true),
+('048', 'MIZUHO', 'Bank Mizuho Indonesia', 'MHCCIDJA', false, true),
+('050', 'CHARTERED', 'Standard Chartered Bank', 'SCBLIDJX', false, true),
+('054', 'CAPITAL', 'Bank Capital Indonesia', 'BCIAIDJA', false, true),
+('057', 'BNP', 'Bank BNP Paribas Indonesia', 'BNPAIDJA', false, false),
+('061', 'ANZ', 'Bank ANZ Indonesia', 'ANZBIDJX', false, true),
+('067', 'DEUTSCHE', 'Deutsche Bank AG', 'DEUTIDJA', false, false),
+('069', 'BOC', 'Bank of China', 'BKCHIDJA', false, true),
+('076', 'ARTA', 'Bank Bumi Arta', 'BBAIIDJA', false, true),
+('087', 'HSBC', 'Bank HSBC Indonesia', 'HSBCIDJA', false, true),
+('095', 'JTRUST', 'Bank J Trust Indonesia', 'CICTIDJA', false, true),
+('097', 'MAYAPADA', 'Bank Mayapada', 'MAYAIDJA', false, true),
+('110', 'BJB', 'Bank BJB', 'PDJBIDJA', false, true),
+('111', 'DKI', 'Bank DKI', 'BDKIIDJ1', false, true),
+('112', 'DIY', 'Bank BPD DIY', 'PDYKIDJ1', false, true),
+('113', 'JATENG', 'Bank Jateng', 'PDJGIDJ1', false, true),
+('114', 'JATIM', 'Bank Jatim', 'PDJTIDJ1', false, true),
+('115', 'JAMBI', 'Bank Jambi', 'PDJMIDJ1', false, true),
+('116', 'ACEHSYARIAH', 'Bank Aceh Syariah', 'SYACIDJ1', false, true),
+('117', 'SUMUT', 'Bank Sumut', 'PDSUIDJ1', false, true),
+('118', 'NAGARI', 'Bank Nagari', 'PDSBIDJ1', false, true),
+('119', 'RIAUSYARIAH', 'Bank Riau Kepri Syariah', 'PDRIIDJA', false, true),
+('120', 'SUMSEL', 'Bank Sumsel Babel', 'BSSPIDSP', false, true),
+('121', 'LAMPUNG', 'Bank Lampung', 'PDLPIDJ1', false, true),
+('122', 'KALSEL', 'Bank Kalsel', 'PDKSIDJ1', false, true),
+('123', 'KALBAR', 'Bank Kalbar', 'PDKBIDJ1', false, true),
+('124', 'KALTIM', 'Bank Kaltimtara', 'PDKTIDJ1', false, true),
+('125', 'KALTENG', 'Bank Kalteng', 'PDKGIDJ1', false, true),
+('126', 'SULSELBAR', 'Bank Sulselbar', 'PDWSIDJA', false, true),
+('127', 'SULUTGO', 'Bank SulutGo', 'PDWUIDJ1', false, true),
+('128', 'NTBSYARIAH', 'Bank NTB Syariah', 'PDNBIDJ1', false, true),
+('129', 'BALI', 'Bank BPD Bali', 'ABALIDBS', false, true),
+('130', 'NTT', 'Bank NTT', 'PDNTIDJA', false, true),
+('131', 'MALUKU', 'Bank Maluku Malut', 'PDMLIDJ1', false, true),
+('132', 'PAPUA', 'Bank Papua', 'PDIJIDJ1', false, true),
+('133', 'BENGKULU', 'Bank Bengkulu', 'PDBKIDJ1', false, true),
+('134', 'SULTENG', 'Bank Sulteng', 'PDWGIDJ1', false, true),
+('135', 'SULTRA', 'Bank Sultra', 'PDWRIDJ1', false, true),
+('137', 'BANTEN', 'Bank Banten', 'PDBBIDJ1', false, true),
+('146', 'BOI', 'Bank of India Indonesia', 'BKIDIDJA', false, true),
+('147', 'MUAMALAT', 'Bank Muamalat Indonesia', 'MUABIDJA', true, true),
+('151', 'MESTIKA', 'Bank Mestika Dharma', 'MEDHIDS1', false, true),
+('152', 'SHINHAN', 'Bank Shinhan Indonesia', 'MEEKIDJ1', false, true),
+('153', 'SINARMAS', 'Bank Sinarmas', 'SBJKIDJA', true, true),
+('157', 'MASPION', 'Bank Maspion Indonesia', 'MASDIDJ1', false, true),
+('161', 'GANESHA', 'Bank Ganesha', 'GNESIDJA', false, true),
+('164', 'ICBC', 'Bank ICBC Indonesia', 'ICBKIDJA', false, true),
+('167', 'QNB', 'Bank QNB Indonesia', 'AWANIDJA', false, true),
+('200', 'BTN', 'Bank BTN', 'BTANIDJA', false, true),
+('212', 'WOORI', 'Bank Woori Saudara', 'BSDRIDJA', false, true),
+('213', 'JENIUS', 'Bank SMBC Indonesia (Jenius)', 'SUNIIDJA', false, true),
+('425', 'BJBSYARIAH', 'Bank BJB Syariah', 'SYJBIDJ1', false, true),
+('426', 'MEGA', 'Bank Mega', 'MEGAIDJA', false, true),
+('441', 'BUKOPIN', 'Bank KB Bukopin', 'BBUKIDJA', false, true),
+('451', 'BSI', 'Bank Syariah Indonesia (BSI)', 'BSMDIDJA', true, true),
+('459', 'KROM', 'Krom Bank Indonesia', 'BUSTIDJ1', false, true),
+('472', 'BJJ', 'Bank Jasa Jakarta', 'JSABIDJ1', false, true),
+('484', 'LINE', 'Bank Hana (Line Bank)', 'HNBNIDJA', false, true),
+('485', 'MNC', 'Bank MNC Internasional', 'BUMIIDJA', false, true),
+('490', 'NEO', 'Bank Neo Commerce', 'YUDBIDJ1', false, true),
+('494', 'RAYA', 'Bank Raya Indonesia', 'AGTBIDJA', false, true),
+('498', 'SBI', 'Bank SBI Indonesia', 'IDMOIDJ1', false, true),
+('501', 'BLU', 'Bank Digital BCA (blu)', 'BBLUIDJA', false, true),
+('503', 'NOBU', 'Bank National Nobu', 'LFIBIDJ1', false, true),
+('506', 'MEGASYARIAH', 'Bank Mega Syariah', 'BUTGIDJ1', false, true),
+('513', 'INA', 'Bank Ina Perdana', 'IAPTIDJA', false, true),
+('517', 'PANINSYARIAH', 'Bank Panin Dubai Syariah', 'ARFAIDJ1', false, true),
+('520', 'PRIMA', 'Prima Master Bank', 'PMASIDJ1', false, true),
+('521', 'BUKOPINSYARIAH', 'Bank KB Bukopin Syariah', 'SDOBIDJ1', false, true),
+('523', 'SAMPOERNA', 'Bank Sahabat Sampoerna', 'SAHMIDJA', false, true),
+('526', 'OKE', 'Bank Oke Indonesia', 'LMANIDJ1', false, true),
+('531', 'AMAR', 'Bank Amar Indonesia', 'LOMAIDJ1', false, true),
+('535', 'SEABANK', 'SeaBank Indonesia', 'SSPIIDJA', false, true),
+('536', 'BCASYARIAH', 'Bank BCA Syariah', 'BSYAIDJA', false, true),
+('542', 'JAGO', 'Bank Jago', 'JAGBIDJA', false, true),
+('547', 'BTPNSYARIAH', 'Bank BTPN Syariah', 'PUBAIDJ1', false, true),
+('548', 'MAS', 'Bank Multi Arta Sentosa', 'BMSEIDJA', false, true),
+('553', 'HIBANK', 'Bank Hibank Indonesia', 'HBNIIDJA', false, true),
+('555', 'INDEX SELINDO', 'Bank Index Selindo', 'BIDXIDJA', false, true),
+('562', 'SUPERBANK', 'Super Bank Indonesia', 'FAMAIDJ1', false, true),
+('564', 'MANDIRITASPEN', 'Bank Mandiri Taspen', 'SIHBIDJ1', false, true),
+('566', 'VICTORIA', 'Bank Victoria International', 'VICTIDJ1', false, true),
+('567', 'ALLO', 'Allo Bank Indonesia', 'ALOBIDJA', false, true),
+('945', 'IBK', 'Bank IBK Indonesia', 'IBKOIDJA', false, true),
+('947', 'ALADIN', 'Bank Aladin Syariah', 'NETBIDJA', false, true),
+('949', 'CTBC', 'Bank CTBC Indonesia', 'CTCBIDJA', false, true),
+('950', 'COMMONWEALTH', 'Bank Commonwealth', 'BICNIDJA', false, true)
+ON CONFLICT (code) DO NOTHING;

@@ -1,0 +1,204 @@
+services:
+  api:
+    build: .
+    container_name: gtd-api
+    ports:
+      - "8080:8080"
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    environment:
+      # Application
+      - PORT=${PORT}
+      - ENV=${ENV}
+      - BASE_URL=${BASE_URL}
+      # Database
+      - DB_HOST=${DB_HOST}
+      - DB_PORT=${DB_PORT}
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_NAME=${DB_NAME}
+      - DB_SSLMODE=${DB_SSLMODE}
+      # Redis
+      - REDIS_HOST=${REDIS_HOST}
+      - REDIS_PORT=${REDIS_PORT}
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+      - REDIS_DB=${REDIS_DB}
+      # Security
+      - JWT_SECRET=${JWT_SECRET}
+      - CALLBACK_SECRET=${CALLBACK_SECRET}
+      # PPOB - Digiflazz
+      - DIGIFLAZZ_USERNAME=${DIGIFLAZZ_USERNAME}
+      - DIGIFLAZZ_KEY_PRODUCTION=${DIGIFLAZZ_KEY_PRODUCTION}
+      - DIGIFLAZZ_KEY_DEVELOPMENT=${DIGIFLAZZ_KEY_DEVELOPMENT}
+      - DIGIFLAZZ_WEBHOOK_SECRET=${DIGIFLAZZ_WEBHOOK_SECRET}
+      # Payment - Pakailink
+      - PAKAILINK_ENV=${PAKAILINK_ENV}
+      - PAKAILINK_CLIENT_ID=${PAKAILINK_CLIENT_ID}
+      - PAKAILINK_CLIENT_SECRET=${PAKAILINK_CLIENT_SECRET}
+      - PAKAILINK_PARTNER_ID=${PAKAILINK_PARTNER_ID}
+      - PAKAILINK_PRIVATE_KEY_PATH=${PAKAILINK_PRIVATE_KEY_PATH}
+      - PAKAILINK_CALLBACK_URL=${PAKAILINK_CALLBACK_URL}
+      # Payment & Disbursement - BCA Direct
+      - BCA_ENV=${BCA_ENV}
+      - BCA_CLIENT_ID=${BCA_CLIENT_ID}
+      - BCA_CLIENT_SECRET=${BCA_CLIENT_SECRET}
+      - BCA_API_KEY=${BCA_API_KEY}
+      - BCA_API_SECRET=${BCA_API_SECRET}
+      - BCA_CORPORATE_ID=${BCA_CORPORATE_ID}
+      - BCA_SOURCE_ACCOUNT=${BCA_SOURCE_ACCOUNT}
+      - BCA_PRIVATE_KEY_PATH=${BCA_PRIVATE_KEY_PATH}
+      - BCA_VA_CALLBACK_URL=${BCA_VA_CALLBACK_URL}
+      - BCA_DISB_CALLBACK_URL=${BCA_DISB_CALLBACK_URL}
+      # Payment & Disbursement - BRI Direct
+      - BRI_ENV=${BRI_ENV}
+      - BRI_CLIENT_ID=${BRI_CLIENT_ID}
+      - BRI_CLIENT_SECRET=${BRI_CLIENT_SECRET}
+      - BRI_PARTNER_ID=${BRI_PARTNER_ID}
+      - BRI_BRIVA_NUMBER=${BRI_BRIVA_NUMBER}
+      - BRI_COMPANY_CODE=${BRI_COMPANY_CODE}
+      - BRI_SOURCE_ACCOUNT=${BRI_SOURCE_ACCOUNT}
+      - BRI_PRIVATE_KEY_PATH=${BRI_PRIVATE_KEY_PATH}
+      - BRI_VA_CALLBACK_URL=${BRI_VA_CALLBACK_URL}
+      - BRI_DISB_CALLBACK_URL=${BRI_DISB_CALLBACK_URL}
+      # Payment & Disbursement - BNI Direct
+      - BNI_ENV=${BNI_ENV}
+      - BNI_CLIENT_ID=${BNI_CLIENT_ID}
+      - BNI_CLIENT_SECRET=${BNI_CLIENT_SECRET}
+      - BNI_API_KEY=${BNI_API_KEY}
+      - BNI_API_SECRET=${BNI_API_SECRET}
+      - BNI_SOURCE_ACCOUNT=${BNI_SOURCE_ACCOUNT}
+      - BNI_PRIVATE_KEY_PATH=${BNI_PRIVATE_KEY_PATH}
+      - BNI_VA_CALLBACK_URL=${BNI_VA_CALLBACK_URL}
+      - BNI_DISB_CALLBACK_URL=${BNI_DISB_CALLBACK_URL}
+      # Payment & Disbursement - Mandiri Direct
+      - MANDIRI_ENV=${MANDIRI_ENV}
+      - MANDIRI_CLIENT_ID=${MANDIRI_CLIENT_ID}
+      - MANDIRI_CLIENT_SECRET=${MANDIRI_CLIENT_SECRET}
+      - MANDIRI_CORPORATE_ID=${MANDIRI_CORPORATE_ID}
+      - MANDIRI_COMPANY_CODE=${MANDIRI_COMPANY_CODE}
+      - MANDIRI_SOURCE_ACCOUNT=${MANDIRI_SOURCE_ACCOUNT}
+      - MANDIRI_PRIVATE_KEY_PATH=${MANDIRI_PRIVATE_KEY_PATH}
+      - MANDIRI_VA_CALLBACK_URL=${MANDIRI_VA_CALLBACK_URL}
+      - MANDIRI_DISB_CALLBACK_URL=${MANDIRI_DISB_CALLBACK_URL}
+      # Payment & Disbursement - BNC Direct / Bank Neo
+      - BNC_ENV=${BNC_ENV}
+      - BNC_CLIENT_ID=${BNC_CLIENT_ID}
+      - BNC_CLIENT_SECRET=${BNC_CLIENT_SECRET}
+      - BNC_PARTNER_ID=${BNC_PARTNER_ID}
+      - BNC_CHANNEL_ID=${BNC_CHANNEL_ID}
+      - BNC_SOURCE_ACCOUNT=${BNC_SOURCE_ACCOUNT}
+      - BNC_PRIVATE_KEY_PATH=${BNC_PRIVATE_KEY_PATH}
+      - BNC_VA_CALLBACK_URL=${BNC_VA_CALLBACK_URL}
+      - BNC_DISB_CALLBACK_URL=${BNC_DISB_CALLBACK_URL}
+      # Payment - DANA Direct
+      - DANA_ENV=${DANA_ENV}
+      - DANA_MERCHANT_ID=${DANA_MERCHANT_ID}
+      - DANA_CLIENT_ID=${DANA_CLIENT_ID}
+      - DANA_CLIENT_SECRET=${DANA_CLIENT_SECRET}
+      - DANA_PARTNER_ID=${DANA_PARTNER_ID}
+      - DANA_PRIVATE_KEY_PATH=${DANA_PRIVATE_KEY_PATH}
+      - DANA_CALLBACK_URL=${DANA_CALLBACK_URL}
+      # Payment - OVO Direct
+      - OVO_ENV=${OVO_ENV}
+      - OVO_APP_ID=${OVO_APP_ID}
+      - OVO_API_KEY=${OVO_API_KEY}
+      - OVO_MERCHANT_ID=${OVO_MERCHANT_ID}
+      - OVO_CALLBACK_URL=${OVO_CALLBACK_URL}
+      # Payment - Midtrans
+      - MIDTRANS_ENV=${MIDTRANS_ENV}
+      - MIDTRANS_SERVER_KEY=${MIDTRANS_SERVER_KEY}
+      - MIDTRANS_CLIENT_KEY=${MIDTRANS_CLIENT_KEY}
+      - MIDTRANS_MERCHANT_ID=${MIDTRANS_MERCHANT_ID}
+      - MIDTRANS_CALLBACK_URL=${MIDTRANS_CALLBACK_URL}
+      # Payment - Xendit
+      - XENDIT_API_KEY=${XENDIT_API_KEY}
+      - XENDIT_CALLBACK_TOKEN=${XENDIT_CALLBACK_TOKEN}
+      - XENDIT_CALLBACK_URL=${XENDIT_CALLBACK_URL}
+      # Scheduler
+      - SYNC_INTERVAL=${SYNC_INTERVAL}
+      - RETRY_INTERVAL=${RETRY_INTERVAL}
+      - CALLBACK_RETRY_INTERVAL=${CALLBACK_RETRY_INTERVAL}
+      - EXPIRED_PAYMENT_CHECK_INTERVAL=${EXPIRED_PAYMENT_CHECK_INTERVAL}
+      # Identity - Google
+      - GOOGLE_APPLICATION_CREDENTIALS=${GOOGLE_APPLICATION_CREDENTIALS}
+      - GOOGLE_PROJECT_ID=${GOOGLE_PROJECT_ID}
+      # Identity - Groq
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - GROQ_MODEL=${GROQ_MODEL}
+      # Identity - AWS
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_LIVENESS_REGION=${AWS_LIVENESS_REGION}
+      - AWS_REKOGNITION_REGION=${AWS_REKOGNITION_REGION}
+      - S3_BUCKET=${S3_BUCKET}
+      - S3_REGION=${S3_REGION}
+      - S3_ENDPOINT=${S3_ENDPOINT}
+    volumes:
+      - ./keys:/app/keys:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - gtd-network
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: gtd-postgres
+    deploy:
+      resources:
+        limits:
+          cpus: '1.5'
+          memory: 3G
+        reservations:
+          cpus: '0.5'
+          memory: 1G
+    environment:
+      - POSTGRES_USER=${DB_USER}
+      - POSTGRES_PASSWORD=${DB_PASSWORD}
+      - POSTGRES_DB=${DB_NAME}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - gtd-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: gtd-redis
+    command: redis-server --requirepass ${REDIS_PASSWORD}
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - gtd-network
+
+networks:
+  gtd-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:

@@ -22,19 +22,20 @@ func NewClientService(clientRepo *repository.ClientRepository) *ClientService {
 
 // CreateClientRequest represents the request to create a new client.
 type CreateClientRequest struct {
-    ClientID    string   `json:"clientId" binding:"required"`
-    Name        string   `json:"name" binding:"required"`
-    CallbackURL string   `json:"callbackUrl" binding:"required"`
-    IPWhitelist []string `json:"ipWhitelist"`
-    IsActive    *bool    `json:"isActive"`
+	ClientID    string   `json:"clientId" binding:"required"`
+	Name        string   `json:"name" binding:"required"`
+	CallbackURL string   `json:"callbackUrl" binding:"required"`
+	IPWhitelist []string `json:"ipWhitelist"`
+	IsActive    *bool    `json:"isActive"`
 }
 
 // UpdateClientRequest represents the request to update a client.
 type UpdateClientRequest struct {
-    Name        string   `json:"name"`
-    CallbackURL string   `json:"callbackUrl"`
-    IPWhitelist []string `json:"ipWhitelist"`
-    IsActive    *bool    `json:"isActive"`
+	ClientID    string   `json:"clientId"`
+	Name        string   `json:"name"`
+	CallbackURL string   `json:"callbackUrl"`
+	IPWhitelist []string `json:"ipWhitelist"`
+	IsActive    *bool    `json:"isActive"`
 }
 
 // CreateClient creates a new client with auto-generated keys.
@@ -62,22 +63,22 @@ func (s *ClientService) CreateClient(ctx context.Context, req *CreateClientReque
 	}
 
 	// Create client
- // default active true if not provided
-    active := true
-    if req.IsActive != nil {
-        active = *req.IsActive
-    }
+	// default active true if not provided
+	active := true
+	if req.IsActive != nil {
+		active = *req.IsActive
+	}
 
-    client := &models.Client{
-        ClientID:       req.ClientID,
-        Name:           req.Name,
-        APIKey:         liveKey,
-        SandboxKey:     sandboxKey,
-        CallbackURL:    req.CallbackURL,
-        CallbackSecret: webhookSecret,
-        IPWhitelist:    req.IPWhitelist,
-        IsActive:       active,
-    }
+	client := &models.Client{
+		ClientID:       req.ClientID,
+		Name:           req.Name,
+		APIKey:         liveKey,
+		SandboxKey:     sandboxKey,
+		CallbackURL:    req.CallbackURL,
+		CallbackSecret: webhookSecret,
+		IPWhitelist:    req.IPWhitelist,
+		IsActive:       active,
+	}
 
 	if err := s.clientRepo.Create(client); err != nil {
 		return nil, err
@@ -119,6 +120,9 @@ func (s *ClientService) UpdateClient(id int, req *UpdateClientRequest) (*models.
 	}
 
 	// Update fields if provided
+	if req.ClientID != "" {
+		client.ClientID = req.ClientID
+	}
 	if req.Name != "" {
 		client.Name = req.Name
 	}

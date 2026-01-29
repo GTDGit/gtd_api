@@ -1,1 +1,1 @@
-DROP TABLE IF EXISTS provinces CASCADE;
+DROP TABLE IF EXISTS provinces;

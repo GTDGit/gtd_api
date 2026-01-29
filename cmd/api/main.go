@@ -117,6 +117,7 @@ func main() {
 	}
 	router := gin.New()
 	router.Use(gin.Recovery())
+	router.Use(middleware.CORSMiddleware())
 	router.Use(middleware.LoggingMiddleware())
 	setupRoutes(router, handlers, authMw, jwtMw)
 

@@ -1,1 +1,1 @@
-DROP TABLE IF EXISTS sub_districts CASCADE;
+DROP TABLE IF EXISTS sub_districts;

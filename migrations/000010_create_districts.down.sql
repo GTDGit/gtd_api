@@ -1,1 +1,1 @@
-DROP TABLE IF EXISTS districts CASCADE;
+DROP TABLE IF EXISTS districts;

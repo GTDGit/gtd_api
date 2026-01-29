@@ -16,7 +16,11 @@ func NewAdminUserRepository(db *sqlx.DB) *AdminUserRepository {
 
 func (r *AdminUserRepository) GetByEmail(email string) (*models.AdminUser, error) {
 	var user models.AdminUser
-	err := r.db.Get(&user, "SELECT * FROM admin_users WHERE email = $1", email)
+	err := r.db.Get(&user, `
+		SELECT id, email, password_hash, name, role, is_active, last_login_at, created_at, updated_at 
+		FROM admin_users 
+		WHERE email = $1
+	`, email)
 	if err != nil {
 		return nil, err
 	}

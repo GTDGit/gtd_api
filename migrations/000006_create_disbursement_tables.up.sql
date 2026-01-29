@@ -3,64 +3,7 @@
 -- Transfer dana ke rekening bank (intrabank & interbank)
 -- ============================================
 
-CREATE TABLE transfers (
-    id SERIAL PRIMARY KEY,
-    transfer_id VARCHAR(50) NOT NULL UNIQUE,           -- 'TRF-20250128-000001'
-    reference_id VARCHAR(50) NOT NULL,                  -- Client's reference ID
-    client_id INT NOT NULL REFERENCES clients(id),
-    is_sandbox BOOLEAN NOT NULL DEFAULT false,
-
-    -- Transfer routing
-    transfer_type transfer_type NOT NULL,               -- 'INTRABANK' or 'INTERBANK'
-    provider disbursement_provider NOT NULL,             -- Bank provider used
-
-    -- Bank info
-    bank_code VARCHAR(10) NOT NULL,                     -- Kode bank tujuan (3 digit)
-    bank_name VARCHAR(100),                             -- Nama bank tujuan
-    account_number VARCHAR(34) NOT NULL,                -- Nomor rekening tujuan
-    account_name VARCHAR(100),                          -- Nama pemilik rekening (dari inquiry)
-
-    -- Source account
-    source_bank_code VARCHAR(10) NOT NULL,              -- Kode bank sumber
-    source_account_number VARCHAR(34) NOT NULL,         -- Nomor rekening sumber
-
-    -- Amount
-    amount BIGINT NOT NULL,                             -- Transfer amount
-    fee BIGINT NOT NULL DEFAULT 0,                      -- Transfer fee
-    total_amount BIGINT NOT NULL,                       -- amount + fee
-
-    -- Status
-    status transfer_status NOT NULL DEFAULT 'Processing',
-    failed_reason VARCHAR(255),
-    failed_code VARCHAR(50),
-
-    -- Purpose (mandatory for interbank/BI-FAST)
-    purpose_code VARCHAR(2),                            -- '01'=Investasi, '02'=Pemindahan Dana, '03'=Pembelian, '99'=Lainnya
-    remark VARCHAR(50),                                 -- Catatan transfer
-
-    -- Inquiry link
-    inquiry_id INT REFERENCES transfer_inquiries(id),
-
-    -- Provider references
-    provider_ref VARCHAR(100),                          -- Bank reference number
-    provider_data JSONB,                                -- Raw provider response
-
-    -- Callback status
-    callback_sent BOOLEAN NOT NULL DEFAULT false,
-    callback_sent_at TIMESTAMPTZ,
-
-    -- Timestamps
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    completed_at TIMESTAMPTZ,
-    failed_at TIMESTAMPTZ,
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-
-    UNIQUE(client_id, reference_id)
-);
-
--- Need to create transfer_inquiries first, then alter transfers
--- So let's create inquiry table first
-
+-- Create transfer_inquiries FIRST (before transfers table that references it)
 CREATE TABLE transfer_inquiries (
     id SERIAL PRIMARY KEY,
     inquiry_id VARCHAR(50) NOT NULL UNIQUE,             -- 'INQ-20250128-000001'
@@ -92,15 +35,7 @@ CREATE INDEX idx_transfer_inquiries_inquiry_id ON transfer_inquiries(inquiry_id)
 CREATE INDEX idx_transfer_inquiries_client_id ON transfer_inquiries(client_id);
 CREATE INDEX idx_transfer_inquiries_expired_at ON transfer_inquiries(expired_at);
 
--- Now add the FK for transfers.inquiry_id
--- (transfers table references transfer_inquiries, so we need to drop and recreate)
--- Actually, let's just use ALTER since the column already has REFERENCES
--- The REFERENCES in CREATE TABLE above will fail because transfer_inquiries doesn't exist yet.
--- So let's fix this: remove the FK from transfers CREATE and add it after.
-
--- Drop and recreate transfers properly:
-DROP TABLE IF EXISTS transfers;
-
+-- Now create transfers table (references transfer_inquiries)
 CREATE TABLE transfers (
     id SERIAL PRIMARY KEY,
     transfer_id VARCHAR(50) NOT NULL UNIQUE,

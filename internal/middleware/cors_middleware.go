@@ -2,13 +2,14 @@ package middleware
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 )
 
 // CORSMiddleware handles Cross-Origin Resource Sharing (CORS) headers.
 func CORSMiddleware() gin.HandlerFunc {
-	// Allowed origins
+	// Allowed origins (no trailing slash; comparison normalizes origin)
 	allowedOrigins := map[string]bool{
 		"http://localhost:3000":       true,
 		"http://127.0.0.1:3000":       true,
@@ -20,9 +21,11 @@ func CORSMiddleware() gin.HandlerFunc {
 
 	return func(c *gin.Context) {
 		origin := c.Request.Header.Get("Origin")
+		// Normalize: browser may send "https://admin.gtd.co.id/" with trailing slash
+		originNorm := strings.TrimSuffix(origin, "/")
 
 		// Check if origin is allowed
-		if allowedOrigins[origin] {
+		if allowedOrigins[originNorm] {
 			c.Header("Access-Control-Allow-Origin", origin)
 		}
 

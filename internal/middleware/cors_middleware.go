@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -21,11 +22,20 @@ func CORSMiddleware() gin.HandlerFunc {
 
 	return func(c *gin.Context) {
 		origin := c.Request.Header.Get("Origin")
+		if origin == "" {
+			// Fallback: some proxies strip Origin; derive from Referer (e.g. https://admin.gtd.co.id/)
+			if ref := c.Request.Header.Get("Referer"); ref != "" {
+				if u, err := url.Parse(ref); err == nil && u.Scheme != "" && u.Host != "" {
+					origin = u.Scheme + "://" + u.Host
+				}
+			}
+		}
 		// Normalize: browser may send "https://admin.gtd.co.id/" with trailing slash
 		originNorm := strings.TrimSuffix(origin, "/")
 
 		// Check if origin is allowed
-		if allowedOrigins[originNorm] {
+		if origin != "" && allowedOrigins[originNorm] {
+			// Echo back the exact origin the browser expects (with or without slash)
 			c.Header("Access-Control-Allow-Origin", origin)
 		}
 

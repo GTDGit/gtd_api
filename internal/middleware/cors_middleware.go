@@ -8,34 +8,49 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// Allowed hosts for CORS (origin is checked by host to cover all URL variants).
+var allowedHosts = map[string]bool{
+	"localhost:3000":      true,
+	"127.0.0.1:3000":      true,
+	"admin.gtd.co.id":     true,
+	"gtd.co.id":           true,
+	"www.admin.gtd.co.id": true,
+	"www.gtd.co.id":       true,
+}
+
+// originHost returns the host part of origin or referer URL, or empty if invalid.
+// Strips default ports (:443, :80) so "admin.gtd.co.id:443" matches "admin.gtd.co.id".
+func originHost(raw string) string {
+	raw = strings.TrimSpace(strings.TrimSuffix(raw, "/"))
+	if raw == "" {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return ""
+	}
+	host := strings.ToLower(u.Host)
+	if strings.HasSuffix(host, ":443") || strings.HasSuffix(host, ":80") {
+		host, _, _ = strings.Cut(host, ":")
+	}
+	return host
+}
+
 // CORSMiddleware handles Cross-Origin Resource Sharing (CORS) headers.
 func CORSMiddleware() gin.HandlerFunc {
-	// Allowed origins (no trailing slash; comparison normalizes origin)
-	allowedOrigins := map[string]bool{
-		"http://localhost:3000":       true,
-		"http://127.0.0.1:3000":       true,
-		"https://admin.gtd.co.id":     true,
-		"https://gtd.co.id":           true,
-		"https://www.admin.gtd.co.id": true,
-		"https://www.gtd.co.id":       true,
-	}
-
 	return func(c *gin.Context) {
 		origin := c.Request.Header.Get("Origin")
 		if origin == "" {
-			// Fallback: some proxies strip Origin; derive from Referer (e.g. https://admin.gtd.co.id/)
 			if ref := c.Request.Header.Get("Referer"); ref != "" {
 				if u, err := url.Parse(ref); err == nil && u.Scheme != "" && u.Host != "" {
 					origin = u.Scheme + "://" + u.Host
 				}
 			}
 		}
-		// Normalize: browser may send "https://admin.gtd.co.id/" with trailing slash
-		originNorm := strings.TrimSuffix(origin, "/")
+		origin = strings.TrimSpace(strings.TrimSuffix(origin, "/"))
+		host := originHost(origin)
 
-		// Check if origin is allowed
-		if origin != "" && allowedOrigins[originNorm] {
-			// Echo back the exact origin the browser expects (with or without slash)
+		if host != "" && allowedHosts[host] {
 			c.Header("Access-Control-Allow-Origin", origin)
 		}
 

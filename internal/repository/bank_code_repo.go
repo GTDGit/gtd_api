@@ -2,26 +2,26 @@ package repository
 
 import (
 	"context"
-	"database/sql"
 
 	"github.com/GTDGit/gtd_api/internal/models"
+	"github.com/jmoiron/sqlx"
 )
 
 type BankCodeRepository struct {
-	db *sql.DB
+	db *sqlx.DB
 }
 
-func NewBankCodeRepository(db *sql.DB) *BankCodeRepository {
+func NewBankCodeRepository(db *sqlx.DB) *BankCodeRepository {
 	return &BankCodeRepository{db: db}
 }
 
 func (r *BankCodeRepository) GetByCode(ctx context.Context, code string) (*models.BankCode, error) {
-	query := `SELECT id, code, name, swift_code, support_va, is_active, created_at, updated_at 
+	query := `SELECT id, code, short_name, name, swift_code, support_va, is_active, created_at, updated_at 
 	          FROM bank_codes WHERE code = $1 AND is_active = true`
-	
+
 	var bank models.BankCode
 	err := r.db.QueryRowContext(ctx, query, code).Scan(
-		&bank.ID, &bank.Code, &bank.Name, &bank.SwiftCode, 
+		&bank.ID, &bank.Code, &bank.ShortName, &bank.Name, &bank.SwiftCode,
 		&bank.SupportVA, &bank.IsActive, &bank.CreatedAt, &bank.UpdatedAt,
 	)
 	if err != nil {
@@ -31,9 +31,9 @@ func (r *BankCodeRepository) GetByCode(ctx context.Context, code string) (*model
 }
 
 func (r *BankCodeRepository) GetAll(ctx context.Context) ([]models.BankCode, error) {
-	query := `SELECT id, code, name, swift_code, support_va, is_active, created_at, updated_at 
+	query := `SELECT id, code, short_name, name, swift_code, support_va, is_active, created_at, updated_at 
 	          FROM bank_codes WHERE is_active = true ORDER BY code`
-	
+
 	rows, err := r.db.QueryContext(ctx, query)
 	if err != nil {
 		return nil, err
@@ -43,7 +43,7 @@ func (r *BankCodeRepository) GetAll(ctx context.Context) ([]models.BankCode, err
 	var banks []models.BankCode
 	for rows.Next() {
 		var bank models.BankCode
-		if err := rows.Scan(&bank.ID, &bank.Code, &bank.Name, &bank.SwiftCode, 
+		if err := rows.Scan(&bank.ID, &bank.Code, &bank.ShortName, &bank.Name, &bank.SwiftCode,
 			&bank.SupportVA, &bank.IsActive, &bank.CreatedAt, &bank.UpdatedAt); err != nil {
 			return nil, err
 		}
@@ -53,9 +53,9 @@ func (r *BankCodeRepository) GetAll(ctx context.Context) ([]models.BankCode, err
 }
 
 func (r *BankCodeRepository) GetVABanks(ctx context.Context) ([]models.BankCode, error) {
-	query := `SELECT id, code, name, swift_code, support_va, is_active, created_at, updated_at 
+	query := `SELECT id, code, short_name, name, swift_code, support_va, is_active, created_at, updated_at 
 	          FROM bank_codes WHERE is_active = true AND support_va = true ORDER BY code`
-	
+
 	rows, err := r.db.QueryContext(ctx, query)
 	if err != nil {
 		return nil, err
@@ -65,7 +65,7 @@ func (r *BankCodeRepository) GetVABanks(ctx context.Context) ([]models.BankCode,
 	var banks []models.BankCode
 	for rows.Next() {
 		var bank models.BankCode
-		if err := rows.Scan(&bank.ID, &bank.Code, &bank.Name, &bank.SwiftCode, 
+		if err := rows.Scan(&bank.ID, &bank.Code, &bank.ShortName, &bank.Name, &bank.SwiftCode,
 			&bank.SupportVA, &bank.IsActive, &bank.CreatedAt, &bank.UpdatedAt); err != nil {
 			return nil, err
 		}

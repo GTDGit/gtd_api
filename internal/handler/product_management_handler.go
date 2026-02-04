@@ -19,6 +19,57 @@ func NewProductManagementHandler(productMgmtService *service.ProductManagementSe
 	return &ProductManagementHandler{productMgmtService: productMgmtService}
 }
 
+// ListProducts handles GET /v1/admin/products
+func (h *ProductManagementHandler) ListProducts(c *gin.Context) {
+	// Parse query parameters
+	filter := &service.ListProductsFilter{
+		Type:     c.Query("type"),
+		Category: c.Query("category"),
+		Brand:    c.Query("brand"),
+		Search:   c.Query("search"),
+		Page:     1,
+		Limit:    50,
+	}
+
+	if page := c.Query("page"); page != "" {
+		if p, err := strconv.Atoi(page); err == nil {
+			filter.Page = p
+		}
+	}
+	if limit := c.Query("limit"); limit != "" {
+		if l, err := strconv.Atoi(limit); err == nil {
+			filter.Limit = l
+		}
+	}
+	if isActive := c.Query("isActive"); isActive != "" {
+		active := isActive == "true"
+		filter.IsActive = &active
+	}
+
+	result, err := h.productMgmtService.ListProducts(filter)
+	if err != nil {
+		utils.Error(c, 500, "INTERNAL_ERROR", "Failed to retrieve products")
+		return
+	}
+
+	c.JSON(200, gin.H{
+		"success": true,
+		"code":    200,
+		"message": "Products retrieved",
+		"data":    result.Products,
+		"meta": gin.H{
+			"requestId": c.GetString("requestId"),
+			"timestamp": utils.NowISO(),
+			"pagination": gin.H{
+				"page":       result.Page,
+				"limit":      result.Limit,
+				"totalItems": result.TotalItems,
+				"totalPages": result.TotalPages,
+			},
+		},
+	})
+}
+
 // CreateProduct handles POST /v1/admin/products
 func (h *ProductManagementHandler) CreateProduct(c *gin.Context) {
 	var req service.CreateProductRequest

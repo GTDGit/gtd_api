@@ -87,6 +87,42 @@ func (h *TerritoryHandler) GetProvinces(c *gin.Context) {
 	})
 }
 
+// GetAllCities returns all cities in Indonesia
+// GET /v1/territory/city
+func (h *TerritoryHandler) GetAllCities(c *gin.Context) {
+	ctx := c.Request.Context()
+
+	cities, err := h.repo.GetAllCities(ctx)
+	if err != nil {
+		h.errorResponse(c, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to retrieve cities")
+		return
+	}
+
+	// Convert to response format
+	var response []models.CityResponse
+	for _, city := range cities {
+		response = append(response, models.CityResponse{
+			Name:         city.Name,
+			ProvinceCode: city.ProvinceCode,
+			Code:         city.FullCode,
+		})
+	}
+
+	count, _ := h.repo.CountCities(ctx)
+
+	c.JSON(http.StatusOK, TerritoryResponse{
+		Success: true,
+		Code:    http.StatusOK,
+		Message: "Successfully retrieved cities",
+		Data:    response,
+		Meta: TerritoryMeta{
+			Total:     count,
+			RequestID: h.generateRequestID(),
+			Timestamp: time.Now().Format(time.RFC3339),
+		},
+	})
+}
+
 // GetCitiesByProvince returns all cities for a given province
 // GET /v1/territory/city/:province_code
 func (h *TerritoryHandler) GetCitiesByProvince(c *gin.Context) {
@@ -143,6 +179,42 @@ func (h *TerritoryHandler) GetCitiesByProvince(c *gin.Context) {
 	})
 }
 
+// GetAllDistricts returns all districts in Indonesia
+// GET /v1/territory/district
+func (h *TerritoryHandler) GetAllDistricts(c *gin.Context) {
+	ctx := c.Request.Context()
+
+	districts, err := h.repo.GetAllDistricts(ctx)
+	if err != nil {
+		h.errorResponse(c, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to retrieve districts")
+		return
+	}
+
+	// Convert to response format
+	var response []models.DistrictResponse
+	for _, district := range districts {
+		response = append(response, models.DistrictResponse{
+			Name:     district.Name,
+			CityCode: district.CityCode,
+			Code:     district.FullCode,
+		})
+	}
+
+	count, _ := h.repo.CountDistricts(ctx)
+
+	c.JSON(http.StatusOK, TerritoryResponse{
+		Success: true,
+		Code:    http.StatusOK,
+		Message: "Successfully retrieved districts",
+		Data:    response,
+		Meta: TerritoryMeta{
+			Total:     count,
+			RequestID: h.generateRequestID(),
+			Timestamp: time.Now().Format(time.RFC3339),
+		},
+	})
+}
+
 // GetDistrictsByCity returns all districts for a given city
 // GET /v1/territory/district/:city_code
 func (h *TerritoryHandler) GetDistrictsByCity(c *gin.Context) {
@@ -193,6 +265,42 @@ func (h *TerritoryHandler) GetDistrictsByCity(c *gin.Context) {
 			Total:     count,
 			CityCode:  cityCode,
 			CityName:  city.Name,
+			RequestID: h.generateRequestID(),
+			Timestamp: time.Now().Format(time.RFC3339),
+		},
+	})
+}
+
+// GetAllSubDistricts returns all sub-districts in Indonesia
+// GET /v1/territory/sub-district
+func (h *TerritoryHandler) GetAllSubDistricts(c *gin.Context) {
+	ctx := c.Request.Context()
+
+	subDistricts, err := h.repo.GetAllSubDistricts(ctx)
+	if err != nil {
+		h.errorResponse(c, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to retrieve sub-districts")
+		return
+	}
+
+	// Convert to response format
+	var response []models.SubDistrictResponse
+	for _, subDistrict := range subDistricts {
+		response = append(response, models.SubDistrictResponse{
+			Name:         subDistrict.Name,
+			DistrictCode: subDistrict.DistrictCode,
+			Code:         subDistrict.FullCode,
+		})
+	}
+
+	count, _ := h.repo.CountSubDistricts(ctx)
+
+	c.JSON(http.StatusOK, TerritoryResponse{
+		Success: true,
+		Code:    http.StatusOK,
+		Message: "Successfully retrieved sub-districts",
+		Data:    response,
+		Meta: TerritoryMeta{
+			Total:     count,
 			RequestID: h.generateRequestID(),
 			Timestamp: time.Now().Format(time.RFC3339),
 		},
@@ -255,6 +363,166 @@ func (h *TerritoryHandler) GetSubDistrictsByDistrict(c *gin.Context) {
 	})
 }
 
+// GetAllPostalCodes returns all postal codes in Indonesia
+// GET /v1/territory/postal-code
+func (h *TerritoryHandler) GetAllPostalCodes(c *gin.Context) {
+	ctx := c.Request.Context()
+
+	postalCodes, err := h.repo.GetAllPostalCodes(ctx)
+	if err != nil {
+		h.errorResponse(c, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to retrieve postal codes")
+		return
+	}
+
+	// Convert to response format
+	var response []models.PostalCodeResponse
+	for _, pc := range postalCodes {
+		response = append(response, models.PostalCodeResponse{
+			PostalCode:      pc.PostalCode,
+			SubDistrictCode: pc.SubDistrictCode,
+			DistrictCode:    pc.DistrictCode,
+		})
+	}
+
+	count, _ := h.repo.CountPostalCodes(ctx)
+
+	c.JSON(http.StatusOK, TerritoryResponse{
+		Success: true,
+		Code:    http.StatusOK,
+		Message: "Successfully retrieved postal codes",
+		Data:    response,
+		Meta: TerritoryMeta{
+			Total:     count,
+			RequestID: h.generateRequestID(),
+			Timestamp: time.Now().Format(time.RFC3339),
+		},
+	})
+}
+
+// GetPostalCodesByDistrict returns all postal codes for a given district
+// GET /v1/territory/postal-code/district/:district_code
+func (h *TerritoryHandler) GetPostalCodesByDistrict(c *gin.Context) {
+	ctx := c.Request.Context()
+	districtCode := c.Param("district_code")
+
+	// Validate district code format (6 digits)
+	if !h.isValidDistrictCode(districtCode) {
+		h.errorResponse(c, http.StatusBadRequest, "VALIDATION_ERROR", "District code must be 6 digits")
+		return
+	}
+
+	// Check if district exists
+	district, err := h.repo.GetDistrictByCode(ctx, districtCode)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			h.errorResponse(c, http.StatusNotFound, "NOT_FOUND", "District with code '"+districtCode+"' does not exist")
+			return
+		}
+		h.errorResponse(c, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to retrieve district")
+		return
+	}
+
+	postalCodes, err := h.repo.GetPostalCodesByDistrict(ctx, districtCode)
+	if err != nil {
+		h.errorResponse(c, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to retrieve postal codes")
+		return
+	}
+
+	if len(postalCodes) == 0 {
+		h.errorResponse(c, http.StatusNotFound, "NOT_FOUND", "No postal code found for district code '"+districtCode+"'")
+		return
+	}
+
+	// Convert to response format
+	var response []models.PostalCodeResponse
+	for _, pc := range postalCodes {
+		response = append(response, models.PostalCodeResponse{
+			PostalCode:      pc.PostalCode,
+			SubDistrictCode: pc.SubDistrictCode,
+			DistrictCode:    pc.DistrictCode,
+		})
+	}
+
+	count, _ := h.repo.CountPostalCodesByDistrict(ctx, districtCode)
+
+	c.JSON(http.StatusOK, TerritoryResponse{
+		Success: true,
+		Code:    http.StatusOK,
+		Message: "Successfully retrieved postal codes",
+		Data:    response,
+		Meta: TerritoryMeta{
+			Total:        count,
+			DistrictCode: districtCode,
+			DistrictName: district.Name,
+			RequestID:    h.generateRequestID(),
+			Timestamp:    time.Now().Format(time.RFC3339),
+		},
+	})
+}
+
+// GetPostalCodesBySubDistrict returns all postal codes for a given sub-district
+// GET /v1/territory/postal-code/sub-district/:sub_district_code
+func (h *TerritoryHandler) GetPostalCodesBySubDistrict(c *gin.Context) {
+	ctx := c.Request.Context()
+	subDistrictCode := c.Param("sub_district_code")
+
+	// Validate sub-district code format (10 digits)
+	if !h.isValidSubDistrictCode(subDistrictCode) {
+		h.errorResponse(c, http.StatusBadRequest, "VALIDATION_ERROR", "Sub-district code must be 10 digits")
+		return
+	}
+
+	// Check if sub-district exists
+	_, err := h.repo.GetSubDistrictByCode(ctx, subDistrictCode)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			h.errorResponse(c, http.StatusNotFound, "NOT_FOUND", "Sub-district with code '"+subDistrictCode+"' does not exist")
+			return
+		}
+		h.errorResponse(c, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to retrieve sub-district")
+		return
+	}
+
+	postalCodes, err := h.repo.GetPostalCodesBySubDistrict(ctx, subDistrictCode)
+	if err != nil {
+		h.errorResponse(c, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to retrieve postal codes")
+		return
+	}
+
+	if len(postalCodes) == 0 {
+		h.errorResponse(c, http.StatusNotFound, "NOT_FOUND", "No postal code found for sub-district code '"+subDistrictCode+"'")
+		return
+	}
+
+	// Convert to response format
+	var response []models.PostalCodeResponse
+	for _, pc := range postalCodes {
+		response = append(response, models.PostalCodeResponse{
+			PostalCode:      pc.PostalCode,
+			SubDistrictCode: pc.SubDistrictCode,
+			DistrictCode:    pc.DistrictCode,
+		})
+	}
+
+	count, _ := h.repo.CountPostalCodesBySubDistrict(ctx, subDistrictCode)
+
+	// Get district code from sub-district code (first 6 digits)
+	districtCode := subDistrictCode[:6]
+
+	c.JSON(http.StatusOK, TerritoryResponse{
+		Success: true,
+		Code:    http.StatusOK,
+		Message: "Successfully retrieved postal codes",
+		Data:    response,
+		Meta: TerritoryMeta{
+			Total:        count,
+			DistrictCode: districtCode,
+			RequestID:    h.generateRequestID(),
+			Timestamp:    time.Now().Format(time.RFC3339),
+		},
+	})
+}
+
 // Helper functions
 
 func (h *TerritoryHandler) isValidProvinceCode(code string) bool {
@@ -269,6 +537,11 @@ func (h *TerritoryHandler) isValidCityCode(code string) bool {
 
 func (h *TerritoryHandler) isValidDistrictCode(code string) bool {
 	match, _ := regexp.MatchString(`^\d{6}$`, code)
+	return match
+}
+
+func (h *TerritoryHandler) isValidSubDistrictCode(code string) bool {
+	match, _ := regexp.MatchString(`^\d{10}$`, code)
 	return match
 }
 

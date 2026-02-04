@@ -6,3 +6,4 @@
 \i migrations/seeds/006_client.sql
 \i migrations/seeds/007_payment_method.sql
 \i migrations/seeds/008_bank_code.sql
+\i migrations/seeds/009_postal_code.sql

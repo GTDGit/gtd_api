@@ -25,55 +25,55 @@ func NewProductManagementService(productRepo *repository.ProductRepository, skuR
 
 // CreateProductRequest represents the request to create a new product.
 type CreateProductRequest struct {
-    SKUCode     string `json:"skuCode" binding:"required"`
-    Name        string `json:"name" binding:"required"`
-    Category    string `json:"category" binding:"required"`
-    Brand       string `json:"brand" binding:"required"`
-    Type        string `json:"type" binding:"required"` // "prepaid" or "postpaid"
-    Admin       int    `json:"admin"`
-    Commission  int    `json:"commission"`
-    Description string `json:"description"`
+	SKUCode     string `json:"skuCode" binding:"required"`
+	Name        string `json:"name" binding:"required"`
+	Category    string `json:"category" binding:"required"`
+	Brand       string `json:"brand" binding:"required"`
+	Type        string `json:"type" binding:"required"` // "prepaid" or "postpaid"
+	Admin       int    `json:"admin"`
+	Commission  int    `json:"commission"`
+	Description string `json:"description"`
 }
 
 // UpdateProductRequest represents the request to update a product.
 type UpdateProductRequest struct {
-    SKUCode     string `json:"skuCode"`
-    Name        string `json:"name"`
-    Category    string `json:"category"`
-    Brand       string `json:"brand"`
-    Type        string `json:"type"`
-    Admin       int    `json:"admin"`
-    Commission  int    `json:"commission"`
-    Description string `json:"description"`
-    IsActive    *bool  `json:"isActive"`
+	SKUCode     string `json:"skuCode"`
+	Name        string `json:"name"`
+	Category    string `json:"category"`
+	Brand       string `json:"brand"`
+	Type        string `json:"type"`
+	Admin       int    `json:"admin"`
+	Commission  int    `json:"commission"`
+	Description string `json:"description"`
+	IsActive    *bool  `json:"isActive"`
 }
 
 // CreateSKURequest represents the request to create/update a SKU.
 type CreateSKURequest struct {
-    DigiSKUCode    string `json:"digiSkuCode" binding:"required"`
-    SellerName     string `json:"sellerName"`
-    Priority       int    `json:"priority" binding:"required"` // 1, 2, or 3
-    Price          int    `json:"price" binding:"required"`
-    IsActive       bool   `json:"isActive"`
-    SupportMulti   bool   `json:"supportMulti"`
-    UnlimitedStock bool   `json:"unlimitedStock"`
-    Stock          int    `json:"stock"`
-    CutOffStart    string `json:"cutOffStart"` // "HH:MM:SS"
-    CutOffEnd      string `json:"cutOffEnd"`   // "HH:MM:SS"
+	DigiSKUCode    string `json:"digiSkuCode" binding:"required"`
+	SellerName     string `json:"sellerName"`
+	Priority       int    `json:"priority" binding:"required"` // 1, 2, or 3
+	Price          int    `json:"price" binding:"required"`
+	IsActive       bool   `json:"isActive"`
+	SupportMulti   bool   `json:"supportMulti"`
+	UnlimitedStock bool   `json:"unlimitedStock"`
+	Stock          int    `json:"stock"`
+	CutOffStart    string `json:"cutOffStart"` // "HH:MM:SS"
+	CutOffEnd      string `json:"cutOffEnd"`   // "HH:MM:SS"
 }
 
 // UpdateSKURequest represents the request to update a SKU.
 type UpdateSKURequest struct {
-    DigiSKUCode    string `json:"digiSkuCode"`
-    SellerName     string `json:"sellerName"`
-    Priority       *int   `json:"priority"`
-    Price          *int   `json:"price"`
-    IsActive       *bool  `json:"isActive"`
-    SupportMulti   *bool  `json:"supportMulti"`
-    UnlimitedStock *bool  `json:"unlimitedStock"`
-    Stock          *int   `json:"stock"`
-    CutOffStart    string `json:"cutOffStart"`
-    CutOffEnd      string `json:"cutOffEnd"`
+	DigiSKUCode    string `json:"digiSkuCode"`
+	SellerName     string `json:"sellerName"`
+	Priority       *int   `json:"priority"`
+	Price          *int   `json:"price"`
+	IsActive       *bool  `json:"isActive"`
+	SupportMulti   *bool  `json:"supportMulti"`
+	UnlimitedStock *bool  `json:"unlimitedStock"`
+	Stock          *int   `json:"stock"`
+	CutOffStart    string `json:"cutOffStart"`
+	CutOffEnd      string `json:"cutOffEnd"`
 }
 
 // CreateProduct creates a new product.
@@ -337,4 +337,29 @@ func (s *ProductManagementService) GetProductSKUs(productID int) ([]*models.SKU,
 		result[i] = &skus[i]
 	}
 	return result, nil
+}
+
+// ListProductsFilter represents filter options for listing products.
+type ListProductsFilter struct {
+	Type     string
+	Category string
+	Brand    string
+	Search   string
+	IsActive *bool
+	Page     int
+	Limit    int
+}
+
+// ListProducts returns all products for admin with filters and pagination.
+func (s *ProductManagementService) ListProducts(filter *ListProductsFilter) (*repository.AdminProductResult, error) {
+	repoFilter := &repository.AdminProductFilter{
+		Type:     filter.Type,
+		Category: filter.Category,
+		Brand:    filter.Brand,
+		Search:   filter.Search,
+		IsActive: filter.IsActive,
+		Page:     filter.Page,
+		Limit:    filter.Limit,
+	}
+	return s.productRepo.GetAllAdmin(repoFilter)
 }

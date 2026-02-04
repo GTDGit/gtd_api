@@ -2,6 +2,7 @@ package repository
 
 import (
 	"database/sql"
+	"fmt"
 
 	"github.com/jmoiron/sqlx"
 
@@ -45,36 +46,36 @@ func (r *ProductRepository) GetAll(productType, category string) ([]models.Produ
 // Filters: productType (prepaid/postpaid), category, brand (exact), search (ILIKE on name).
 // If a filter is empty it will be ignored. Page begins at 1.
 func (r *ProductRepository) GetAllPaged(productType, category, brand, search string, page, limit int) ([]models.Product, int, error) {
-    if page <= 0 {
-        page = 1
-    }
-    if limit <= 0 {
-        limit = 50
-    }
-    offset := (page - 1) * limit
+	if page <= 0 {
+		page = 1
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	offset := (page - 1) * limit
 
-    // Base WHERE clause
-    const baseWhere = `WHERE ($1 = '' OR type = $1)
+	// Base WHERE clause
+	const baseWhere = `WHERE ($1 = '' OR type = $1)
         AND ($2 = '' OR category = $2)
         AND ($3 = '' OR brand = $3)
         AND ($4 = '' OR name ILIKE '%%' || $4 || '%%')
         AND is_active = true`
 
-    // Count total
-    countQuery := `SELECT COUNT(1) FROM products ` + baseWhere
-    var total int
-    if err := r.db.Get(&total, countQuery, productType, category, brand, search); err != nil {
-        return nil, 0, err
-    }
+	// Count total
+	countQuery := `SELECT COUNT(1) FROM products ` + baseWhere
+	var total int
+	if err := r.db.Get(&total, countQuery, productType, category, brand, search); err != nil {
+		return nil, 0, err
+	}
 
-    // Fetch page
-    listQuery := `SELECT * FROM products ` + baseWhere + `
+	// Fetch page
+	listQuery := `SELECT * FROM products ` + baseWhere + `
         ORDER BY category, brand, name LIMIT $5 OFFSET $6`
-    var products []models.Product
-    if err := r.db.Select(&products, listQuery, productType, category, brand, search, limit, offset); err != nil {
-        return nil, 0, err
-    }
-    return products, total, nil
+	var products []models.Product
+	if err := r.db.Select(&products, listQuery, productType, category, brand, search, limit, offset); err != nil {
+		return nil, 0, err
+	}
+	return products, total, nil
 }
 
 // GetBySKUCode returns a single product by sku_code.
@@ -209,4 +210,96 @@ func (r *ProductRepository) Delete(id int) error {
 	query := `DELETE FROM products WHERE id = $1`
 	_, err := r.db.Exec(query, id)
 	return err
+}
+
+// AdminProductFilter holds filters for admin product queries.
+type AdminProductFilter struct {
+	Type     string
+	Category string
+	Brand    string
+	Search   string
+	IsActive *bool
+	Page     int
+	Limit    int
+}
+
+// AdminProductResult contains paginated product results for admin.
+type AdminProductResult struct {
+	Products   []models.Product
+	TotalItems int
+	TotalPages int
+	Page       int
+	Limit      int
+}
+
+// GetAllAdmin returns all products for admin with filters and pagination (includes inactive).
+func (r *ProductRepository) GetAllAdmin(filter *AdminProductFilter) (*AdminProductResult, error) {
+	if filter.Page <= 0 {
+		filter.Page = 1
+	}
+	if filter.Limit <= 0 {
+		filter.Limit = 50
+	}
+	if filter.Limit > 100 {
+		filter.Limit = 100
+	}
+	offset := (filter.Page - 1) * filter.Limit
+
+	// Build dynamic WHERE clause
+	baseWhere := `WHERE 1=1`
+	args := []interface{}{}
+	argIdx := 1
+
+	if filter.Type != "" {
+		baseWhere += fmt.Sprintf(" AND type = $%d", argIdx)
+		args = append(args, filter.Type)
+		argIdx++
+	}
+	if filter.Category != "" {
+		baseWhere += fmt.Sprintf(" AND category ILIKE $%d", argIdx)
+		args = append(args, "%"+filter.Category+"%")
+		argIdx++
+	}
+	if filter.Brand != "" {
+		baseWhere += fmt.Sprintf(" AND brand ILIKE $%d", argIdx)
+		args = append(args, "%"+filter.Brand+"%")
+		argIdx++
+	}
+	if filter.Search != "" {
+		baseWhere += fmt.Sprintf(" AND (name ILIKE $%d OR sku_code ILIKE $%d)", argIdx, argIdx)
+		args = append(args, "%"+filter.Search+"%")
+		argIdx++
+	}
+	if filter.IsActive != nil {
+		baseWhere += fmt.Sprintf(" AND is_active = $%d", argIdx)
+		args = append(args, *filter.IsActive)
+		argIdx++
+	}
+
+	// Count total
+	countQuery := `SELECT COUNT(1) FROM products ` + baseWhere
+	var total int
+	if err := r.db.Get(&total, countQuery, args...); err != nil {
+		return nil, err
+	}
+
+	totalPages := (total + filter.Limit - 1) / filter.Limit
+
+	// Fetch page
+	listQuery := fmt.Sprintf(`SELECT * FROM products %s ORDER BY category, brand, name LIMIT $%d OFFSET $%d`,
+		baseWhere, argIdx, argIdx+1)
+	args = append(args, filter.Limit, offset)
+
+	var products []models.Product
+	if err := r.db.Select(&products, listQuery, args...); err != nil {
+		return nil, err
+	}
+
+	return &AdminProductResult{
+		Products:   products,
+		TotalItems: total,
+		TotalPages: totalPages,
+		Page:       filter.Page,
+		Limit:      filter.Limit,
+	}, nil
 }

@@ -5843,6 +5843,7 @@ INSERT INTO districts (code, city_code, full_code, name) VALUES
 ('03',  '7326', '732603', 'Nanggala'),
 ('04',  '7326', '732604', 'Rindingallo'),
 ('05',  '7326', '732605', 'Buntao'),
+('06',  '7326', '732606', 'Sa dan'),
 ('07',  '7326', '732607', 'Sanggalangi'),
 ('08',  '7326', '732608', 'Sopai'),
 ('09',  '7326', '732609', 'Tikala'),

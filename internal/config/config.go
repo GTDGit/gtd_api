@@ -21,6 +21,10 @@ type Config struct {
 	Redis     RedisConfig
 	Digiflazz DigiflazzConfig
 	Worker    WorkerConfig
+	Identity  IdentityConfig
+	S3        S3Config
+	AWS       AWSConfig     `mapstructure:"aws"`
+	Tencent   TencentConfig `mapstructure:"tencent"`
 }
 
 // DatabaseConfig contains PostgreSQL connection parameters.
@@ -51,9 +55,46 @@ type DigiflazzConfig struct {
 
 // WorkerConfig contains interval configuration for background workers.
 type WorkerConfig struct {
-	SyncInterval     time.Duration
-	RetryInterval    time.Duration
-	CallbackInterval time.Duration
+	SyncInterval              time.Duration
+	RetryInterval             time.Duration
+	CallbackInterval          time.Duration
+	DigiflazzCallbackInterval time.Duration
+	StatusCheckInterval       time.Duration
+	StatusCheckStaleAfter     time.Duration
+	StatusCheckMaxAge         time.Duration
+}
+
+// IdentityConfig contains configuration for Identity OCR services
+type IdentityConfig struct {
+	GoogleCredentialsPath string
+	GoogleProjectID       string
+	GroqAPIKey            string
+	GroqModel             string
+}
+
+// S3Config contains AWS S3 configuration
+type S3Config struct {
+	Region          string
+	Bucket          string
+	Endpoint        string
+	AccessKeyID     string
+	SecretAccessKey string
+}
+
+// AWSConfig contains AWS general configuration
+type AWSConfig struct {
+	AccessKeyID       string
+	SecretAccessKey   string
+	LivenessRegion    string // ap-northeast-1 (Tokyo)
+	RekognitionRegion string // ap-southeast-1 (Singapore)
+}
+
+// TencentConfig contains Tencent Cloud FaceID configuration
+type TencentConfig struct {
+	SecretID  string
+	SecretKey string
+	Region    string // ap-jakarta or others
+	RuleID    string // "1" for default
 }
 
 // Load reads configuration from environment variables. If a .env file exists
@@ -97,6 +138,39 @@ func Load() (*Config, error) {
 		WebhookSecret:  getEnv("DIGIFLAZZ_WEBHOOK_SECRET", ""),
 	}
 
+	// Identity (Google Vision & Groq)
+	cfg.Identity = IdentityConfig{
+		GoogleCredentialsPath: getEnv("GOOGLE_APPLICATION_CREDENTIALS", "keys/google/identity.json"),
+		GoogleProjectID:       getEnv("GOOGLE_PROJECT_ID", ""),
+		GroqAPIKey:            getEnv("GROQ_API_KEY", ""),
+		GroqModel:             getEnv("GROQ_MODEL", "llama-3.1-8b-instant"),
+	}
+
+	// S3 (AWS Jakarta region)
+	cfg.S3 = S3Config{
+		Region:          getEnv("S3_REGION", "ap-southeast-3"),
+		Bucket:          getEnv("S3_BUCKET", "gerbang-identity"),
+		Endpoint:        getEnv("S3_ENDPOINT", "https://s3.ap-southeast-3.amazonaws.com"),
+		AccessKeyID:     getEnv("AWS_ACCESS_KEY_ID", ""),
+		SecretAccessKey: getEnv("AWS_SECRET_ACCESS_KEY", ""),
+	}
+
+	// AWS General (Liveness & Rekognition)
+	cfg.AWS = AWSConfig{
+		AccessKeyID:       getEnv("AWS_ACCESS_KEY_ID", ""),
+		SecretAccessKey:   getEnv("AWS_SECRET_ACCESS_KEY", ""),
+		LivenessRegion:    getEnv("AWS_LIVENESS_REGION", "ap-northeast-1"),
+		RekognitionRegion: getEnv("AWS_REKOGNITION_REGION", "ap-southeast-1"),
+	}
+
+	// Tencent Cloud (FaceID)
+	cfg.Tencent = TencentConfig{
+		SecretID:  getEnv("TENCENT_SECRET_ID", ""),
+		SecretKey: getEnv("TENCENT_SECRET_KEY", ""),
+		Region:    getEnv("TENCENT_REGION", "ap-jakarta"),
+		RuleID:    getEnv("TENCENT_RULE_ID", "1"),
+	}
+
 	// Workers (durations)
 	var err error
 	if cfg.Worker.SyncInterval, err = parseDurationEnv("SYNC_INTERVAL", "15m"); err != nil {
@@ -107,6 +181,18 @@ func Load() (*Config, error) {
 	}
 	if cfg.Worker.CallbackInterval, err = parseDurationEnv("CALLBACK_RETRY_INTERVAL", "1m"); err != nil {
 		return nil, fmt.Errorf("invalid CALLBACK_RETRY_INTERVAL: %w", err)
+	}
+	if cfg.Worker.DigiflazzCallbackInterval, err = parseDurationEnv("DIGIFLAZZ_CALLBACK_INTERVAL", "30s"); err != nil {
+		return nil, fmt.Errorf("invalid DIGIFLAZZ_CALLBACK_INTERVAL: %w", err)
+	}
+	if cfg.Worker.StatusCheckInterval, err = parseDurationEnv("STATUS_CHECK_INTERVAL", "10s"); err != nil {
+		return nil, fmt.Errorf("invalid STATUS_CHECK_INTERVAL: %w", err)
+	}
+	if cfg.Worker.StatusCheckStaleAfter, err = parseDurationEnv("STATUS_CHECK_STALE_AFTER", "10s"); err != nil {
+		return nil, fmt.Errorf("invalid STATUS_CHECK_STALE_AFTER: %w", err)
+	}
+	if cfg.Worker.StatusCheckMaxAge, err = parseDurationEnv("STATUS_CHECK_MAX_AGE", "5m"); err != nil {
+		return nil, fmt.Errorf("invalid STATUS_CHECK_MAX_AGE: %w", err)
 	}
 
 	// Basic validation for DB parameters — keeps messages concise and helpful.

@@ -2,6 +2,12 @@ package digiflazz
 
 import "encoding/json"
 
+// TransactionResponseWrapper wraps the transaction response from Digiflazz.
+// Digiflazz always wraps the response in a "data" field.
+type TransactionResponseWrapper struct {
+	Data TransactionResponse `json:"data"`
+}
+
 // TransactionResponse represents the response from Digiflazz for
 // topup/inquiry/payment transactions.
 type TransactionResponse struct {
@@ -35,9 +41,9 @@ type PricelistItem struct {
 	Brand               string `json:"brand"`
 	Type                string `json:"type,omitempty"` // Only for prepaid
 	SellerName          string `json:"seller_name"`
-	Price               int    `json:"price,omitempty"`       // Only for prepaid
-	Admin               int    `json:"admin,omitempty"`       // Only for postpaid
-	Commission          int    `json:"commission,omitempty"`  // Only for postpaid
+	Price               int    `json:"price,omitempty"`      // Only for prepaid
+	Admin               int    `json:"admin,omitempty"`      // Only for postpaid
+	Commission          int    `json:"commission,omitempty"` // Only for postpaid
 	BuyerSkuCode        string `json:"buyer_sku_code"`
 	BuyerProductStatus  bool   `json:"buyer_product_status"`
 	SellerProductStatus bool   `json:"seller_product_status"`

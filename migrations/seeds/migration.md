@@ -28,6 +28,9 @@ Get-Content "migrations/seeds/007_payment_method.sql" | docker exec -i gtd-postg
 
 # Bank Code
 Get-Content "migrations/seeds/008_bank_code.sql" | docker exec -i gtd-postgres psql -U gtd_user -d gtd
+
+# Postal Code
+Get-Content "migrations/seeds/009_postal_code.sql" | docker exec -i gtd-postgres psql -U gtd_user -d gtd
 ```
 
 Atau jalankan semua sekaligus:
@@ -66,6 +69,9 @@ docker exec -i gtd-postgres psql -U gtd_user -d gtd < migrations/seeds/007_payme
 
 # Bank Code
 docker exec -i gtd-postgres psql -U gtd_user -d gtd < migrations/seeds/008_bank_code.sql
+
+# Postal Code
+docker exec -i gtd-postgres psql -U gtd_user -d gtd < migrations/seeds/009_postal_code.sql
 ```
 
 Atau jalankan semua sekaligus:

@@ -83,6 +83,8 @@ func main() {
 	cbRepo := repository.NewCallbackRepository(db)
 	adminRepo := repository.NewAdminUserRepository(db)
 	territoryRepo := repository.NewTerritoryRepository(db)
+	bankCodeRepo := repository.NewBankCodeRepository(db)
+	ocrRepo := repository.NewOCRRepository(db)
 
 	// 6. Initialize services
 	authSvc := service.NewAuthService(clientRepo)
@@ -90,9 +92,32 @@ func main() {
 	clientSvc := service.NewClientService(clientRepo)
 	productSvc := service.NewProductService(productRepo, skuRepo)
 	productMgmtSvc := service.NewProductManagementService(productRepo, skuRepo)
-	callbackSvc := service.NewCallbackService(clientRepo, cbRepo)
+	callbackSvc := service.NewCallbackService(clientRepo, cbRepo, trxRepo)
 	syncSvc := service.NewSyncService(digiProd, productRepo, skuRepo)
 	trxSvc := service.NewTransactionService(trxRepo, productRepo, skuRepo, cbRepo, digiProd, digiDev, productSvc, callbackSvc, inquiryCache)
+
+	// Wire up callback service to transaction service for immediate retry on webhook
+	callbackSvc.SetTransactionRetrier(trxSvc)
+
+	// Initialize Admin Transaction service
+	adminTrxSvc := service.NewAdminTransactionService(trxRepo, productSvc, trxSvc, callbackSvc)
+
+	// Initialize S3 service for Identity
+	s3Svc, err := service.NewS3Service(&cfg.S3)
+	if err != nil {
+		log.Warn().Err(err).Msg("S3 service initialization failed - OCR file upload will be disabled")
+	}
+
+	// Initialize OCR service
+	ocrSvc := service.NewOCRService(ocrRepo, territoryRepo, &cfg.Identity, s3Svc)
+
+	// Initialize Liveness repository and service
+	livenessRepo := repository.NewLivenessRepository(db)
+	livenessSvc := service.NewLivenessService(livenessRepo, cfg)
+
+	// Initialize FaceCompare repository and service
+	faceCompareRepo := repository.NewFaceCompareRepository(db)
+	faceCompareSvc := service.NewFaceCompareService(faceCompareRepo, s3Svc, cfg)
 
 	// 7. Initialize handlers
 	handlers := &Handlers{
@@ -103,8 +128,13 @@ func main() {
 		Webhook:           handler.NewWebhookHandler(callbackSvc, cfg.Digiflazz.WebhookSecret),
 		Client:            handler.NewClientHandler(clientSvc),
 		ProductManagement: handler.NewProductManagementHandler(productMgmtSvc),
+		AdminTransaction:  handler.NewAdminTransactionHandler(adminTrxSvc),
 		Auth:              handler.NewAuthHandler(adminAuthSvc),
 		Territory:         handler.NewTerritoryHandler(territoryRepo),
+		BankCode:          handler.NewBankCodeHandler(bankCodeRepo),
+		OCR:               handler.NewOCRHandler(ocrSvc),
+		Liveness:          handler.NewLivenessHandler(livenessSvc),
+		FaceCompare:       handler.NewFaceCompareHandler(faceCompareSvc),
 	}
 
 	// 8. Initialize middleware
@@ -127,8 +157,15 @@ func main() {
 
 	// 11. Start workers
 	go worker.NewSyncWorker(syncSvc, cfg.Worker.SyncInterval).Start(ctx)
-	go worker.NewRetryWorker(trxSvc, trxRepo, cfg.Worker.RetryInterval).Start(ctx)
+	go worker.NewRetryWorker(trxRepo, callbackSvc, cfg.Worker.RetryInterval).Start(ctx)
 	go worker.NewCallbackWorker(callbackSvc, cfg.Worker.CallbackInterval).Start(ctx)
+	go worker.NewDigiflazzCallbackWorker(cbRepo, trxRepo, trxSvc, callbackSvc, cfg.Worker.DigiflazzCallbackInterval).Start(ctx)
+	go worker.NewStatusCheckWorker(
+		trxRepo, skuRepo, callbackSvc, digiProd, digiDev,
+		cfg.Worker.StatusCheckInterval,
+		cfg.Worker.StatusCheckStaleAfter,
+		cfg.Worker.StatusCheckMaxAge,
+	).Start(ctx)
 
 	// 12. Start HTTP server
 	srv := &http.Server{
@@ -171,8 +208,13 @@ type Handlers struct {
 	Webhook           *handler.WebhookHandler
 	Client            *handler.ClientHandler
 	ProductManagement *handler.ProductManagementHandler
+	AdminTransaction  *handler.AdminTransactionHandler
 	Auth              *handler.AuthHandler
 	Territory         *handler.TerritoryHandler
+	BankCode          *handler.BankCodeHandler
+	OCR               *handler.OCRHandler
+	Liveness          *handler.LivenessHandler
+	FaceCompare       *handler.FaceCompareHandler
 }
 
 // setupRoutes registers all routes.
@@ -194,9 +236,38 @@ func setupRoutes(router *gin.Engine, handlers *Handlers, authMiddleware *middlew
 	territory.Use(authMiddleware.Handle())
 	{
 		territory.GET("/province", handlers.Territory.GetProvinces)
+		territory.GET("/city", handlers.Territory.GetAllCities)
 		territory.GET("/city/:province_code", handlers.Territory.GetCitiesByProvince)
+		territory.GET("/district", handlers.Territory.GetAllDistricts)
 		territory.GET("/district/:city_code", handlers.Territory.GetDistrictsByCity)
+		territory.GET("/sub-district", handlers.Territory.GetAllSubDistricts)
 		territory.GET("/sub-district/:district_code", handlers.Territory.GetSubDistrictsByDistrict)
+		territory.GET("/postal-code", handlers.Territory.GetAllPostalCodes)
+		territory.GET("/postal-code/district/:district_code", handlers.Territory.GetPostalCodesByDistrict)
+		territory.GET("/postal-code/sub-district/:sub_district_code", handlers.Territory.GetPostalCodesBySubDistrict)
+	}
+
+	// Bank codes (protected with client API key)
+	router.GET("/v1/bank-codes", authMiddleware.Handle(), handlers.BankCode.GetBankCodes)
+
+	// Identity OCR routes (protected with client API key)
+	identity := router.Group("/v1/identity")
+	identity.Use(authMiddleware.Handle())
+	{
+		// OCR endpoints
+		identity.POST("/ocr/ktp", handlers.OCR.KTPOCR)
+		identity.POST("/ocr/npwp", handlers.OCR.NPWPOCR)
+		identity.POST("/ocr/sim", handlers.OCR.SIMOCR)
+		identity.GET("/ocr/:id", handlers.OCR.GetOCRByID)
+
+		// Liveness endpoints
+		identity.POST("/liveness/session", handlers.Liveness.CreateSession)
+		identity.POST("/liveness/verify", handlers.Liveness.VerifyLiveness)
+		identity.GET("/liveness/session/:sessionId", handlers.Liveness.GetSession)
+
+		// Face Compare endpoints
+		identity.POST("/compare", handlers.FaceCompare.CompareFaces)
+		identity.GET("/compare/:id", handlers.FaceCompare.GetCompareByID)
 	}
 
 	// Admin routes
@@ -213,6 +284,7 @@ func setupRoutes(router *gin.Engine, handlers *Handlers, authMiddleware *middlew
 		admin.POST("/clients/:id/regenerate", handlers.Client.RegenerateKeys)
 
 		// Product Management
+		admin.GET("/products", handlers.ProductManagement.ListProducts)
 		admin.POST("/products", handlers.ProductManagement.CreateProduct)
 		admin.GET("/products/:id", handlers.ProductManagement.GetProduct)
 		admin.PUT("/products/:id", handlers.ProductManagement.UpdateProduct)
@@ -224,6 +296,12 @@ func setupRoutes(router *gin.Engine, handlers *Handlers, authMiddleware *middlew
 		admin.GET("/skus/:id", handlers.ProductManagement.GetSKU)
 		admin.PUT("/skus/:id", handlers.ProductManagement.UpdateSKU)
 		admin.DELETE("/skus/:id", handlers.ProductManagement.DeleteSKU)
+
+		// Transaction Management (Admin)
+		admin.GET("/transactions", handlers.AdminTransaction.ListTransactions)
+		admin.GET("/transactions/stats", handlers.AdminTransaction.GetStats)
+		admin.GET("/transactions/:id", handlers.AdminTransaction.GetTransaction)
+		admin.POST("/transactions/:id/retry", handlers.AdminTransaction.ManualRetry)
 	}
 }
 

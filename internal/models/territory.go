@@ -30,6 +30,13 @@ type SubDistrict struct {
 	Name         string `json:"name" db:"name"`
 }
 
+// PostalCode represents a postal code in Indonesia
+type PostalCode struct {
+	SubDistrictCode string `json:"subDistrictCode" db:"sub_district_code"`
+	PostalCode      string `json:"postalCode" db:"postal_code"`
+	DistrictCode    string `json:"districtCode" db:"district_code"`
+}
+
 // ProvinceResponse represents the API response for a province
 type ProvinceResponse struct {
 	Name string `json:"name"`
@@ -55,4 +62,11 @@ type SubDistrictResponse struct {
 	Name         string `json:"name"`
 	DistrictCode string `json:"districtCode"`
 	Code         string `json:"code"`
+}
+
+// PostalCodeResponse represents the API response for a postal code
+type PostalCodeResponse struct {
+	PostalCode      string `json:"postalCode"`
+	SubDistrictCode string `json:"subDistrictCode"`
+	DistrictCode    string `json:"districtCode"`
 }

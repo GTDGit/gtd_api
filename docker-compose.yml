@@ -17,16 +17,16 @@ services:
       - PORT=${PORT}
       - ENV=${ENV}
       - BASE_URL=${BASE_URL}
-      # Database
-      - DB_HOST=${DB_HOST}
-      - DB_PORT=${DB_PORT}
+      # Database - hardcode host for Docker networking
+      - DB_HOST=postgres
+      - DB_PORT=5432
       - DB_USER=${DB_USER}
       - DB_PASSWORD=${DB_PASSWORD}
       - DB_NAME=${DB_NAME}
       - DB_SSLMODE=${DB_SSLMODE}
-      # Redis
-      - REDIS_HOST=${REDIS_HOST}
-      - REDIS_PORT=${REDIS_PORT}
+      # Redis - hardcode host for Docker networking
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
       - REDIS_PASSWORD=${REDIS_PASSWORD}
       - REDIS_DB=${REDIS_DB}
       # Security
@@ -139,6 +139,10 @@ services:
       - S3_BUCKET=${S3_BUCKET}
       - S3_REGION=${S3_REGION}
       - S3_ENDPOINT=${S3_ENDPOINT}
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+      - 1.1.1.1
     volumes:
       - ./keys:/app/keys:ro
     depends_on:

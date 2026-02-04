@@ -31,3 +31,16 @@ func GenerateSandboxKey() (string, error) {
 func GenerateWebhookSecret() (string, error) {
 	return GenerateAPIKey("gb_secret")
 }
+
+// GenerateRandomString generates a random alphanumeric string of specified length
+func GenerateRandomString(length int) string {
+	const charset = "abcdefghijklmnopqrstuvwxyz0123456789"
+	b := make([]byte, length)
+	if _, err := rand.Read(b); err != nil {
+		return ""
+	}
+	for i := range b {
+		b[i] = charset[int(b[i])%len(charset)]
+	}
+	return string(b)
+}

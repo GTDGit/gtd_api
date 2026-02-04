@@ -9,7 +9,7 @@ CREATE TABLE bank_codes (
     name VARCHAR(100) NOT NULL,
     swift_code VARCHAR(20),
     support_va BOOLEAN NOT NULL DEFAULT false,
-    support_disbursement BOOLEAN NOT NULL DEFAULT false,
+    support_disbursement BOOLEAN NOT NULL DEFAULT true,
     is_active BOOLEAN NOT NULL DEFAULT true,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()

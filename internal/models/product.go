@@ -25,4 +25,8 @@ type Product struct {
 	IsActive    bool        `db:"is_active" json:"productStatus"`
 	CreatedAt   time.Time   `db:"created_at" json:"-"`
 	UpdatedAt   time.Time   `db:"updated_at" json:"updatedAt"`
+
+	// Calculated fields from provider SKUs (populated via subquery)
+	ProviderCount int  `db:"provider_count" json:"providerCount"`
+	MinPrice      *int `db:"min_price" json:"minPrice,omitempty"`
 }

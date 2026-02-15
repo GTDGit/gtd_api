@@ -35,19 +35,19 @@ func (r *TransactionRepository) Create(trx *models.Transaction) error {
             transaction_id, reference_id, client_id, product_id, sku_id, is_sandbox,
             customer_no, customer_name, type, status, serial_number, amount, admin,
             period, description, failed_reason, retry_count, next_retry_at, expired_at,
-            inquiry_id, digi_ref_id, created_at, processed_at
+            inquiry_id, digi_ref_id, buy_price, sell_price, created_at, processed_at
         ) VALUES (
             $1,$2,$3,$4,$5,$6,
             $7,$8,$9,$10,$11,$12,$13,
             $14,$15,$16,$17,$18,$19,
-            $20,$21,NOW(),$22
+            $20,$21,$22,$23,NOW(),$24
         ) RETURNING id`
 
 	return r.db.QueryRow(q,
 		trx.TransactionID, trx.ReferenceID, trx.ClientID, trx.ProductID, trx.SkuID, trx.IsSandbox,
 		trx.CustomerNo, trx.CustomerName, trx.Type, trx.Status, trx.SerialNumber, trx.Amount, trx.Admin,
 		trx.Period, nullableJSON(trx.Description), trx.FailedReason, trx.RetryCount, trx.NextRetryAt, trx.ExpiredAt,
-		trx.InquiryID, trx.DigiRefID, trx.ProcessedAt,
+		trx.InquiryID, trx.DigiRefID, trx.BuyPrice, trx.SellPrice, trx.ProcessedAt,
 	).Scan(&trx.ID)
 }
 
@@ -72,6 +72,8 @@ func (r *TransactionRepository) Update(trx *models.Transaction) error {
             callback_sent = $16,
             callback_sent_at = $17,
             processed_at = $18,
+            buy_price = $19,
+            sell_price = $20,
             updated_at = NOW()
         WHERE transaction_id = $1`
 
@@ -100,6 +102,8 @@ func (r *TransactionRepository) Update(trx *models.Transaction) error {
 		trx.CallbackSent,
 		trx.CallbackAt,
 		trx.ProcessedAt,
+		trx.BuyPrice,
+		trx.SellPrice,
 	)
 	return err
 }
@@ -114,6 +118,24 @@ func (r *TransactionRepository) GetByTransactionID(transactionID string) (*model
 	defer stmt.Close()
 	var t models.Transaction
 	if err := stmt.Get(&t, transactionID); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, sql.ErrNoRows
+		}
+		return nil, err
+	}
+	return &t, nil
+}
+
+// GetByProviderRefID returns transaction by provider_ref_id.
+func (r *TransactionRepository) GetByProviderRefID(providerRefID string) (*models.Transaction, error) {
+	const q = `SELECT * FROM transactions WHERE provider_ref_id = $1 LIMIT 1`
+	stmt, err := r.db.Preparex(q)
+	if err != nil {
+		return nil, err
+	}
+	defer stmt.Close()
+	var t models.Transaction
+	if err := stmt.Get(&t, providerRefID); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, sql.ErrNoRows
 		}
@@ -181,18 +203,22 @@ func (r *TransactionRepository) GetAllPendingTransactions() ([]models.Transactio
 }
 
 // GetStaleProcessingTransactions returns Processing transactions older than the given duration.
-// These are transactions waiting for Digiflazz callback that haven't received one yet.
-// Used to re-check status by calling Digiflazz again with same ref_id.
+// Finds both legacy Digiflazz transactions and multi-provider transactions.
+// Used to re-check status by calling the appropriate provider.
 func (r *TransactionRepository) GetStaleProcessingTransactions(staleAfter time.Duration) ([]models.Transaction, error) {
 	const q = `
-        SELECT * FROM transactions
-        WHERE status = 'Processing'
-          AND type = 'prepaid'
-          AND created_at < NOW() - $1::interval
-          AND digi_ref_id IS NOT NULL
-        ORDER BY created_at ASC
+        SELECT t.*, pp.code AS provider_code
+        FROM transactions t
+        LEFT JOIN ppob_providers pp ON t.provider_id = pp.id
+        WHERE t.status = 'Processing'
+          AND t.created_at < NOW() - $1::interval
+          AND (
+            (t.type = 'prepaid' AND t.digi_ref_id IS NOT NULL)
+            OR (t.provider_id IS NOT NULL AND t.provider_ref_id IS NOT NULL)
+          )
+        ORDER BY t.created_at ASC
         LIMIT 50
-        FOR UPDATE SKIP LOCKED`
+        FOR UPDATE OF t SKIP LOCKED`
 
 	stmt, err := r.db.Preparex(q)
 	if err != nil {
@@ -327,6 +353,7 @@ func (r *TransactionRepository) GetAllAdmin(filter *AdminTransactionFilter) (*Ad
               JOIN products p ON t.product_id = p.id
               LEFT JOIN skus s ON t.sku_id = s.id
               LEFT JOIN clients c ON t.client_id = c.id
+              LEFT JOIN ppob_providers pp ON t.provider_id = pp.id
               WHERE 1=1`
 
 	args := []interface{}{}
@@ -404,14 +431,17 @@ func (r *TransactionRepository) GetAllAdmin(filter *AdminTransactionFilter) (*Ad
 	offset := (filter.Page - 1) * filter.Limit
 	totalPages := (total + filter.Limit - 1) / filter.Limit
 
-	// Select with pagination - include both product sku_code and digi_sku_code from skus
+	// Select with pagination - include product sku_code, digi_sku_code, and provider info
 	selectQ := fmt.Sprintf(`
-		SELECT 
+		SELECT
 			t.id, t.transaction_id, t.reference_id, t.client_id, t.product_id, t.sku_id,
 			t.is_sandbox, t.customer_no, t.customer_name, t.type, t.status,
 			t.serial_number, t.amount, t.admin, t.period, t.description,
 			t.failed_reason, t.failed_code, t.retry_count, t.max_retry,
 			t.next_retry_at, t.expired_at, t.inquiry_id, t.digi_ref_id,
+			t.buy_price, t.sell_price,
+			t.provider_id, t.provider_ref_id,
+			pp.code AS provider_code,
 			t.callback_sent, t.callback_sent_at, t.created_at, t.processed_at, t.updated_at,
 			p.sku_code AS product_sku_code,
 			s.digi_sku_code AS digi_sku_code
@@ -471,6 +501,11 @@ type transactionWithJoins struct {
 	ExpiredAt      *time.Time               `db:"expired_at"`
 	InquiryID      *int                     `db:"inquiry_id"`
 	DigiRefID      *string                  `db:"digi_ref_id"`
+	BuyPrice       *int                     `db:"buy_price"`
+	SellPrice      *int                     `db:"sell_price"`
+	ProviderID     *int                     `db:"provider_id"`
+	ProviderRefID  *string                  `db:"provider_ref_id"`
+	ProviderCode   *string                  `db:"provider_code"`
 	CallbackSent   bool                     `db:"callback_sent"`
 	CallbackAt     *time.Time               `db:"callback_sent_at"`
 	CreatedAt      time.Time                `db:"created_at"`
@@ -508,6 +543,11 @@ func (t *transactionWithJoins) toTransaction() models.Transaction {
 		ExpiredAt:     t.ExpiredAt,
 		InquiryID:     t.InquiryID,
 		DigiRefID:     t.DigiRefID,
+		BuyPrice:      t.BuyPrice,
+		SellPrice:     t.SellPrice,
+		ProviderID:    t.ProviderID,
+		ProviderRefID: t.ProviderRefID,
+		ProviderCode:  t.ProviderCode,
 		CallbackSent:  t.CallbackSent,
 		CallbackAt:    t.CallbackAt,
 		CreatedAt:     t.CreatedAt,
@@ -639,18 +679,22 @@ func (r *TransactionRepository) GetByIDAdmin(id int) (*models.Transaction, error
 // GetByTransactionIDAdmin returns a transaction by transaction_id for admin (no client filtering).
 func (r *TransactionRepository) GetByTransactionIDAdmin(transactionID string) (*models.Transaction, error) {
 	const q = `
-		SELECT 
+		SELECT
 			t.id, t.transaction_id, t.reference_id, t.client_id, t.product_id, t.sku_id,
 			t.is_sandbox, t.customer_no, t.customer_name, t.type, t.status,
 			t.serial_number, t.amount, t.admin, t.period, t.description,
 			t.failed_reason, t.failed_code, t.retry_count, t.max_retry,
 			t.next_retry_at, t.expired_at, t.inquiry_id, t.digi_ref_id,
+			t.buy_price, t.sell_price,
+			t.provider_id, t.provider_ref_id,
+			pp.code AS provider_code,
 			t.callback_sent, t.callback_sent_at, t.created_at, t.processed_at, t.updated_at,
 			p.sku_code AS product_sku_code,
 			s.digi_sku_code AS digi_sku_code
 		FROM transactions t
 		JOIN products p ON t.product_id = p.id
 		LEFT JOIN skus s ON t.sku_id = s.id
+		LEFT JOIN ppob_providers pp ON t.provider_id = pp.id
 		WHERE t.transaction_id = $1 LIMIT 1`
 
 	var trx transactionWithJoins

@@ -12,17 +12,19 @@ import (
 	"github.com/GTDGit/gtd_api/pkg/digiflazz"
 )
 
-// StatusCheckWorker re-checks status of Processing transactions by calling Digiflazz again.
-// Digiflazz is idempotent - calling with same ref_id returns current status, not creating new transaction.
+// StatusCheckWorker re-checks status of Processing transactions by calling providers.
+// For multi-provider transactions, it uses ProviderRouter to check the correct provider.
+// For legacy Digiflazz transactions, it continues using direct Digiflazz calls.
 type StatusCheckWorker struct {
-	trxRepo     *repository.TransactionRepository
-	skuRepo     *repository.SKURepository
-	callbackSvc *service.CallbackService
-	digiProd    *digiflazz.Client
-	digiDev     *digiflazz.Client
-	interval    time.Duration
-	staleAfter  time.Duration // How long to wait before re-checking (e.g., 10 seconds)
-	maxAge      time.Duration // Max age before marking as failed (e.g., 5 minutes)
+	trxRepo        *repository.TransactionRepository
+	skuRepo        *repository.SKURepository
+	callbackSvc    *service.CallbackService
+	digiProd       *digiflazz.Client
+	digiDev        *digiflazz.Client
+	providerRouter *service.ProviderRouter
+	interval       time.Duration
+	staleAfter     time.Duration // How long to wait before re-checking (e.g., 10 seconds)
+	maxAge         time.Duration // Max age before marking as failed (e.g., 5 minutes)
 }
 
 // NewStatusCheckWorker constructs a StatusCheckWorker.
@@ -32,19 +34,21 @@ func NewStatusCheckWorker(
 	callbackSvc *service.CallbackService,
 	digiProd *digiflazz.Client,
 	digiDev *digiflazz.Client,
+	providerRouter *service.ProviderRouter,
 	interval time.Duration,
 	staleAfter time.Duration,
 	maxAge time.Duration,
 ) *StatusCheckWorker {
 	return &StatusCheckWorker{
-		trxRepo:     trxRepo,
-		skuRepo:     skuRepo,
-		callbackSvc: callbackSvc,
-		digiProd:    digiProd,
-		digiDev:     digiDev,
-		interval:    interval,
-		staleAfter:  staleAfter,
-		maxAge:      maxAge,
+		trxRepo:        trxRepo,
+		skuRepo:        skuRepo,
+		callbackSvc:    callbackSvc,
+		digiProd:       digiProd,
+		digiDev:        digiDev,
+		providerRouter: providerRouter,
+		interval:       interval,
+		staleAfter:     staleAfter,
+		maxAge:         maxAge,
 	}
 }
 
@@ -101,6 +105,114 @@ func (w *StatusCheckWorker) checkTransaction(ctx context.Context, trx *models.Tr
 			Dur("age", time.Since(trx.CreatedAt)).
 			Msg("Transaction too old, marking as failed")
 		w.markFailed(trx, "Transaction timeout - no response from provider")
+		return
+	}
+
+	// Check if this is a multi-provider transaction
+	if trx.ProviderCode != nil && trx.ProviderRefID != nil && *trx.ProviderCode != "" {
+		w.checkMultiProviderTransaction(ctx, trx)
+		return
+	}
+
+	// Legacy Digiflazz transaction
+	w.checkDigiflazzTransaction(ctx, trx)
+}
+
+func (w *StatusCheckWorker) checkMultiProviderTransaction(ctx context.Context, trx *models.Transaction) {
+	log.Info().
+		Str("transaction_id", trx.TransactionID).
+		Str("provider_code", *trx.ProviderCode).
+		Str("provider_ref_id", *trx.ProviderRefID).
+		Dur("age", time.Since(trx.CreatedAt)).
+		Msg("Re-checking transaction status with provider")
+
+	if w.providerRouter == nil {
+		log.Error().
+			Str("transaction_id", trx.TransactionID).
+			Msg("ProviderRouter not configured, cannot check multi-provider transaction")
+		return
+	}
+
+	// Get the provider adapter
+	adapter := w.providerRouter.GetAdapter(*trx.ProviderCode)
+	if adapter == nil {
+		log.Error().
+			Str("transaction_id", trx.TransactionID).
+			Str("provider_code", *trx.ProviderCode).
+			Msg("No adapter found for provider")
+		return
+	}
+
+	// Check status with the provider
+	result, err := adapter.CheckStatus(ctx, *trx.ProviderRefID)
+	if err != nil {
+		log.Warn().
+			Err(err).
+			Str("transaction_id", trx.TransactionID).
+			Str("provider_code", *trx.ProviderCode).
+			Msg("Error checking transaction status with provider, will retry later")
+		return
+	}
+
+	now := time.Now()
+
+	switch {
+	case result.Success:
+		trx.Status = models.StatusSuccess
+		if result.SerialNumber != "" {
+			trx.SerialNumber = &result.SerialNumber
+		}
+		if result.Amount > 0 {
+			trx.Amount = &result.Amount
+		}
+		trx.ProcessedAt = &now
+
+		if err := w.trxRepo.Update(trx); err != nil {
+			log.Error().Err(err).Str("transaction_id", trx.TransactionID).Msg("Failed to update transaction to success")
+			return
+		}
+
+		go w.callbackSvc.SendCallback(trx, "transaction.success")
+		log.Info().
+			Str("transaction_id", trx.TransactionID).
+			Str("provider_code", *trx.ProviderCode).
+			Msg("Transaction updated to Success from multi-provider status check")
+
+	case result.Pending:
+		// Still pending, will check again on next run
+		log.Debug().
+			Str("transaction_id", trx.TransactionID).
+			Str("provider_code", *trx.ProviderCode).
+			Msg("Transaction still pending from multi-provider status check")
+
+	default:
+		// Failed
+		msg := result.Message
+		rc := result.RC
+		trx.Status = models.StatusFailed
+		trx.FailedReason = &msg
+		trx.FailedCode = &rc
+		trx.ProcessedAt = &now
+
+		if err := w.trxRepo.Update(trx); err != nil {
+			log.Error().Err(err).Str("transaction_id", trx.TransactionID).Msg("Failed to update transaction to failed")
+			return
+		}
+
+		go w.callbackSvc.SendCallback(trx, "transaction.failed")
+		log.Info().
+			Str("transaction_id", trx.TransactionID).
+			Str("provider_code", *trx.ProviderCode).
+			Str("rc", rc).
+			Msg("Transaction updated to Failed from multi-provider status check")
+	}
+}
+
+func (w *StatusCheckWorker) checkDigiflazzTransaction(ctx context.Context, trx *models.Transaction) {
+	if trx.DigiRefID == nil || *trx.DigiRefID == "" {
+		log.Error().
+			Str("transaction_id", trx.TransactionID).
+			Msg("Transaction has no DigiRefID, cannot check status")
 		return
 	}
 

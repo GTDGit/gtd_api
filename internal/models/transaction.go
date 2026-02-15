@@ -100,4 +100,15 @@ type Transaction struct {
 	CreatedAt     time.Time          `db:"created_at" json:"createdAt"`
 	ProcessedAt   *time.Time         `db:"processed_at" json:"processedAt,omitempty"`
 	UpdatedAt     time.Time          `db:"updated_at" json:"-"`
+
+	// Price tracking: buy_price = actual cost from provider, sell_price = price shown to client
+	BuyPrice  *int `db:"buy_price" json:"-"`
+	SellPrice *int `db:"sell_price" json:"price,omitempty"`
+
+	// Multi-provider fields
+	ProviderID       *int               `db:"provider_id" json:"-"`
+	ProviderSKUID    *int               `db:"provider_sku_id" json:"-"`
+	ProviderCode     *string            `db:"provider_code" json:"providerCode,omitempty"` // Populated from JOIN with ppob_providers
+	ProviderRefID    *string            `db:"provider_ref_id" json:"-"`
+	ProviderResponse NullableRawMessage `db:"provider_response" json:"-"`
 }

@@ -32,16 +32,17 @@ func isDuplicateKeyError(err error) bool {
 
 // TransactionService contains business logic for transactions.
 type TransactionService struct {
-	trxRepo       *repository.TransactionRepository
-	productRepo   *repository.ProductRepository
-	skuRepo       *repository.SKURepository
-	callbackRepo  *repository.CallbackRepository
-	digiflazzProd *digiflazz.Client
-	digiflazzDev  *digiflazz.Client
-	productSvc    *ProductService
-	callbackSvc   *CallbackService
-	sandboxMapper *SandboxMapper
-	inquiryCache  *cache.InquiryCache
+	trxRepo        *repository.TransactionRepository
+	productRepo    *repository.ProductRepository
+	skuRepo        *repository.SKURepository
+	callbackRepo   *repository.CallbackRepository
+	digiflazzProd  *digiflazz.Client
+	digiflazzDev   *digiflazz.Client
+	productSvc     *ProductService
+	callbackSvc    *CallbackService
+	sandboxMapper  *SandboxMapper
+	inquiryCache   *cache.InquiryCache
+	providerRouter *ProviderRouter // Multi-provider router (optional)
 }
 
 // NewTransactionService constructs a TransactionService.
@@ -70,6 +71,11 @@ func NewTransactionService(
 	}
 }
 
+// SetProviderRouter sets the multi-provider router for the transaction service
+func (s *TransactionService) SetProviderRouter(router *ProviderRouter) {
+	s.providerRouter = router
+}
+
 // getDigiflazzClient returns the appropriate Digiflazz client based on sandbox mode.
 func (s *TransactionService) getDigiflazzClient(isSandbox bool) *digiflazz.Client {
 	if isSandbox {
@@ -85,6 +91,7 @@ type CreateTransactionRequest struct {
 	CustomerNo    string `json:"customerNo" binding:"required"`
 	Type          string `json:"type" binding:"required,oneof=prepaid inquiry payment"`
 	TransactionID string `json:"transactionId"` // Required for payment
+	Provider      string `json:"provider"`      // Optional: force specific provider (kiosbank, alterra, digiflazz)
 }
 
 // CreateTransaction routes processing based on req.Type.
@@ -117,16 +124,21 @@ func (s *TransactionService) processPrepaid(ctx context.Context, req *CreateTran
 		return nil, utils.ErrInvalidSKU
 	}
 
-	// 3. Get available SKUs
-	skus, err := s.productSvc.GetAvailableSKUs(product.ID)
-	if err != nil || len(skus) == 0 {
-		return nil, utils.ErrNoAvailableSKU
-	}
-
-	// 4. Generate transaction ID
+	// 3. Generate transaction ID
 	trxID, err := s.trxRepo.GenerateTransactionID()
 	if err != nil {
 		return nil, err
+	}
+
+	// 4. Determine sell_price (cheapest provider price = what client sees)
+	var sellPrice *int
+	if s.providerRouter != nil && !isSandbox {
+		if bestPrice, _, err := s.providerRouter.GetBestPrice(product.ID); err == nil && bestPrice != nil {
+			sellPrice = bestPrice
+		}
+	}
+	if sellPrice == nil && product.MinPrice != nil && *product.MinPrice > 0 {
+		sellPrice = product.MinPrice
 	}
 
 	// 5. Create transaction record
@@ -140,6 +152,7 @@ func (s *TransactionService) processPrepaid(ctx context.Context, req *CreateTran
 		Type:          models.TrxTypePrepaid,
 		Status:        models.StatusProcessing,
 		IsSandbox:     isSandbox,
+		SellPrice:     sellPrice,
 	}
 
 	if err := s.trxRepo.Create(trx); err != nil {
@@ -150,7 +163,23 @@ func (s *TransactionService) processPrepaid(ctx context.Context, req *CreateTran
 		return nil, err
 	}
 
-	// 6. Try each SKU
+	// 6. Try multi-provider routing if available
+	if s.providerRouter != nil && !isSandbox {
+		// Check if we have providers for this product
+		providers, err := s.providerRouter.GetProviderOptions(product.ID)
+		if err == nil && len(providers) > 0 {
+			return s.executeWithProviderRouter(ctx, trx, ProviderTrxPrepaid, req.Provider)
+		}
+		// No providers configured, fallback to legacy Digiflazz flow
+		log.Debug().Int("product_id", product.ID).Msg("No multi-provider SKUs, using legacy Digiflazz flow")
+	}
+
+	// 7. Legacy flow: Get available SKUs and try each
+	skus, err := s.productSvc.GetAvailableSKUs(product.ID)
+	if err != nil || len(skus) == 0 {
+		return s.handleAllSKUsFailed(trx)
+	}
+
 	return s.tryAllSKUs(ctx, trx, skus, isSandbox, 0)
 }
 
@@ -188,7 +217,9 @@ func (s *TransactionService) tryAllSKUs(ctx context.Context, trx *models.Transac
 		// CRITICAL: Store digiRefID BEFORE making API call for recovery
 		trx.DigiRefID = &digiRefID
 		trx.SkuID = &sku.ID
-		_ = s.trxRepo.Update(trx)
+		if err := s.trxRepo.Update(trx); err != nil {
+		log.Error().Err(err).Str("transaction_id", trx.TransactionID).Str("status", string(trx.Status)).Msg("CRITICAL: failed to update transaction in DB")
+	}
 
 		// Call Digiflazz with test data in sandbox mode, real data otherwise
 		digi := s.getDigiflazzClient(isSandbox)
@@ -305,11 +336,14 @@ func (s *TransactionService) handleSuccess(trx *models.Transaction, sku *models.
 		trx.SerialNumber = &resp.SN
 	}
 	trx.Amount = &resp.Price
+	trx.BuyPrice = &resp.Price
 	trx.ProcessedAt = &now
 	if resp.RefID != "" {
 		trx.DigiRefID = &resp.RefID
 	}
-	_ = s.trxRepo.Update(trx)
+	if err := s.trxRepo.Update(trx); err != nil {
+		log.Error().Err(err).Str("transaction_id", trx.TransactionID).Str("status", string(trx.Status)).Msg("CRITICAL: failed to update transaction in DB")
+	}
 
 	// Send callback to client asynchronously
 	go s.callbackSvc.SendCallback(trx, "transaction.success")
@@ -324,7 +358,9 @@ func (s *TransactionService) handlePending(trx *models.Transaction, sku *models.
 	if resp.RefID != "" {
 		trx.DigiRefID = &resp.RefID
 	}
-	_ = s.trxRepo.Update(trx)
+	if err := s.trxRepo.Update(trx); err != nil {
+		log.Error().Err(err).Str("transaction_id", trx.TransactionID).Str("status", string(trx.Status)).Msg("CRITICAL: failed to update transaction in DB")
+	}
 	return trx, nil
 }
 
@@ -341,7 +377,9 @@ func (s *TransactionService) handleFatal(trx *models.Transaction, resp *digiflaz
 		trx.FailedCode = &rc
 	}
 	trx.ProcessedAt = &now
-	_ = s.trxRepo.Update(trx)
+	if err := s.trxRepo.Update(trx); err != nil {
+		log.Error().Err(err).Str("transaction_id", trx.TransactionID).Str("status", string(trx.Status)).Msg("CRITICAL: failed to update transaction in DB")
+	}
 
 	go s.callbackSvc.SendCallback(trx, "transaction.failed")
 	return trx, nil
@@ -357,7 +395,9 @@ func (s *TransactionService) handleAllSKUsFailed(trx *models.Transaction) (*mode
 	trx.FailedReason = &reason
 	trx.ProcessedAt = &now
 	trx.NextRetryAt = nil
-	_ = s.trxRepo.Update(trx)
+	if err := s.trxRepo.Update(trx); err != nil {
+		log.Error().Err(err).Str("transaction_id", trx.TransactionID).Str("status", string(trx.Status)).Msg("CRITICAL: failed to update transaction in DB")
+	}
 
 	go s.callbackSvc.SendCallback(trx, "transaction.failed")
 	return trx, nil
@@ -387,67 +427,22 @@ func (s *TransactionService) processInquiry(ctx context.Context, req *CreateTran
 		return nil, err
 	}
 
-	// Determine SKU and customer number to send to Digiflazz
-	digiSKU := req.SkuCode
-	digiCustomerNo := req.CustomerNo
-
-	// In sandbox mode, use test SKU and customer number
-	if isSandbox {
-		testSKU, testCustomerNo := s.sandboxMapper.GetTestMapping(req.SkuCode, models.TrxTypeInquiry)
-		digiSKU = testSKU
-		digiCustomerNo = testCustomerNo
-	}
-
-	// Make inquiry call with test data in sandbox mode, real data otherwise
-	digi := s.getDigiflazzClient(isSandbox)
-	resp, err := digi.Inquiry(ctx, digiSKU, digiCustomerNo, trxID, isSandbox)
-
-	// Log attempt (no database transaction yet, log to transaction_logs later if needed)
-	log.Info().
-		Str("transactionId", trxID).
-		Str("buyer_sku_code", digiSKU).
-		Str("customer_no", digiCustomerNo).
-		Bool("sandbox", isSandbox).
-		Msg("inquiry request to digiflazz")
-
-	if err != nil {
-		log.Error().Err(err).Str("transactionId", trxID).Msg("inquiry failed")
-		return nil, fmt.Errorf("inquiry failed: %w", err)
-	}
-
 	// Expiration end of day WIB
 	wib := time.FixedZone("WIB", 7*3600) // UTC+7
 	nowWIB := time.Now().In(wib)
 	eod := time.Date(nowWIB.Year(), nowWIB.Month(), nowWIB.Day(), 23, 59, 59, 0, wib)
 
-	// Process RC
-	if !digiflazz.IsSuccess(resp.RC) {
-		log.Warn().Str("rc", resp.RC).Str("message", resp.Message).Msg("inquiry not successful")
-		return nil, fmt.Errorf("inquiry failed: %s", resp.Message)
+	// Try multi-provider inquiry if available and not sandbox
+	if s.providerRouter != nil && !isSandbox {
+		providers, provErr := s.providerRouter.GetProviderOptionsPostpaid(product.ID)
+		if provErr == nil && len(providers) > 0 {
+			return s.executeInquiryWithProviders(ctx, req, client, product, trxID, providers, eod)
+		}
+		log.Debug().Int("product_id", product.ID).Msg("No multi-provider SKUs for inquiry, using legacy Digiflazz flow")
 	}
 
-	// Store in Redis cache
-	inquiryData := &cache.InquiryData{
-		TransactionID: trxID,
-		ReferenceID:   req.ReferenceID,
-		ClientID:      client.ID,
-		ProductID:     product.ID,
-		CustomerNo:    req.CustomerNo,
-		SKUCode:       req.SkuCode,
-		Amount:        resp.Price,
-		Admin:         resp.Admin,
-		CustomerName:  resp.CustomerName,
-		Description:   resp.Desc,
-		ExpiredAt:     eod,
-	}
-
-	if err := s.inquiryCache.Set(ctx, inquiryData); err != nil {
-		log.Error().Err(err).Msg("failed to cache inquiry")
-		// Continue anyway, inquiry succeeded
-	}
-
-	// Return transaction model for response
-	return s.cachedInquiryToTransaction(inquiryData, client.ID, product.ID), nil
+	// Legacy Digiflazz inquiry flow
+	return s.executeInquiryWithDigiflazz(ctx, req, client, product, trxID, eod, isSandbox)
 }
 
 // processPayment handles postpaid payment after a successful inquiry.
@@ -485,6 +480,12 @@ func (s *TransactionService) processPayment(ctx context.Context, req *CreateTran
 	if err != nil {
 		return nil, err
 	}
+	// sell_price for payment = the inquiry amount (what client was quoted)
+	var sellPrice *int
+	if inquiryData.Amount > 0 {
+		sp := inquiryData.Amount
+		sellPrice = &sp
+	}
 	payment := &models.Transaction{
 		TransactionID: payTrxID,
 		ReferenceID:   req.ReferenceID,
@@ -495,29 +496,38 @@ func (s *TransactionService) processPayment(ctx context.Context, req *CreateTran
 		Type:          models.TrxTypePayment,
 		Status:        models.StatusProcessing,
 		IsSandbox:     isSandbox,
-		// Note: InquiryID is nil since inquiry is not in database
+		SellPrice:     sellPrice,
 	}
 	if err := s.trxRepo.Create(payment); err != nil {
 		return nil, err
 	}
 
-	// 4. Determine SKU and customer number to send to Digiflazz
+	// 4. Route payment to the correct provider
+	// If inquiry was handled by a multi-provider (ProviderCode is set), use that same provider.
+	// Otherwise, fall back to legacy Digiflazz flow.
+	if inquiryData.ProviderCode != "" && s.providerRouter != nil && !isSandbox {
+		log.Info().
+			Str("provider", inquiryData.ProviderCode).
+			Str("inquiry_trx_id", inquiryData.TransactionID).
+			Str("payment_trx_id", payTrxID).
+			Msg("Routing payment to same provider as inquiry")
+		return s.executePaymentWithProvider(ctx, payment, inquiryData)
+	}
+
+	// Legacy Digiflazz payment flow
 	digiSKU := req.SkuCode
 	digiCustomerNo := inquiryData.CustomerNo
 
-	// In sandbox mode, use test SKU and customer number
 	if isSandbox {
 		testSKU, testCustomerNo := s.sandboxMapper.GetTestMapping(req.SkuCode, payment.Type)
 		digiSKU = testSKU
 		digiCustomerNo = testCustomerNo
 	}
 
-	// Call Digiflazz.Payment() with SAME ref_id as inquiry
 	refID := inquiryData.TransactionID
 	digi := s.getDigiflazzClient(isSandbox)
 	resp, err := digi.Payment(ctx, digiSKU, digiCustomerNo, refID, isSandbox)
 
-	// Log attempt (no SKU context for pasca)
 	s.logAttempt(payment.ID, 0, refID, map[string]any{
 		"buyer_sku_code": digiSKU,
 		"customer_no":    digiCustomerNo,
@@ -526,7 +536,6 @@ func (s *TransactionService) processPayment(ctx context.Context, req *CreateTran
 	}, resp, err)
 
 	if err != nil {
-		// Schedule retry
 		return s.handleAllSKUsFailed(payment)
 	}
 
@@ -537,11 +546,13 @@ func (s *TransactionService) processPayment(ctx context.Context, req *CreateTran
 			payment.SerialNumber = &resp.SN
 		}
 		payment.Amount = &resp.Price
+		payment.BuyPrice = &resp.Price
 		payment.ProcessedAt = &now
 		payment.DigiRefID = &refID
-		_ = s.trxRepo.Update(payment)
+		if err := s.trxRepo.Update(payment); err != nil {
+		log.Error().Err(err).Str("transaction_id", payment.TransactionID).Str("status", string(payment.Status)).Msg("CRITICAL: failed to update payment in DB")
+	}
 
-		// Delete inquiry from Redis cache (already paid!)
 		if err := s.inquiryCache.Delete(ctx, inquiryData); err != nil {
 			log.Warn().Err(err).Str("transactionId", inquiryData.TransactionID).Msg("failed to delete inquiry cache")
 		}
@@ -554,7 +565,9 @@ func (s *TransactionService) processPayment(ctx context.Context, req *CreateTran
 		payment.Status = models.StatusProcessing
 		payment.Amount = &resp.Price
 		payment.DigiRefID = &refID
-		_ = s.trxRepo.Update(payment)
+		if err := s.trxRepo.Update(payment); err != nil {
+		log.Error().Err(err).Str("transaction_id", payment.TransactionID).Str("status", string(payment.Status)).Msg("CRITICAL: failed to update payment in DB")
+	}
 		return payment, nil
 	}
 
@@ -565,7 +578,9 @@ func (s *TransactionService) processPayment(ctx context.Context, req *CreateTran
 	payment.FailedReason = &msg
 	payment.ProcessedAt = &now
 	payment.DigiRefID = &refID
-	_ = s.trxRepo.Update(payment)
+	if err := s.trxRepo.Update(payment); err != nil {
+		log.Error().Err(err).Str("transaction_id", payment.TransactionID).Str("status", string(payment.Status)).Msg("CRITICAL: failed to update payment in DB")
+	}
 	go s.callbackSvc.SendCallback(payment, "transaction.failed")
 	return payment, nil
 }
@@ -583,18 +598,32 @@ func (s *TransactionService) GetTransaction(transactionID string, clientID int) 
 }
 
 // RetryTransaction retries a pending/processing transaction.
-// CRITICAL: Must check if there's a pending transaction at Digiflazz first to avoid duplicates.
+// CRITICAL: Must check if there's a pending transaction at any provider first to avoid duplicates.
 func (s *TransactionService) RetryTransaction(ctx context.Context, trx *models.Transaction) (*models.Transaction, error) {
-	// If transaction has a digi_ref_id and status is Processing,
-	// it means Digiflazz is still processing. Don't retry - wait for callback.
-	if trx.Status == models.StatusProcessing && trx.DigiRefID != nil && *trx.DigiRefID != "" {
-		log.Info().
-			Str("transaction_id", trx.TransactionID).
-			Str("digi_ref_id", *trx.DigiRefID).
-			Msg("Transaction is processing at Digiflazz, cannot retry - wait for callback")
-		return trx, fmt.Errorf("transaction is processing at Digiflazz, please wait for callback")
+	// If transaction is Processing with an active provider ref, don't retry - wait for callback.
+	if trx.Status == models.StatusProcessing {
+		if (trx.DigiRefID != nil && *trx.DigiRefID != "") ||
+			(trx.ProviderRefID != nil && *trx.ProviderRefID != "") {
+			providerName := "provider"
+			if trx.ProviderCode != nil && *trx.ProviderCode != "" {
+				providerName = *trx.ProviderCode
+			} else if trx.DigiRefID != nil && *trx.DigiRefID != "" {
+				providerName = "digiflazz"
+			}
+			log.Info().
+				Str("transaction_id", trx.TransactionID).
+				Str("provider", providerName).
+				Msg("Transaction is processing at provider, cannot retry - wait for callback")
+			return trx, fmt.Errorf("transaction is processing at %s, please wait for callback", providerName)
+		}
 	}
 
+	// Use provider router for multi-provider transactions (non-sandbox, prepaid)
+	if s.providerRouter != nil && !trx.IsSandbox && trx.Type == "prepaid" {
+		return s.executeWithProviderRouter(ctx, trx, ProviderTrxPrepaid, "")
+	}
+
+	// Legacy Digiflazz-only path (sandbox or no provider router)
 	skus, err := s.productSvc.GetAvailableSKUs(trx.ProductID)
 	if err != nil || len(skus) == 0 {
 		return s.handleAllSKUsFailed(trx)
@@ -659,7 +688,9 @@ func (s *TransactionService) tryAllSKUsWithOffset(ctx context.Context, trx *mode
 
 		trx.DigiRefID = &digiRefID
 		trx.SkuID = &sku.ID
-		_ = s.trxRepo.Update(trx)
+		if err := s.trxRepo.Update(trx); err != nil {
+		log.Error().Err(err).Str("transaction_id", trx.TransactionID).Str("status", string(trx.Status)).Msg("CRITICAL: failed to update transaction in DB")
+	}
 
 		digi := s.getDigiflazzClient(isSandbox)
 		resp, err := digi.Topup(ctx, digiSKU, digiCustomerNo, digiRefID, isSandbox)
@@ -756,6 +787,39 @@ func (s *TransactionService) logAttempt(trxID int, skuID int, digiRefID string, 
 	}
 }
 
+// logProviderAttempt logs a provider transaction attempt to the transaction_logs table.
+func (s *TransactionService) logProviderAttempt(trxID int, refID string, request any, resp *ProviderResponse, err error) {
+	reqJSON, _ := json.Marshal(request)
+	var respJSON []byte
+	var rcPtr, statusPtr *string
+	var responseAt *time.Time
+	if resp != nil {
+		respJSON, _ = json.Marshal(resp)
+		if resp.RC != "" {
+			rc := resp.RC
+			rcPtr = &rc
+		}
+		if resp.Status != "" {
+			st := resp.Status
+			statusPtr = &st
+		}
+		now := time.Now()
+		responseAt = &now
+	}
+	logEntry := &models.TransactionLog{
+		TransactionID: trxID,
+		DigiRefID:     refID,
+		Request:       json.RawMessage(reqJSON),
+		Response:      json.RawMessage(respJSON),
+		RC:            rcPtr,
+		Status:        statusPtr,
+		ResponseAt:    responseAt,
+	}
+	if err := s.callbackRepo.CreateTransactionLog(logEntry); err != nil {
+		log.Error().Err(err).Msg("failed to create transaction log")
+	}
+}
+
 // cachedInquiryToTransaction converts cached inquiry data to transaction model.
 func (s *TransactionService) cachedInquiryToTransaction(data *cache.InquiryData, clientID, productID int) *models.Transaction {
 	status := models.StatusSuccess
@@ -803,8 +867,9 @@ func (s *TransactionService) RetryWithNextSKU(ctx context.Context, trx *models.T
 		Str("failed_message", failedMessage).
 		Msg("Retrying transaction with next SKU from callback")
 
-	// Get available SKUs for this product
-	currentTime := time.Now().Format("15:04:05")
+	// Get available SKUs for this product (use WIB timezone for availability window)
+	wib := time.FixedZone("WIB", 7*3600)
+	currentTime := time.Now().In(wib).Format("15:04:05")
 	skus, err := s.skuRepo.GetAvailableSKUs(trx.ProductID, currentTime)
 	if err != nil || len(skus) == 0 {
 		log.Error().Err(err).Int("product_id", trx.ProductID).Msg("No available SKUs for retry")
@@ -873,4 +938,397 @@ func (s *TransactionService) RetryWithNextSKU(ctx context.Context, trx *models.T
 	}
 
 	return result, false, nil // Success or Pending
+}
+
+// executeWithProviderRouter executes a transaction using the multi-provider router
+func (s *TransactionService) executeWithProviderRouter(ctx context.Context, trx *models.Transaction, trxType ProviderTransactionType, forceProvider string) (*models.Transaction, error) {
+	if s.providerRouter == nil {
+		return nil, fmt.Errorf("provider router not configured")
+	}
+
+	// Build provider request
+	req := &ProviderRequest{
+		RefID:         trx.TransactionID,
+		CustomerNo:    trx.CustomerNo,
+		Type:          trxType,
+		IsSandbox:     trx.IsSandbox,
+		ForceProvider: models.ProviderCode(forceProvider),
+	}
+
+	// Execute with provider router
+	result, err := s.providerRouter.Execute(ctx, trx.ProductID, req)
+	if err != nil {
+		log.Error().Err(err).Str("transaction_id", trx.TransactionID).Msg("Provider router execution failed")
+		return s.handleAllSKUsFailed(trx)
+	}
+
+	// Store provider info
+	if result.ProviderUsed != nil {
+		providerID := result.ProviderUsed.ProviderID
+		trx.ProviderID = &providerID
+		providerSKUID := result.ProviderUsed.ProviderSKUID
+		trx.ProviderSKUID = &providerSKUID
+		providerCode := string(result.ProviderUsed.ProviderCode)
+		trx.ProviderCode = &providerCode
+	}
+
+	if result.Response == nil {
+		log.Error().Str("transaction_id", trx.TransactionID).Msg("Provider returned nil response")
+		return s.handleAllSKUsFailed(trx)
+	}
+
+	// Store provider reference ID
+	if result.Response.ProviderRefID != "" {
+		trx.ProviderRefID = &result.Response.ProviderRefID
+	}
+
+	// Store raw response
+	if len(result.Response.RawResponse) > 0 {
+		trx.ProviderResponse = models.NullableRawMessage(result.Response.RawResponse)
+	}
+
+	// Handle response based on status
+	if result.Response.Success {
+		return s.handleProviderSuccess(trx, result.Response)
+	}
+
+	if result.Response.Pending {
+		return s.handleProviderPending(trx, result.Response)
+	}
+
+	// Failed
+	return s.handleProviderFailed(trx, result.Response)
+}
+
+// handleProviderSuccess handles a successful provider response
+func (s *TransactionService) handleProviderSuccess(trx *models.Transaction, resp *ProviderResponse) (*models.Transaction, error) {
+	now := time.Now()
+	trx.Status = models.StatusSuccess
+	if resp.SerialNumber != "" {
+		trx.SerialNumber = &resp.SerialNumber
+	}
+	if resp.Amount > 0 {
+		trx.Amount = &resp.Amount
+		trx.BuyPrice = &resp.Amount
+	}
+	if resp.CustomerName != "" {
+		trx.CustomerName = &resp.CustomerName
+	}
+	if len(resp.Description) > 0 {
+		trx.Description = models.NullableRawMessage(resp.Description)
+	}
+	trx.ProcessedAt = &now
+	if err := s.trxRepo.Update(trx); err != nil {
+		log.Error().Err(err).Str("transaction_id", trx.TransactionID).Str("status", string(trx.Status)).Msg("CRITICAL: failed to update transaction in DB")
+	}
+
+	go s.callbackSvc.SendCallback(trx, "transaction.success")
+	return trx, nil
+}
+
+// handleProviderPending handles a pending provider response
+func (s *TransactionService) handleProviderPending(trx *models.Transaction, resp *ProviderResponse) (*models.Transaction, error) {
+	trx.Status = models.StatusProcessing
+	if resp.Amount > 0 {
+		trx.Amount = &resp.Amount
+	}
+	if resp.CustomerName != "" {
+		trx.CustomerName = &resp.CustomerName
+	}
+	if len(resp.Description) > 0 {
+		trx.Description = models.NullableRawMessage(resp.Description)
+	}
+	if err := s.trxRepo.Update(trx); err != nil {
+		log.Error().Err(err).Str("transaction_id", trx.TransactionID).Str("status", string(trx.Status)).Msg("CRITICAL: failed to update transaction in DB")
+	}
+	return trx, nil
+}
+
+// handleProviderFailed handles a failed provider response
+func (s *TransactionService) handleProviderFailed(trx *models.Transaction, resp *ProviderResponse) (*models.Transaction, error) {
+	now := time.Now()
+	trx.Status = models.StatusFailed
+	if resp.Message != "" {
+		trx.FailedReason = &resp.Message
+	}
+	if resp.RC != "" {
+		trx.FailedCode = &resp.RC
+	}
+	trx.ProcessedAt = &now
+	if err := s.trxRepo.Update(trx); err != nil {
+		log.Error().Err(err).Str("transaction_id", trx.TransactionID).Str("status", string(trx.Status)).Msg("CRITICAL: failed to update transaction in DB")
+	}
+
+	go s.callbackSvc.SendCallback(trx, "transaction.failed")
+	return trx, nil
+}
+
+// executeInquiryWithProviders tries inquiry across multiple providers in price order.
+// On success, caches the inquiry data WITH provider info so payment routes to the same provider.
+// If req.Provider is set, only that provider is used (user preference).
+func (s *TransactionService) executeInquiryWithProviders(
+	ctx context.Context,
+	req *CreateTransactionRequest,
+	client *models.Client,
+	product *models.Product,
+	trxID string,
+	providers []models.ProviderOption,
+	eod time.Time,
+) (*models.Transaction, error) {
+	// Filter providers if user specifies a preferred provider
+	if req.Provider != "" {
+		filtered := make([]models.ProviderOption, 0)
+		for _, opt := range providers {
+			if string(opt.ProviderCode) == req.Provider {
+				filtered = append(filtered, opt)
+				break
+			}
+		}
+		if len(filtered) == 0 {
+			log.Warn().Str("provider", req.Provider).Int("product_id", product.ID).Msg("Requested provider not available for this product")
+			// Fall through to all providers
+		} else {
+			providers = filtered
+		}
+	}
+
+	for _, opt := range providers {
+		adapter := s.providerRouter.GetAdapter(string(opt.ProviderCode))
+		if adapter == nil {
+			log.Warn().Str("provider", string(opt.ProviderCode)).Msg("Provider adapter not found for inquiry")
+			continue
+		}
+		if !adapter.IsHealthy() {
+			log.Warn().Str("provider", string(opt.ProviderCode)).Msg("Provider not healthy, skipping inquiry")
+			continue
+		}
+
+		provReq := &ProviderRequest{
+			RefID:      trxID,
+			SKUCode:    opt.ProviderSKUCode,
+			CustomerNo: req.CustomerNo,
+			Type:       ProviderTrxInquiry,
+			IsSandbox:  false,
+		}
+
+		log.Info().
+			Str("provider", string(opt.ProviderCode)).
+			Str("sku_code", opt.ProviderSKUCode).
+			Str("ref_id", trxID).
+			Msg("Trying inquiry with provider")
+
+		resp, err := adapter.Inquiry(ctx, provReq)
+		if err != nil {
+			log.Warn().Err(err).Str("provider", string(opt.ProviderCode)).Msg("Inquiry network error, trying next provider")
+			continue
+		}
+
+		if resp.Success {
+			// Cache inquiry with provider info
+			inquiryData := &cache.InquiryData{
+				TransactionID:   trxID,
+				ReferenceID:     req.ReferenceID,
+				ClientID:        client.ID,
+				ProductID:       product.ID,
+				CustomerNo:      req.CustomerNo,
+				SKUCode:         req.SkuCode,
+				Amount:          resp.Amount,
+				Admin:           resp.Admin,
+				CustomerName:    resp.CustomerName,
+				Description:     resp.Description,
+				ExpiredAt:       eod,
+				ProviderCode:    string(opt.ProviderCode),
+				ProviderSKUCode: opt.ProviderSKUCode,
+				ProviderID:      opt.ProviderID,
+				ProviderSKUID:   opt.ProviderSKUID,
+			}
+
+			if err := s.inquiryCache.Set(ctx, inquiryData); err != nil {
+				log.Error().Err(err).Msg("failed to cache inquiry")
+			}
+
+			log.Info().
+				Str("provider", string(opt.ProviderCode)).
+				Str("transaction_id", trxID).
+				Int("amount", resp.Amount).
+				Msg("Inquiry successful with provider")
+
+			return s.cachedInquiryToTransaction(inquiryData, client.ID, product.ID), nil
+		}
+
+		// Not successful - log and try next provider
+		log.Warn().
+			Str("provider", string(opt.ProviderCode)).
+			Str("rc", resp.RC).
+			Str("message", resp.Message).
+			Msg("Inquiry failed with provider, trying next")
+	}
+
+	// All providers failed, fall back to legacy Digiflazz
+	log.Info().Msg("All multi-providers failed for inquiry, falling back to Digiflazz")
+	return s.executeInquiryWithDigiflazz(ctx, req, client, product, trxID, eod, false)
+}
+
+// executeInquiryWithDigiflazz runs the legacy Digiflazz inquiry flow.
+func (s *TransactionService) executeInquiryWithDigiflazz(
+	ctx context.Context,
+	req *CreateTransactionRequest,
+	client *models.Client,
+	product *models.Product,
+	trxID string,
+	eod time.Time,
+	isSandbox bool,
+) (*models.Transaction, error) {
+	digiSKU := req.SkuCode
+	digiCustomerNo := req.CustomerNo
+
+	if isSandbox {
+		testSKU, testCustomerNo := s.sandboxMapper.GetTestMapping(req.SkuCode, models.TrxTypeInquiry)
+		digiSKU = testSKU
+		digiCustomerNo = testCustomerNo
+	}
+
+	digi := s.getDigiflazzClient(isSandbox)
+	resp, err := digi.Inquiry(ctx, digiSKU, digiCustomerNo, trxID, isSandbox)
+
+	log.Info().
+		Str("transactionId", trxID).
+		Str("buyer_sku_code", digiSKU).
+		Str("customer_no", digiCustomerNo).
+		Bool("sandbox", isSandbox).
+		Msg("inquiry request to digiflazz (fallback)")
+
+	if err != nil {
+		log.Error().Err(err).Str("transactionId", trxID).Msg("inquiry failed")
+		return nil, fmt.Errorf("inquiry failed: %w", err)
+	}
+
+	if !digiflazz.IsSuccess(resp.RC) {
+		log.Warn().Str("rc", resp.RC).Str("message", resp.Message).Msg("inquiry not successful")
+		return nil, fmt.Errorf("inquiry failed: %s", resp.Message)
+	}
+
+	inquiryData := &cache.InquiryData{
+		TransactionID: trxID,
+		ReferenceID:   req.ReferenceID,
+		ClientID:      client.ID,
+		ProductID:     product.ID,
+		CustomerNo:    req.CustomerNo,
+		SKUCode:       req.SkuCode,
+		Amount:        resp.Price,
+		Admin:         resp.Admin,
+		CustomerName:  resp.CustomerName,
+		Description:   resp.Desc,
+		ExpiredAt:     eod,
+		// ProviderCode left empty = legacy Digiflazz
+	}
+
+	if err := s.inquiryCache.Set(ctx, inquiryData); err != nil {
+		log.Error().Err(err).Msg("failed to cache inquiry")
+	}
+
+	return s.cachedInquiryToTransaction(inquiryData, client.ID, product.ID), nil
+}
+
+// executePaymentWithProvider executes payment using a specific provider (from inquiry cache).
+func (s *TransactionService) executePaymentWithProvider(
+	ctx context.Context,
+	payment *models.Transaction,
+	inquiryData *cache.InquiryData,
+) (*models.Transaction, error) {
+	adapter := s.providerRouter.GetAdapter(inquiryData.ProviderCode)
+	if adapter == nil {
+		log.Warn().Str("provider", inquiryData.ProviderCode).Msg("Provider adapter not found for payment, falling back to Digiflazz")
+		return nil, fmt.Errorf("provider adapter not found: %s", inquiryData.ProviderCode)
+	}
+
+	provReq := &ProviderRequest{
+		RefID:      inquiryData.TransactionID, // Use inquiry transaction ID as ref for payment
+		SKUCode:    inquiryData.ProviderSKUCode,
+		CustomerNo: inquiryData.CustomerNo,
+		Amount:     inquiryData.Amount,
+		Type:       ProviderTrxPayment,
+		IsSandbox:  payment.IsSandbox,
+		Extra: map[string]any{
+			"admin": inquiryData.Admin,
+		},
+	}
+
+	// Store provider info on the payment transaction
+	providerID := inquiryData.ProviderID
+	payment.ProviderID = &providerID
+	providerSKUID := inquiryData.ProviderSKUID
+	payment.ProviderSKUID = &providerSKUID
+	providerCode := inquiryData.ProviderCode
+	payment.ProviderCode = &providerCode
+
+	log.Info().
+		Str("provider", inquiryData.ProviderCode).
+		Str("sku_code", inquiryData.ProviderSKUCode).
+		Str("ref_id", provReq.RefID).
+		Str("payment_trx_id", payment.TransactionID).
+		Msg("Executing payment with provider")
+
+	resp, err := adapter.Payment(ctx, provReq)
+
+	// Log attempt
+	s.logProviderAttempt(payment.ID, provReq.RefID, map[string]any{
+		"provider":    inquiryData.ProviderCode,
+		"sku_code":    inquiryData.ProviderSKUCode,
+		"customer_no": inquiryData.CustomerNo,
+		"ref_id":      provReq.RefID,
+		"amount":      inquiryData.Amount,
+		"admin":       inquiryData.Admin,
+	}, resp, err)
+
+	if err != nil {
+		log.Error().Err(err).Str("provider", inquiryData.ProviderCode).Msg("Payment network error")
+		return s.handleAllSKUsFailed(payment)
+	}
+
+	// Store provider reference ID
+	if resp.ProviderRefID != "" {
+		payment.ProviderRefID = &resp.ProviderRefID
+	}
+	if len(resp.RawResponse) > 0 {
+		payment.ProviderResponse = models.NullableRawMessage(resp.RawResponse)
+	}
+
+	if resp.Success {
+		now := time.Now()
+		payment.Status = models.StatusSuccess
+		if resp.SerialNumber != "" {
+			payment.SerialNumber = &resp.SerialNumber
+		}
+		if resp.Amount > 0 {
+			payment.Amount = &resp.Amount
+			payment.BuyPrice = &resp.Amount
+		}
+		payment.ProcessedAt = &now
+		if err := s.trxRepo.Update(payment); err != nil {
+		log.Error().Err(err).Str("transaction_id", payment.TransactionID).Str("status", string(payment.Status)).Msg("CRITICAL: failed to update payment in DB")
+	}
+
+		// Delete inquiry from cache (already paid)
+		if err := s.inquiryCache.Delete(ctx, inquiryData); err != nil {
+			log.Warn().Err(err).Msg("failed to delete inquiry cache after payment")
+		}
+
+		go s.callbackSvc.SendCallback(payment, "transaction.success")
+		return payment, nil
+	}
+
+	if resp.Pending {
+		payment.Status = models.StatusProcessing
+		if resp.Amount > 0 {
+			payment.Amount = &resp.Amount
+		}
+		if err := s.trxRepo.Update(payment); err != nil {
+		log.Error().Err(err).Str("transaction_id", payment.TransactionID).Str("status", string(payment.Status)).Msg("CRITICAL: failed to update payment in DB")
+	}
+		return payment, nil
+	}
+
+	// Fatal/failed
+	return s.handleProviderFailed(payment, resp)
 }

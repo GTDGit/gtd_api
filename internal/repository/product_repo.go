@@ -3,6 +3,7 @@ package repository
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 
 	"github.com/jmoiron/sqlx"
 
@@ -285,9 +286,34 @@ func (r *ProductRepository) GetAllAdmin(filter *AdminProductFilter) (*AdminProdu
 
 	totalPages := (total + filter.Limit - 1) / filter.Limit
 
-	// Fetch page
-	listQuery := fmt.Sprintf(`SELECT * FROM products %s ORDER BY category, brand, name LIMIT $%d OFFSET $%d`,
-		baseWhere, argIdx, argIdx+1)
+	// Fetch page with provider count and min price
+	listQuery := fmt.Sprintf(`
+		SELECT
+			p.*,
+			COALESCE(ps.provider_count, 0) AS provider_count,
+			ps.min_price
+		FROM products p
+		LEFT JOIN (
+			SELECT
+				psk.product_id,
+				COUNT(DISTINCT psk.provider_id) AS provider_count,
+				MIN(CASE WHEN psk.price > 0 THEN psk.price ELSE NULL END) AS min_price
+			FROM ppob_provider_skus psk
+			JOIN ppob_providers ppr ON psk.provider_id = ppr.id
+			WHERE psk.is_active = true AND psk.is_available = true AND ppr.is_active = true
+			GROUP BY psk.product_id
+		) ps ON ps.product_id = p.id
+		WHERE 1=1 %s
+		ORDER BY p.category, p.brand, COALESCE(ps.min_price, 999999999), p.name
+		LIMIT $%d OFFSET $%d`,
+		strings.Replace(baseWhere, "WHERE 1=1", "", 1), argIdx, argIdx+1)
+	// Replace filter column names to use p. prefix
+	listQuery = strings.ReplaceAll(listQuery, " type =", " p.type =")
+	listQuery = strings.ReplaceAll(listQuery, " category ILIKE", " p.category ILIKE")
+	listQuery = strings.ReplaceAll(listQuery, " brand ILIKE", " p.brand ILIKE")
+	listQuery = strings.ReplaceAll(listQuery, "(name ILIKE", "(p.name ILIKE")
+	listQuery = strings.ReplaceAll(listQuery, "sku_code ILIKE", "p.sku_code ILIKE")
+	listQuery = strings.ReplaceAll(listQuery, " is_active =", " p.is_active =")
 	args = append(args, filter.Limit, offset)
 
 	var products []models.Product
@@ -302,4 +328,31 @@ func (r *ProductRepository) GetAllAdmin(filter *AdminProductFilter) (*AdminProdu
 		Page:       filter.Page,
 		Limit:      filter.Limit,
 	}, nil
+}
+
+// GetDistinctCategories returns all distinct categories.
+func (r *ProductRepository) GetDistinctCategories() ([]string, error) {
+	const q = `SELECT DISTINCT category FROM products WHERE category != '' ORDER BY category`
+	var categories []string
+	if err := r.db.Select(&categories, q); err != nil {
+		return nil, err
+	}
+	return categories, nil
+}
+
+// GetDistinctBrands returns all distinct brands, optionally filtered by category.
+func (r *ProductRepository) GetDistinctBrands(category string) ([]string, error) {
+	q := `SELECT DISTINCT brand FROM products WHERE brand != ''`
+	args := []interface{}{}
+	if category != "" {
+		q += ` AND category = $1`
+		args = append(args, category)
+	}
+	q += ` ORDER BY brand`
+
+	var brands []string
+	if err := r.db.Select(&brands, q, args...); err != nil {
+		return nil, err
+	}
+	return brands, nil
 }

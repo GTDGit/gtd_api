@@ -187,6 +187,27 @@ func (h *AdminTransactionHandler) GetStats(c *gin.Context) {
 	})
 }
 
+// GetTransactionLogs handles GET /v1/admin/transactions/:id/logs
+func (h *AdminTransactionHandler) GetTransactionLogs(c *gin.Context) {
+	transactionID := c.Param("id")
+	if transactionID == "" {
+		utils.Error(c, 400, "INVALID_ID", "Transaction ID is required")
+		return
+	}
+
+	logs, err := h.adminTrxSvc.GetTransactionLogs(transactionID)
+	if err != nil {
+		if err.Error() == "transaction not found" {
+			utils.Error(c, 404, "TRANSACTION_NOT_FOUND", "Transaction not found")
+			return
+		}
+		utils.Error(c, 500, "INTERNAL_ERROR", "Failed to retrieve transaction logs")
+		return
+	}
+
+	utils.Success(c, 200, "Transaction logs retrieved", logs)
+}
+
 // ManualRetry handles POST /v1/admin/transactions/:id/retry
 func (h *AdminTransactionHandler) ManualRetry(c *gin.Context) {
 	transactionID := c.Param("id")

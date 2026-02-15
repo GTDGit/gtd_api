@@ -22,10 +22,13 @@ import (
 	"github.com/GTDGit/gtd_api/internal/database"
 	"github.com/GTDGit/gtd_api/internal/handler"
 	"github.com/GTDGit/gtd_api/internal/middleware"
+	"github.com/GTDGit/gtd_api/internal/models"
 	"github.com/GTDGit/gtd_api/internal/repository"
 	"github.com/GTDGit/gtd_api/internal/service"
 	"github.com/GTDGit/gtd_api/internal/worker"
+	"github.com/GTDGit/gtd_api/pkg/alterra"
 	dfg "github.com/GTDGit/gtd_api/pkg/digiflazz"
+	"github.com/GTDGit/gtd_api/pkg/kiosbank"
 )
 
 // main is the application entrypoint for the GTD API Gateway (Phase 1).
@@ -85,6 +88,35 @@ func main() {
 	territoryRepo := repository.NewTerritoryRepository(db)
 	bankCodeRepo := repository.NewBankCodeRepository(db)
 	ocrRepo := repository.NewOCRRepository(db)
+	ppobProviderRepo := repository.NewPPOBProviderRepository(db)
+
+	// 5a. Initialize PPOB provider clients
+	var kioskbankClient *kiosbank.Client
+	if cfg.Kiosbank.Username != "" {
+		kioskbankClient = kiosbank.NewClient(kiosbank.Config{
+			BaseURL:    cfg.Kiosbank.BaseURL,
+			MerchantID: cfg.Kiosbank.MerchantID,
+			CounterID:  cfg.Kiosbank.CounterID,
+			AccountID:  cfg.Kiosbank.AccountID,
+			Mitra:      cfg.Kiosbank.Mitra,
+			Username:   cfg.Kiosbank.Username,
+			Password:   cfg.Kiosbank.Password,
+		})
+	}
+
+	var alterraClient *alterra.Client
+	if cfg.Alterra.ClientID != "" && (cfg.Alterra.PrivateKeyPath != "" || cfg.Alterra.PrivateKeyPEM != "") {
+		var err error
+		alterraClient, err = alterra.NewClient(alterra.Config{
+			BaseURL:        cfg.Alterra.BaseURL,
+			ClientID:       cfg.Alterra.ClientID,
+			PrivateKeyPath: cfg.Alterra.PrivateKeyPath,
+			PrivateKeyPEM:  cfg.Alterra.PrivateKeyPEM,
+		})
+		if err != nil {
+			log.Warn().Err(err).Msg("Alterra client initialization failed - provider will be disabled")
+		}
+	}
 
 	// 6. Initialize services
 	authSvc := service.NewAuthService(clientRepo)
@@ -93,14 +125,15 @@ func main() {
 	productSvc := service.NewProductService(productRepo, skuRepo)
 	productMgmtSvc := service.NewProductManagementService(productRepo, skuRepo)
 	callbackSvc := service.NewCallbackService(clientRepo, cbRepo, trxRepo)
-	syncSvc := service.NewSyncService(digiProd, productRepo, skuRepo)
+	// NOTE: Old SyncService disabled - price sync now handled by ProviderSyncWorker
+	// syncSvc := service.NewSyncService(digiProd, productRepo, skuRepo)
 	trxSvc := service.NewTransactionService(trxRepo, productRepo, skuRepo, cbRepo, digiProd, digiDev, productSvc, callbackSvc, inquiryCache)
 
 	// Wire up callback service to transaction service for immediate retry on webhook
 	callbackSvc.SetTransactionRetrier(trxSvc)
 
 	// Initialize Admin Transaction service
-	adminTrxSvc := service.NewAdminTransactionService(trxRepo, productSvc, trxSvc, callbackSvc)
+	adminTrxSvc := service.NewAdminTransactionService(trxRepo, cbRepo, productSvc, trxSvc, callbackSvc)
 
 	// Initialize S3 service for Identity
 	s3Svc, err := service.NewS3Service(&cfg.S3)
@@ -119,6 +152,33 @@ func main() {
 	faceCompareRepo := repository.NewFaceCompareRepository(db)
 	faceCompareSvc := service.NewFaceCompareService(faceCompareRepo, s3Svc, cfg)
 
+	// Initialize Provider Router for multi-provider PPOB
+	providerRouter := service.NewProviderRouter(ppobProviderRepo)
+	if kioskbankClient != nil {
+		kiosbankAdapter := service.NewKiosbankProviderClient(kioskbankClient, kioskbankClient) // Same client for prod/dev
+		providerRouter.RegisterProvider(models.ProviderKiosbank, kiosbankAdapter)
+		log.Info().Msg("Kiosbank provider registered")
+	}
+	if alterraClient != nil {
+		alterraAdapter := service.NewAlterraProviderClient(alterraClient, alterraClient) // Same client for prod/dev
+		providerRouter.RegisterProvider(models.ProviderAlterra, alterraAdapter)
+		log.Info().Msg("Alterra provider registered")
+	}
+	// Digiflazz is always available as backup
+	digiAdapter := service.NewDigiflazzProviderClient(digiProd, digiDev)
+	providerRouter.RegisterProvider(models.ProviderDigiflazz, digiAdapter)
+	log.Info().Msg("Digiflazz provider registered (backup)")
+
+	// Wire provider router to transaction service for multi-provider support
+	trxSvc.SetProviderRouter(providerRouter)
+	log.Info().Msg("Provider router connected to transaction service")
+
+	// Update product service with provider-aware version for best price
+	productSvc = service.NewProductServiceWithProviders(productRepo, skuRepo, ppobProviderRepo)
+
+	// Initialize provider callback service
+	providerCallbackSvc := service.NewProviderCallbackService(ppobProviderRepo, trxRepo, callbackSvc)
+
 	// 7. Initialize handlers
 	handlers := &Handlers{
 		Health:            handler.NewHealthHandler(digiProd),
@@ -135,6 +195,8 @@ func main() {
 		OCR:               handler.NewOCRHandler(ocrSvc),
 		Liveness:          handler.NewLivenessHandler(livenessSvc),
 		FaceCompare:       handler.NewFaceCompareHandler(faceCompareSvc),
+		PPOBProvider:      handler.NewPPOBProviderHandler(ppobProviderRepo),
+		ProviderCallback:  handler.NewProviderCallbackHandler(providerCallbackSvc, cfg.Alterra.CallbackPublicKey),
 	}
 
 	// 8. Initialize middleware
@@ -156,16 +218,21 @@ func main() {
 	defer cancel()
 
 	// 11. Start workers
-	go worker.NewSyncWorker(syncSvc, cfg.Worker.SyncInterval).Start(ctx)
+	// NOTE: Old SyncWorker disabled - price sync now handled by ProviderSyncWorker for all providers
+	// go worker.NewSyncWorker(syncSvc, cfg.Worker.SyncInterval).Start(ctx)
 	go worker.NewRetryWorker(trxRepo, callbackSvc, cfg.Worker.RetryInterval).Start(ctx)
 	go worker.NewCallbackWorker(callbackSvc, cfg.Worker.CallbackInterval).Start(ctx)
 	go worker.NewDigiflazzCallbackWorker(cbRepo, trxRepo, trxSvc, callbackSvc, cfg.Worker.DigiflazzCallbackInterval).Start(ctx)
 	go worker.NewStatusCheckWorker(
-		trxRepo, skuRepo, callbackSvc, digiProd, digiDev,
+		trxRepo, skuRepo, callbackSvc, digiProd, digiDev, providerRouter,
 		cfg.Worker.StatusCheckInterval,
 		cfg.Worker.StatusCheckStaleAfter,
 		cfg.Worker.StatusCheckMaxAge,
 	).Start(ctx)
+
+	// Start provider price sync worker
+	providerClients := providerRouter.GetClients()
+	go worker.NewProviderSyncWorker(ppobProviderRepo, providerClients, cfg.Worker.SyncInterval).Start(ctx)
 
 	// 12. Start HTTP server
 	srv := &http.Server{
@@ -215,11 +282,18 @@ type Handlers struct {
 	OCR               *handler.OCRHandler
 	Liveness          *handler.LivenessHandler
 	FaceCompare       *handler.FaceCompareHandler
+	PPOBProvider      *handler.PPOBProviderHandler
+	ProviderCallback  *handler.ProviderCallbackHandler
 }
 
 // setupRoutes registers all routes.
 func setupRoutes(router *gin.Engine, handlers *Handlers, authMiddleware *middleware.AuthMiddleware, jwtMiddleware *middleware.JWTMiddleware) {
+	// Provider webhook endpoints
 	router.POST("/webhook/digiflazz", handlers.Webhook.HandleDigiflazzCallback)
+	router.POST("/webhook/kiosbank", handlers.ProviderCallback.HandleKiosbankCallback)
+	router.POST("/webhook/alterra", handlers.ProviderCallback.HandleAlterraCallback)
+	router.POST("/webhook/:provider", handlers.ProviderCallback.HandleGenericCallback)
+
 	router.GET("/v1/health", handlers.Health.GetHealth)
 	// API PPOB routes (protected with client API key)
 	ppob := router.Group("/v1/ppob")
@@ -285,6 +359,8 @@ func setupRoutes(router *gin.Engine, handlers *Handlers, authMiddleware *middlew
 
 		// Product Management
 		admin.GET("/products", handlers.ProductManagement.ListProducts)
+		admin.GET("/products/categories", handlers.ProductManagement.GetCategories)
+		admin.GET("/products/brands", handlers.ProductManagement.GetBrands)
 		admin.POST("/products", handlers.ProductManagement.CreateProduct)
 		admin.GET("/products/:id", handlers.ProductManagement.GetProduct)
 		admin.PUT("/products/:id", handlers.ProductManagement.UpdateProduct)
@@ -301,7 +377,24 @@ func setupRoutes(router *gin.Engine, handlers *Handlers, authMiddleware *middlew
 		admin.GET("/transactions", handlers.AdminTransaction.ListTransactions)
 		admin.GET("/transactions/stats", handlers.AdminTransaction.GetStats)
 		admin.GET("/transactions/:id", handlers.AdminTransaction.GetTransaction)
+		admin.GET("/transactions/:id/logs", handlers.AdminTransaction.GetTransactionLogs)
 		admin.POST("/transactions/:id/retry", handlers.AdminTransaction.ManualRetry)
+
+		// PPOB Provider Management
+		admin.GET("/ppob/providers", handlers.PPOBProvider.ListProviders)
+		admin.GET("/ppob/providers/:id", handlers.PPOBProvider.GetProvider)
+		admin.PUT("/ppob/providers/:id/status", handlers.PPOBProvider.UpdateProviderStatus)
+
+		// PPOB Provider SKU Management
+		admin.GET("/ppob/providers/:id/skus", handlers.PPOBProvider.ListProviderSKUs)
+		admin.POST("/ppob/providers/:id/skus", handlers.PPOBProvider.CreateProviderSKU)
+		admin.GET("/ppob/products/:productId/provider-skus", handlers.PPOBProvider.GetProviderSKUsByProduct)
+		admin.PUT("/ppob/skus/:id", handlers.PPOBProvider.UpdateProviderSKU)
+		admin.DELETE("/ppob/skus/:id", handlers.PPOBProvider.DeleteProviderSKU)
+
+		// PPOB Provider Health
+		admin.GET("/ppob/health", handlers.PPOBProvider.GetAllProviderHealthToday)
+		admin.GET("/ppob/providers/:id/health", handlers.PPOBProvider.GetProviderHealth)
 	}
 }
 

@@ -1,9 +1,13 @@
 package handler
 
 import (
+	"crypto/hmac"
+	"crypto/sha1"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/rs/zerolog/log"
@@ -31,6 +35,42 @@ func NewWebhookHandler(callbackService interface {
 	}
 }
 
+// verifyDigiflazzSignature verifies the HMAC-SHA1 signature from Digiflazz.
+// Digiflazz sends X-Hub-Signature header as "sha1=<hex-encoded-hmac>".
+func (h *WebhookHandler) verifyDigiflazzSignature(body []byte, signatureHeader string) bool {
+	if h.webhookSecret == "" {
+		log.Warn().Msg("Digiflazz webhook secret not configured - skipping signature verification")
+		return true
+	}
+
+	if signatureHeader == "" {
+		log.Warn().Msg("Digiflazz webhook missing X-Hub-Signature header")
+		return false
+	}
+
+	// Extract hex hash from "sha1=abc123..." format
+	if !strings.HasPrefix(signatureHeader, "sha1=") {
+		log.Warn().Str("signature", signatureHeader).Msg("Invalid Digiflazz signature format")
+		return false
+	}
+	receivedHex := signatureHeader[5:]
+
+	// Compute expected HMAC-SHA1
+	mac := hmac.New(sha1.New, []byte(h.webhookSecret))
+	mac.Write(body)
+	expectedHex := hex.EncodeToString(mac.Sum(nil))
+
+	if !hmac.Equal([]byte(receivedHex), []byte(expectedHex)) {
+		log.Warn().
+			Str("received", receivedHex).
+			Str("expected", expectedHex).
+			Msg("Digiflazz webhook signature mismatch")
+		return false
+	}
+
+	return true
+}
+
 // HandleDigiflazzCallback handles POST /webhook/digiflazz
 func (h *WebhookHandler) HandleDigiflazzCallback(c *gin.Context) {
 	// 1. Read body
@@ -50,8 +90,13 @@ func (h *WebhookHandler) HandleDigiflazzCallback(c *gin.Context) {
 			Msg("[DIGIFLAZZ WEBHOOK] Incoming callback")
 	}
 
-	// 2. (Optional) Verify signature if provided by Digiflazz
-	// signature := c.GetHeader("X-Hub-Signature")
+	// 2. Verify signature
+	signature := c.GetHeader("X-Hub-Signature")
+	if !h.verifyDigiflazzSignature(body, signature) {
+		log.Warn().Msg("Digiflazz webhook rejected: invalid signature")
+		c.JSON(401, gin.H{"error": "Invalid signature"})
+		return
+	}
 
 	// 3. Parse payload - Digiflazz wraps callback in "data" field
 	var wrapper struct {

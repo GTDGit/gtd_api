@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 
 	"github.com/rs/zerolog/log"
@@ -13,24 +14,27 @@ import (
 
 // AdminTransactionService provides admin-level transaction management.
 type AdminTransactionService struct {
-	trxRepo     *repository.TransactionRepository
-	productSvc  *ProductService
-	trxSvc      *TransactionService
-	callbackSvc *CallbackService
+	trxRepo      *repository.TransactionRepository
+	callbackRepo *repository.CallbackRepository
+	productSvc   *ProductService
+	trxSvc       *TransactionService
+	callbackSvc  *CallbackService
 }
 
 // NewAdminTransactionService creates a new AdminTransactionService.
 func NewAdminTransactionService(
 	trxRepo *repository.TransactionRepository,
+	callbackRepo *repository.CallbackRepository,
 	productSvc *ProductService,
 	trxSvc *TransactionService,
 	callbackSvc *CallbackService,
 ) *AdminTransactionService {
 	return &AdminTransactionService{
-		trxRepo:     trxRepo,
-		productSvc:  productSvc,
-		trxSvc:      trxSvc,
-		callbackSvc: callbackSvc,
+		trxRepo:      trxRepo,
+		callbackRepo: callbackRepo,
+		productSvc:   productSvc,
+		trxSvc:       trxSvc,
+		callbackSvc:  callbackSvc,
 	}
 }
 
@@ -80,10 +84,13 @@ type TransactionAdminView struct {
 	Admin          int                      `json:"admin,omitempty"`
 	Period         *string                  `json:"period,omitempty"`
 	DigiSkuUsed    *string                  `json:"digiSkuUsed,omitempty"`
+	ProviderCode   *string                  `json:"providerCode,omitempty"`
 	ProviderRef    *string                  `json:"providerRef,omitempty"`
 	RetryCount     int                      `json:"retryCount"`
 	FailedReason   *string                  `json:"failedReason,omitempty"`
 	FailedCode     *string                  `json:"failedCode,omitempty"`
+	BuyPrice       *int                     `json:"buyPrice,omitempty"`
+	SellPrice      *int                     `json:"sellPrice,omitempty"`
 	CallbackSent   bool                     `json:"callbackSent"`
 	CallbackSentAt *string                  `json:"callbackSentAt,omitempty"`
 	IsSandbox      bool                     `json:"isSandbox"`
@@ -204,8 +211,62 @@ func (s *AdminTransactionService) ManualRetry(ctx context.Context, transactionID
 	return nil, errors.New("manual retry not supported for this transaction type")
 }
 
+// TransactionLogView represents a transaction log entry for admin view.
+type TransactionLogView struct {
+	ID         int              `json:"id"`
+	SkuID      int              `json:"skuId,omitempty"`
+	RefID      string           `json:"refId"`
+	Request    json.RawMessage  `json:"request,omitempty"`
+	Response   json.RawMessage  `json:"response,omitempty"`
+	RC         *string          `json:"rc,omitempty"`
+	Status     *string          `json:"status,omitempty"`
+	CreatedAt  string           `json:"createdAt"`
+	ResponseAt *string          `json:"responseAt,omitempty"`
+}
+
+// GetTransactionLogs returns audit logs for a specific transaction.
+func (s *AdminTransactionService) GetTransactionLogs(transactionID string) ([]TransactionLogView, error) {
+	// Find the transaction first
+	trx, err := s.trxRepo.GetByTransactionIDAdmin(transactionID)
+	if err != nil {
+		return nil, errors.New("transaction not found")
+	}
+
+	logs, err := s.callbackRepo.GetLogsByTransactionID(trx.ID)
+	if err != nil {
+		log.Error().Err(err).Str("transaction_id", transactionID).Msg("Failed to get transaction logs")
+		return nil, err
+	}
+
+	views := make([]TransactionLogView, len(logs))
+	for i, l := range logs {
+		views[i] = TransactionLogView{
+			ID:        l.ID,
+			SkuID:     l.SkuID,
+			RefID:     l.DigiRefID,
+			Request:   l.Request,
+			Response:  l.Response,
+			RC:        l.RC,
+			Status:    l.Status,
+			CreatedAt: l.CreatedAt.Format("2006-01-02T15:04:05+07:00"),
+		}
+		if l.ResponseAt != nil {
+			t := l.ResponseAt.Format("2006-01-02T15:04:05+07:00")
+			views[i].ResponseAt = &t
+		}
+	}
+
+	return views, nil
+}
+
 // toAdminView converts a transaction model to admin view.
 func (s *AdminTransactionService) toAdminView(trx *models.Transaction) TransactionAdminView {
+	// Determine provider ref: prefer ProviderRefID (multi-provider), fallback to DigiRefID (legacy)
+	providerRef := trx.DigiRefID
+	if trx.ProviderRefID != nil && *trx.ProviderRefID != "" {
+		providerRef = trx.ProviderRefID
+	}
+
 	view := TransactionAdminView{
 		ID:            trx.ID,
 		TransactionID: trx.TransactionID,
@@ -221,10 +282,13 @@ func (s *AdminTransactionService) toAdminView(trx *models.Transaction) Transacti
 		Admin:         trx.Admin,
 		Period:        trx.Period,
 		DigiSkuUsed:   trx.DigiSkuCode,
-		ProviderRef:   trx.DigiRefID,
+		ProviderCode:  trx.ProviderCode,
+		ProviderRef:   providerRef,
 		RetryCount:    trx.RetryCount,
 		FailedReason:  trx.FailedReason,
 		FailedCode:    trx.FailedCode,
+		BuyPrice:      trx.BuyPrice,
+		SellPrice:     trx.SellPrice,
 		CallbackSent:  trx.CallbackSent,
 		IsSandbox:     trx.IsSandbox,
 		CreatedAt:     trx.CreatedAt.Format("2006-01-02T15:04:05+07:00"),

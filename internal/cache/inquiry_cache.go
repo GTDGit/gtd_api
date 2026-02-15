@@ -21,6 +21,13 @@ type InquiryData struct {
 	Description   json.RawMessage `json:"description,omitempty"`
 	ExpiredAt     time.Time       `json:"expiredAt"`
 	CachedAt      time.Time       `json:"cachedAt"`
+
+	// Multi-provider fields: track which provider handled the inquiry
+	// so payment uses the same provider
+	ProviderCode    string `json:"providerCode,omitempty"`
+	ProviderSKUCode string `json:"providerSkuCode,omitempty"`
+	ProviderID      int    `json:"providerId,omitempty"`
+	ProviderSKUID   int    `json:"providerSkuId,omitempty"`
 }
 
 // InquiryCache provides inquiry caching operations.

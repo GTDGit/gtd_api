@@ -25,6 +25,8 @@ type Config struct {
 	S3        S3Config
 	AWS       AWSConfig     `mapstructure:"aws"`
 	Tencent   TencentConfig `mapstructure:"tencent"`
+	Kiosbank  KiosbankConfig
+	Alterra   AlterraConfig
 }
 
 // DatabaseConfig contains PostgreSQL connection parameters.
@@ -95,6 +97,26 @@ type TencentConfig struct {
 	SecretKey string
 	Region    string // ap-jakarta or others
 	RuleID    string // "1" for default
+}
+
+// KiosbankConfig contains credentials for Kiosbank PPOB provider
+type KiosbankConfig struct {
+	BaseURL    string
+	MerchantID string
+	CounterID  string
+	AccountID  string
+	Mitra      string
+	Username   string
+	Password   string
+}
+
+// AlterraConfig contains credentials for Alterra PPOB provider
+type AlterraConfig struct {
+	BaseURL           string
+	ClientID          string
+	PrivateKeyPath    string // Path to RSA private key file
+	PrivateKeyPEM     string // RSA private key PEM content (alternative to path)
+	CallbackPublicKey string // Alterra's public key PEM for verifying callback signatures
 }
 
 // Load reads configuration from environment variables. If a .env file exists
@@ -169,6 +191,26 @@ func Load() (*Config, error) {
 		SecretKey: getEnv("TENCENT_SECRET_KEY", ""),
 		Region:    getEnv("TENCENT_REGION", "ap-jakarta"),
 		RuleID:    getEnv("TENCENT_RULE_ID", "1"),
+	}
+
+	// Kiosbank PPOB Provider
+	cfg.Kiosbank = KiosbankConfig{
+		BaseURL:    getEnv("KIOSBANK_BASE_URL", "https://www.kiosbank.id"),
+		MerchantID: getEnv("KIOSBANK_MERCHANT_ID", ""),
+		CounterID:  getEnv("KIOSBANK_COUNTER_ID", ""),
+		AccountID:  getEnv("KIOSBANK_ACCOUNT_ID", ""),
+		Mitra:      getEnv("KIOSBANK_MITRA", ""),
+		Username:   getEnv("KIOSBANK_USERNAME", ""),
+		Password:   getEnv("KIOSBANK_PASSWORD", ""),
+	}
+
+	// Alterra PPOB Provider
+	cfg.Alterra = AlterraConfig{
+		BaseURL:           getEnv("ALTERRA_BASE_URL", "https://horven-api.sumpahpalapa.com"),
+		ClientID:          getEnv("ALTERRA_CLIENT_ID", ""),
+		PrivateKeyPath:    getEnv("ALTERRA_PRIVATE_KEY_PATH", ""),
+		PrivateKeyPEM:     getEnv("ALTERRA_PRIVATE_KEY_PEM", ""),
+		CallbackPublicKey: getEnv("ALTERRA_CALLBACK_PUBLIC_KEY", ""),
 	}
 
 	// Workers (durations)

@@ -192,7 +192,7 @@ func (h *LivenessHandler) GetSession(c *gin.Context) {
 		"createdAt": session.CreatedAt.Format(time.RFC3339),
 	}
 
-	if session.Challenges != nil && len(session.Challenges) > 0 {
+	if len(session.Challenges) > 0 {
 		response["challenges"] = session.Challenges
 	}
 

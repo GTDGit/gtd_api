@@ -363,3 +363,13 @@ func (s *ProductManagementService) ListProducts(filter *ListProductsFilter) (*re
 	}
 	return s.productRepo.GetAllAdmin(repoFilter)
 }
+
+// GetCategories returns all distinct product categories.
+func (s *ProductManagementService) GetCategories() ([]string, error) {
+	return s.productRepo.GetDistinctCategories()
+}
+
+// GetBrands returns all distinct brands, optionally filtered by category.
+func (s *ProductManagementService) GetBrands(category string) ([]string, error) {
+	return s.productRepo.GetDistinctBrands(category)
+}

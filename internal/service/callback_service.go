@@ -300,6 +300,9 @@ func (s *CallbackService) processCallbackImmediate(cb *models.DigiflazzCallback,
 		if payload.SN != "" {
 			trx.SerialNumber = &payload.SN
 		}
+		if payload.Price > 0 {
+			trx.BuyPrice = &payload.Price
+		}
 		trx.ProcessedAt = &now
 		trx.CallbackSent = false
 

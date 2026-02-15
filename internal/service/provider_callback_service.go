@@ -10,6 +10,7 @@ import (
 
 	"github.com/GTDGit/gtd_api/internal/models"
 	"github.com/GTDGit/gtd_api/internal/repository"
+	"github.com/GTDGit/gtd_api/internal/sse"
 	"github.com/GTDGit/gtd_api/pkg/alterra"
 	"github.com/GTDGit/gtd_api/pkg/kiosbank"
 )
@@ -19,6 +20,7 @@ type ProviderCallbackService struct {
 	providerRepo *repository.PPOBProviderRepository
 	trxRepo      *repository.TransactionRepository
 	callbackSvc  *CallbackService
+	notifier     sse.TransactionNotifier
 }
 
 // NewProviderCallbackService creates a new ProviderCallbackService
@@ -32,6 +34,11 @@ func NewProviderCallbackService(
 		trxRepo:      trxRepo,
 		callbackSvc:  callbackSvc,
 	}
+}
+
+// SetNotifier sets the SSE notifier for real-time transaction updates
+func (s *ProviderCallbackService) SetNotifier(notifier sse.TransactionNotifier) {
+	s.notifier = notifier
 }
 
 // ProcessKiosbankCallback processes a callback from Kiosbank
@@ -128,6 +135,9 @@ func (s *ProviderCallbackService) ProcessKiosbankCallback(ctx context.Context, p
 		if err := s.trxRepo.Update(trx); err != nil {
 			log.Error().Err(err).Str("transaction_id", trx.TransactionID).Msg("CRITICAL: failed to update transaction in DB from callback")
 		}
+		if s.notifier != nil {
+			s.notifier.NotifyTransactionStatusChanged(trx)
+		}
 		go s.callbackSvc.SendCallback(trx, "transaction.success")
 	} else if kiosbank.IsFatal(rc) {
 		trx.Status = models.StatusFailed
@@ -138,6 +148,9 @@ func (s *ProviderCallbackService) ProcessKiosbankCallback(ctx context.Context, p
 		trx.ProcessedAt = &now
 		if err := s.trxRepo.Update(trx); err != nil {
 			log.Error().Err(err).Str("transaction_id", trx.TransactionID).Msg("CRITICAL: failed to update transaction in DB from callback")
+		}
+		if s.notifier != nil {
+			s.notifier.NotifyTransactionStatusChanged(trx)
 		}
 		go s.callbackSvc.SendCallback(trx, "transaction.failed")
 	}
@@ -243,6 +256,9 @@ func (s *ProviderCallbackService) ProcessAlterraCallback(ctx context.Context, pa
 		if err := s.trxRepo.Update(trx); err != nil {
 			log.Error().Err(err).Str("transaction_id", trx.TransactionID).Msg("CRITICAL: failed to update transaction in DB from callback")
 		}
+		if s.notifier != nil {
+			s.notifier.NotifyTransactionStatusChanged(trx)
+		}
 		go s.callbackSvc.SendCallback(trx, "transaction.success")
 	} else if alterra.IsFatal(rc) {
 		trx.Status = models.StatusFailed
@@ -253,6 +269,9 @@ func (s *ProviderCallbackService) ProcessAlterraCallback(ctx context.Context, pa
 		trx.ProcessedAt = &now
 		if err := s.trxRepo.Update(trx); err != nil {
 			log.Error().Err(err).Str("transaction_id", trx.TransactionID).Msg("CRITICAL: failed to update transaction in DB from callback")
+		}
+		if s.notifier != nil {
+			s.notifier.NotifyTransactionStatusChanged(trx)
 		}
 		go s.callbackSvc.SendCallback(trx, "transaction.failed")
 	}

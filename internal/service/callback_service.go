@@ -16,6 +16,7 @@ import (
 
 	"github.com/GTDGit/gtd_api/internal/models"
 	"github.com/GTDGit/gtd_api/internal/repository"
+	"github.com/GTDGit/gtd_api/internal/sse"
 	"github.com/GTDGit/gtd_api/pkg/digiflazz"
 )
 
@@ -28,6 +29,7 @@ type CallbackService struct {
 	httpClient   *http.Client
 	// trxRetrier is set after initialization to avoid circular dependency
 	trxRetrier TransactionRetrier
+	notifier   sse.TransactionNotifier
 }
 
 // TransactionRetrier interface for retry functionality (avoids circular dependency)
@@ -50,6 +52,11 @@ func NewCallbackService(clientRepo *repository.ClientRepository, callbackRepo *r
 // SetTransactionRetrier sets the transaction retrier (called after both services are created)
 func (s *CallbackService) SetTransactionRetrier(retrier TransactionRetrier) {
 	s.trxRetrier = retrier
+}
+
+// SetNotifier sets the SSE notifier for real-time transaction updates
+func (s *CallbackService) SetNotifier(notifier sse.TransactionNotifier) {
+	s.notifier = notifier
 }
 
 // SendCallback sends an HTTP POST webhook to the client's callback URL and logs the attempt.
@@ -310,6 +317,9 @@ func (s *CallbackService) processCallbackImmediate(cb *models.DigiflazzCallback,
 			log.Error().Err(err).Str("transaction_id", trx.TransactionID).Msg("Failed to update transaction to success")
 			return
 		}
+		if s.notifier != nil {
+			s.notifier.NotifyTransactionStatusChanged(trx)
+		}
 
 		go s.SendCallback(trx, "transaction.success")
 		log.Info().Str("transaction_id", trx.TransactionID).Msg("Transaction updated to Success from Digiflazz callback")
@@ -324,6 +334,9 @@ func (s *CallbackService) processCallbackImmediate(cb *models.DigiflazzCallback,
 		if err := s.trxRepo.Update(trx); err != nil {
 			log.Error().Err(err).Str("transaction_id", trx.TransactionID).Msg("Failed to update transaction to failed")
 			return
+		}
+		if s.notifier != nil {
+			s.notifier.NotifyTransactionStatusChanged(trx)
 		}
 
 		go s.SendCallback(trx, "transaction.failed")
@@ -380,6 +393,9 @@ func (s *CallbackService) processCallbackImmediate(cb *models.DigiflazzCallback,
 		if err := s.trxRepo.Update(trx); err != nil {
 			log.Error().Err(err).Str("transaction_id", trx.TransactionID).Msg("Failed to update transaction to failed")
 			return
+		}
+		if s.notifier != nil {
+			s.notifier.NotifyTransactionStatusChanged(trx)
 		}
 
 		go s.SendCallback(trx, "transaction.failed")

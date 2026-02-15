@@ -25,6 +25,7 @@ import (
 	"github.com/GTDGit/gtd_api/internal/models"
 	"github.com/GTDGit/gtd_api/internal/repository"
 	"github.com/GTDGit/gtd_api/internal/service"
+	"github.com/GTDGit/gtd_api/internal/sse"
 	"github.com/GTDGit/gtd_api/internal/worker"
 	"github.com/GTDGit/gtd_api/pkg/alterra"
 	dfg "github.com/GTDGit/gtd_api/pkg/digiflazz"
@@ -132,6 +133,12 @@ func main() {
 	// Wire up callback service to transaction service for immediate retry on webhook
 	callbackSvc.SetTransactionRetrier(trxSvc)
 
+	// Initialize SSE hub and notifier for real-time admin updates
+	sseHub := sse.NewHub()
+	sseNotifier := sse.NewHubNotifier(sseHub)
+	trxSvc.SetNotifier(sseNotifier)
+	callbackSvc.SetNotifier(sseNotifier)
+
 	// Initialize Admin Transaction service
 	adminTrxSvc := service.NewAdminTransactionService(trxRepo, cbRepo, productSvc, trxSvc, callbackSvc)
 
@@ -178,6 +185,7 @@ func main() {
 
 	// Initialize provider callback service
 	providerCallbackSvc := service.NewProviderCallbackService(ppobProviderRepo, trxRepo, callbackSvc)
+	providerCallbackSvc.SetNotifier(sseNotifier)
 
 	// 7. Initialize handlers
 	handlers := &Handlers{
@@ -197,6 +205,7 @@ func main() {
 		FaceCompare:       handler.NewFaceCompareHandler(faceCompareSvc),
 		PPOBProvider:      handler.NewPPOBProviderHandler(ppobProviderRepo),
 		ProviderCallback:  handler.NewProviderCallbackHandler(providerCallbackSvc, cfg.Alterra.CallbackPublicKey),
+		SSE:               handler.NewSSEHandler(sseHub),
 	}
 
 	// 8. Initialize middleware
@@ -284,6 +293,7 @@ type Handlers struct {
 	FaceCompare       *handler.FaceCompareHandler
 	PPOBProvider      *handler.PPOBProviderHandler
 	ProviderCallback  *handler.ProviderCallbackHandler
+	SSE               *handler.SSEHandler
 }
 
 // setupRoutes registers all routes.
@@ -347,6 +357,7 @@ func setupRoutes(router *gin.Engine, handlers *Handlers, authMiddleware *middlew
 	// Admin routes
 	admin := router.Group("/v1/admin")
 	admin.POST("/auth/login", handlers.Auth.Login)
+	admin.GET("/sse", handlers.SSE.Stream) // JWT via ?token= query param (EventSource can't set headers)
 	admin.Use(jwtMiddleware.Handle())
 	{
 		// Client Management

@@ -14,6 +14,7 @@ import (
 	"github.com/GTDGit/gtd_api/internal/cache"
 	"github.com/GTDGit/gtd_api/internal/models"
 	"github.com/GTDGit/gtd_api/internal/repository"
+	"github.com/GTDGit/gtd_api/internal/sse"
 	"github.com/GTDGit/gtd_api/internal/utils"
 	"github.com/GTDGit/gtd_api/pkg/digiflazz"
 )
@@ -42,7 +43,8 @@ type TransactionService struct {
 	callbackSvc    *CallbackService
 	sandboxMapper  *SandboxMapper
 	inquiryCache   *cache.InquiryCache
-	providerRouter *ProviderRouter // Multi-provider router (optional)
+	providerRouter *ProviderRouter          // Multi-provider router (optional)
+	notifier       sse.TransactionNotifier // SSE notifier (optional)
 }
 
 // NewTransactionService constructs a TransactionService.
@@ -74,6 +76,11 @@ func NewTransactionService(
 // SetProviderRouter sets the multi-provider router for the transaction service
 func (s *TransactionService) SetProviderRouter(router *ProviderRouter) {
 	s.providerRouter = router
+}
+
+// SetNotifier sets the SSE notifier for real-time transaction updates
+func (s *TransactionService) SetNotifier(notifier sse.TransactionNotifier) {
+	s.notifier = notifier
 }
 
 // getDigiflazzClient returns the appropriate Digiflazz client based on sandbox mode.
@@ -161,6 +168,10 @@ func (s *TransactionService) processPrepaid(ctx context.Context, req *CreateTran
 			return nil, utils.ErrDuplicateReferenceID
 		}
 		return nil, err
+	}
+
+	if s.notifier != nil {
+		s.notifier.NotifyTransactionCreated(trx)
 	}
 
 	// 6. Try multi-provider routing if available
@@ -344,6 +355,9 @@ func (s *TransactionService) handleSuccess(trx *models.Transaction, sku *models.
 	if err := s.trxRepo.Update(trx); err != nil {
 		log.Error().Err(err).Str("transaction_id", trx.TransactionID).Str("status", string(trx.Status)).Msg("CRITICAL: failed to update transaction in DB")
 	}
+	if s.notifier != nil {
+		s.notifier.NotifyTransactionStatusChanged(trx)
+	}
 
 	// Send callback to client asynchronously
 	go s.callbackSvc.SendCallback(trx, "transaction.success")
@@ -360,6 +374,9 @@ func (s *TransactionService) handlePending(trx *models.Transaction, sku *models.
 	}
 	if err := s.trxRepo.Update(trx); err != nil {
 		log.Error().Err(err).Str("transaction_id", trx.TransactionID).Str("status", string(trx.Status)).Msg("CRITICAL: failed to update transaction in DB")
+	}
+	if s.notifier != nil {
+		s.notifier.NotifyTransactionStatusChanged(trx)
 	}
 	return trx, nil
 }
@@ -380,6 +397,9 @@ func (s *TransactionService) handleFatal(trx *models.Transaction, resp *digiflaz
 	if err := s.trxRepo.Update(trx); err != nil {
 		log.Error().Err(err).Str("transaction_id", trx.TransactionID).Str("status", string(trx.Status)).Msg("CRITICAL: failed to update transaction in DB")
 	}
+	if s.notifier != nil {
+		s.notifier.NotifyTransactionStatusChanged(trx)
+	}
 
 	go s.callbackSvc.SendCallback(trx, "transaction.failed")
 	return trx, nil
@@ -397,6 +417,9 @@ func (s *TransactionService) handleAllSKUsFailed(trx *models.Transaction) (*mode
 	trx.NextRetryAt = nil
 	if err := s.trxRepo.Update(trx); err != nil {
 		log.Error().Err(err).Str("transaction_id", trx.TransactionID).Str("status", string(trx.Status)).Msg("CRITICAL: failed to update transaction in DB")
+	}
+	if s.notifier != nil {
+		s.notifier.NotifyTransactionStatusChanged(trx)
 	}
 
 	go s.callbackSvc.SendCallback(trx, "transaction.failed")
@@ -502,6 +525,10 @@ func (s *TransactionService) processPayment(ctx context.Context, req *CreateTran
 		return nil, err
 	}
 
+	if s.notifier != nil {
+		s.notifier.NotifyTransactionCreated(payment)
+	}
+
 	// 4. Route payment to the correct provider
 	// If inquiry was handled by a multi-provider (ProviderCode is set), use that same provider.
 	// Otherwise, fall back to legacy Digiflazz flow.
@@ -557,6 +584,9 @@ func (s *TransactionService) processPayment(ctx context.Context, req *CreateTran
 			log.Warn().Err(err).Str("transactionId", inquiryData.TransactionID).Msg("failed to delete inquiry cache")
 		}
 
+		if s.notifier != nil {
+			s.notifier.NotifyTransactionStatusChanged(payment)
+		}
 		go s.callbackSvc.SendCallback(payment, "transaction.success")
 		return payment, nil
 	}
@@ -566,8 +596,11 @@ func (s *TransactionService) processPayment(ctx context.Context, req *CreateTran
 		payment.Amount = &resp.Price
 		payment.DigiRefID = &refID
 		if err := s.trxRepo.Update(payment); err != nil {
-		log.Error().Err(err).Str("transaction_id", payment.TransactionID).Str("status", string(payment.Status)).Msg("CRITICAL: failed to update payment in DB")
-	}
+			log.Error().Err(err).Str("transaction_id", payment.TransactionID).Str("status", string(payment.Status)).Msg("CRITICAL: failed to update payment in DB")
+		}
+		if s.notifier != nil {
+			s.notifier.NotifyTransactionStatusChanged(payment)
+		}
 		return payment, nil
 	}
 
@@ -580,6 +613,9 @@ func (s *TransactionService) processPayment(ctx context.Context, req *CreateTran
 	payment.DigiRefID = &refID
 	if err := s.trxRepo.Update(payment); err != nil {
 		log.Error().Err(err).Str("transaction_id", payment.TransactionID).Str("status", string(payment.Status)).Msg("CRITICAL: failed to update payment in DB")
+	}
+	if s.notifier != nil {
+		s.notifier.NotifyTransactionStatusChanged(payment)
 	}
 	go s.callbackSvc.SendCallback(payment, "transaction.failed")
 	return payment, nil
@@ -1021,6 +1057,9 @@ func (s *TransactionService) handleProviderSuccess(trx *models.Transaction, resp
 	if err := s.trxRepo.Update(trx); err != nil {
 		log.Error().Err(err).Str("transaction_id", trx.TransactionID).Str("status", string(trx.Status)).Msg("CRITICAL: failed to update transaction in DB")
 	}
+	if s.notifier != nil {
+		s.notifier.NotifyTransactionStatusChanged(trx)
+	}
 
 	go s.callbackSvc.SendCallback(trx, "transaction.success")
 	return trx, nil
@@ -1041,6 +1080,9 @@ func (s *TransactionService) handleProviderPending(trx *models.Transaction, resp
 	if err := s.trxRepo.Update(trx); err != nil {
 		log.Error().Err(err).Str("transaction_id", trx.TransactionID).Str("status", string(trx.Status)).Msg("CRITICAL: failed to update transaction in DB")
 	}
+	if s.notifier != nil {
+		s.notifier.NotifyTransactionStatusChanged(trx)
+	}
 	return trx, nil
 }
 
@@ -1057,6 +1099,9 @@ func (s *TransactionService) handleProviderFailed(trx *models.Transaction, resp 
 	trx.ProcessedAt = &now
 	if err := s.trxRepo.Update(trx); err != nil {
 		log.Error().Err(err).Str("transaction_id", trx.TransactionID).Str("status", string(trx.Status)).Msg("CRITICAL: failed to update transaction in DB")
+	}
+	if s.notifier != nil {
+		s.notifier.NotifyTransactionStatusChanged(trx)
 	}
 
 	go s.callbackSvc.SendCallback(trx, "transaction.failed")
@@ -1314,6 +1359,9 @@ func (s *TransactionService) executePaymentWithProvider(
 			log.Warn().Err(err).Msg("failed to delete inquiry cache after payment")
 		}
 
+		if s.notifier != nil {
+			s.notifier.NotifyTransactionStatusChanged(payment)
+		}
 		go s.callbackSvc.SendCallback(payment, "transaction.success")
 		return payment, nil
 	}
@@ -1324,8 +1372,11 @@ func (s *TransactionService) executePaymentWithProvider(
 			payment.Amount = &resp.Amount
 		}
 		if err := s.trxRepo.Update(payment); err != nil {
-		log.Error().Err(err).Str("transaction_id", payment.TransactionID).Str("status", string(payment.Status)).Msg("CRITICAL: failed to update payment in DB")
-	}
+			log.Error().Err(err).Str("transaction_id", payment.TransactionID).Str("status", string(payment.Status)).Msg("CRITICAL: failed to update payment in DB")
+		}
+		if s.notifier != nil {
+			s.notifier.NotifyTransactionStatusChanged(payment)
+		}
 		return payment, nil
 	}
 

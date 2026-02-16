@@ -98,10 +98,9 @@ func (r *ProductRepository) GetBySKUCode(skuCode string) (*models.Product, error
 	return &p, nil
 }
 
-// GetByID returns a single product by id (with variant_name from JOIN).
+// GetByID returns a single product by id.
 func (r *ProductRepository) GetByID(id int) (*models.Product, error) {
-	const q = `SELECT p.*, pv.name AS variant_name FROM products p
-		LEFT JOIN product_variants pv ON p.variant_id = pv.id WHERE p.id = $1 LIMIT 1`
+	const q = `SELECT * FROM products WHERE id = $1 LIMIT 1`
 	stmt, err := r.db.Preparex(q)
 	if err != nil {
 		return nil, err
@@ -297,15 +296,14 @@ func (r *ProductRepository) GetAllAdmin(filter *AdminProductFilter) (*AdminProdu
 
 	totalPages := (total + filter.Limit - 1) / filter.Limit
 
-	// Fetch page with provider count, min price, variant_name
+	// Fetch page with provider count, min price
+	// Note: variant_name omitted to avoid requiring product_variants table (migration 020)
 	listQuery := fmt.Sprintf(`
 		SELECT
 			p.*,
-			pv.name AS variant_name,
 			COALESCE(ps.provider_count, 0) AS provider_count,
 			ps.min_price
 		FROM products p
-		LEFT JOIN product_variants pv ON p.variant_id = pv.id
 		LEFT JOIN (
 			SELECT
 				psk.product_id,

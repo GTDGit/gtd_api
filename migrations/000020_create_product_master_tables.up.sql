@@ -1,23 +1,14 @@
 -- ============================================
 -- Migration 000020: Product Master Tables (categories, brands, types)
--- CRUD managed by admin; products validate against these
 -- ============================================
 
--- 1. Drop the view that depends on products.type before ALTER
+-- 1. Drop view that depends on products.type (from migration 017)
 DROP VIEW IF EXISTS v_product_best_price;
 
--- 2. Change products.type from enum to VARCHAR to allow new types (reguler, pulsa_transfer)
-DO $$
-BEGIN
-    IF EXISTS (
-        SELECT 1 FROM information_schema.columns
-        WHERE table_name = 'products' AND column_name = 'type' AND udt_name = 'product_type'
-    ) THEN
-        ALTER TABLE products ALTER COLUMN type TYPE VARCHAR(50) USING type::text;
-    END IF;
-END $$;
+-- 2. Change products.type from enum to VARCHAR(50)
+ALTER TABLE products ALTER COLUMN type TYPE VARCHAR(50) USING type::text;
 
--- 3. Recreate the view (now products.type is VARCHAR)
+-- 3. Recreate the view with VARCHAR type
 CREATE OR REPLACE VIEW v_product_best_price AS
 SELECT
     p.id AS product_id,

@@ -98,9 +98,10 @@ func (r *ProductRepository) GetBySKUCode(skuCode string) (*models.Product, error
 	return &p, nil
 }
 
-// GetByID returns a single product by id.
+// GetByID returns a single product by id (with variant_name from JOIN).
 func (r *ProductRepository) GetByID(id int) (*models.Product, error) {
-	const q = `SELECT * FROM products WHERE id = $1 LIMIT 1`
+	const q = `SELECT p.*, pv.name AS variant_name FROM products p
+		LEFT JOIN product_variants pv ON p.variant_id = pv.id WHERE p.id = $1 LIMIT 1`
 	stmt, err := r.db.Preparex(q)
 	if err != nil {
 		return nil, err
@@ -120,13 +121,14 @@ func (r *ProductRepository) GetByID(id int) (*models.Product, error) {
 // Upsert inserts or updates a product by sku_code.
 func (r *ProductRepository) Upsert(product *models.Product) error {
 	const q = `
-        INSERT INTO products (sku_code, name, category, brand, type, admin, commission, description, is_active)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        INSERT INTO products (sku_code, name, category, brand, type, variant_id, admin, commission, description, is_active)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
         ON CONFLICT (sku_code) DO UPDATE SET
             name = EXCLUDED.name,
             category = EXCLUDED.category,
             brand = EXCLUDED.brand,
             type = EXCLUDED.type,
+            variant_id = EXCLUDED.variant_id,
             admin = EXCLUDED.admin,
             commission = EXCLUDED.commission,
             description = EXCLUDED.description,
@@ -145,6 +147,7 @@ func (r *ProductRepository) Upsert(product *models.Product) error {
 		product.Category,
 		product.Brand,
 		product.Type,
+		product.VariantID,
 		product.Admin,
 		product.Commission,
 		product.Description,
@@ -167,8 +170,8 @@ func (r *ProductRepository) UpdateStatus(id int, isActive bool) error {
 
 // Create creates a new product.
 func (r *ProductRepository) Create(product *models.Product) error {
-	query := `INSERT INTO products (sku_code, name, category, brand, type, admin, commission, description, is_active)
-              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+	query := `INSERT INTO products (sku_code, name, category, brand, type, variant_id, admin, commission, description, is_active)
+              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
               RETURNING id, created_at, updated_at`
 
 	return r.db.QueryRowx(query,
@@ -177,6 +180,7 @@ func (r *ProductRepository) Create(product *models.Product) error {
 		product.Category,
 		product.Brand,
 		product.Type,
+		product.VariantID,
 		product.Admin,
 		product.Commission,
 		product.Description,
@@ -188,8 +192,8 @@ func (r *ProductRepository) Create(product *models.Product) error {
 func (r *ProductRepository) Update(product *models.Product) error {
 	query := `UPDATE products
               SET sku_code = $1, name = $2, category = $3, brand = $4,
-                  type = $5, admin = $6, commission = $7, description = $8, is_active = $9
-              WHERE id = $10
+                  type = $5, variant_id = $6, admin = $7, commission = $8, description = $9, is_active = $10
+              WHERE id = $11
               RETURNING updated_at`
 
 	return r.db.QueryRowx(query,
@@ -198,6 +202,7 @@ func (r *ProductRepository) Update(product *models.Product) error {
 		product.Category,
 		product.Brand,
 		product.Type,
+		product.VariantID,
 		product.Admin,
 		product.Commission,
 		product.Description,
@@ -215,13 +220,14 @@ func (r *ProductRepository) Delete(id int) error {
 
 // AdminProductFilter holds filters for admin product queries.
 type AdminProductFilter struct {
-	Type     string
-	Category string
-	Brand    string
-	Search   string
-	IsActive *bool
-	Page     int
-	Limit    int
+	Type      string // prepaid or postpaid
+	VariantID *int   // optional variant filter
+	Category  string
+	Brand     string
+	Search    string
+	IsActive  *bool
+	Page      int
+	Limit     int
 }
 
 // AdminProductResult contains paginated product results for admin.
@@ -252,33 +258,38 @@ func (r *ProductRepository) GetAllAdmin(filter *AdminProductFilter) (*AdminProdu
 	argIdx := 1
 
 	if filter.Type != "" {
-		baseWhere += fmt.Sprintf(" AND type = $%d", argIdx)
+		baseWhere += fmt.Sprintf(" AND p.type = $%d", argIdx)
 		args = append(args, filter.Type)
 		argIdx++
 	}
+	if filter.VariantID != nil {
+		baseWhere += fmt.Sprintf(" AND p.variant_id = $%d", argIdx)
+		args = append(args, *filter.VariantID)
+		argIdx++
+	}
 	if filter.Category != "" {
-		baseWhere += fmt.Sprintf(" AND category ILIKE $%d", argIdx)
+		baseWhere += fmt.Sprintf(" AND p.category ILIKE $%d", argIdx)
 		args = append(args, "%"+filter.Category+"%")
 		argIdx++
 	}
 	if filter.Brand != "" {
-		baseWhere += fmt.Sprintf(" AND brand ILIKE $%d", argIdx)
+		baseWhere += fmt.Sprintf(" AND p.brand ILIKE $%d", argIdx)
 		args = append(args, "%"+filter.Brand+"%")
 		argIdx++
 	}
 	if filter.Search != "" {
-		baseWhere += fmt.Sprintf(" AND (name ILIKE $%d OR sku_code ILIKE $%d)", argIdx, argIdx)
+		baseWhere += fmt.Sprintf(" AND (p.name ILIKE $%d OR p.sku_code ILIKE $%d)", argIdx, argIdx)
 		args = append(args, "%"+filter.Search+"%")
 		argIdx++
 	}
 	if filter.IsActive != nil {
-		baseWhere += fmt.Sprintf(" AND is_active = $%d", argIdx)
+		baseWhere += fmt.Sprintf(" AND p.is_active = $%d", argIdx)
 		args = append(args, *filter.IsActive)
 		argIdx++
 	}
 
 	// Count total
-	countQuery := `SELECT COUNT(1) FROM products ` + baseWhere
+	countQuery := `SELECT COUNT(1) FROM products p ` + baseWhere
 	var total int
 	if err := r.db.Get(&total, countQuery, args...); err != nil {
 		return nil, err
@@ -286,13 +297,15 @@ func (r *ProductRepository) GetAllAdmin(filter *AdminProductFilter) (*AdminProdu
 
 	totalPages := (total + filter.Limit - 1) / filter.Limit
 
-	// Fetch page with provider count and min price
+	// Fetch page with provider count, min price, variant_name
 	listQuery := fmt.Sprintf(`
 		SELECT
 			p.*,
+			pv.name AS variant_name,
 			COALESCE(ps.provider_count, 0) AS provider_count,
 			ps.min_price
 		FROM products p
+		LEFT JOIN product_variants pv ON p.variant_id = pv.id
 		LEFT JOIN (
 			SELECT
 				psk.product_id,
@@ -307,13 +320,6 @@ func (r *ProductRepository) GetAllAdmin(filter *AdminProductFilter) (*AdminProdu
 		ORDER BY p.category, p.brand, COALESCE(ps.min_price, 999999999), p.name
 		LIMIT $%d OFFSET $%d`,
 		strings.Replace(baseWhere, "WHERE 1=1", "", 1), argIdx, argIdx+1)
-	// Replace filter column names to use p. prefix
-	listQuery = strings.ReplaceAll(listQuery, " type =", " p.type =")
-	listQuery = strings.ReplaceAll(listQuery, " category ILIKE", " p.category ILIKE")
-	listQuery = strings.ReplaceAll(listQuery, " brand ILIKE", " p.brand ILIKE")
-	listQuery = strings.ReplaceAll(listQuery, "(name ILIKE", "(p.name ILIKE")
-	listQuery = strings.ReplaceAll(listQuery, "sku_code ILIKE", "p.sku_code ILIKE")
-	listQuery = strings.ReplaceAll(listQuery, " is_active =", " p.is_active =")
 	args = append(args, filter.Limit, offset)
 
 	var products []models.Product

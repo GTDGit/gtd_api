@@ -120,7 +120,7 @@ type ProductWithBestPrice struct {
 	Name          string      `db:"name" json:"productName"`
 	Category      string      `db:"category" json:"category"`
 	Brand         string      `db:"brand" json:"brand"`
-	Type          string      `db:"type" json:"type"`
+	Type          ProductType `db:"type" json:"type"`
 	Admin         int         `db:"admin" json:"admin"`
 	BestPrice     *int        `db:"best_price" json:"price"`
 	BestAdmin     *int        `db:"best_admin" json:"providerAdmin,omitempty"`

@@ -100,7 +100,7 @@ func (s *SyncService) processSkuGroup(baseSKU string, items []*digiflazz.Priceli
 			Name:        mainItem.ProductName,
 			Category:    mainItem.Category,
 			Brand:       mainItem.Brand,
-			Type:        productType,
+			Type:        models.ProductType(productType),
 			Admin:       mainItem.Admin,
 			Commission:  mainItem.Commission,
 			Description: mainItem.Desc,
@@ -116,7 +116,7 @@ func (s *SyncService) processSkuGroup(baseSKU string, items []*digiflazz.Priceli
 		product.Name = mainItem.ProductName
 		product.Category = mainItem.Category
 		product.Brand = mainItem.Brand
-		product.Type = productType
+		product.Type = models.ProductType(productType)
 		product.Admin = mainItem.Admin
 		product.Commission = mainItem.Commission
 		product.Description = mainItem.Desc

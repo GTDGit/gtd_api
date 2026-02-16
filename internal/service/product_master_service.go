@@ -8,7 +8,7 @@ import (
 	"github.com/GTDGit/gtd_api/internal/repository"
 )
 
-// ProductMasterService handles CRUD for product categories, brands, and types.
+// ProductMasterService handles CRUD for product categories, brands, and variants.
 type ProductMasterService struct {
 	repo *repository.ProductMasterRepository
 }
@@ -79,8 +79,8 @@ func (s *ProductMasterService) CreateBrand(ctx context.Context, name string, dis
 }
 
 func (s *ProductMasterService) UpdateBrand(ctx context.Context, id int, name string, displayOrder int) error {
-	c, err := s.repo.GetBrandByID(id)
-	if err != nil || c == nil {
+	b, _ := s.repo.GetBrandByID(id)
+	if b == nil {
 		return errors.New("brand not found")
 	}
 	name = strings.TrimSpace(name)
@@ -95,67 +95,62 @@ func (s *ProductMasterService) UpdateBrand(ctx context.Context, id int, name str
 }
 
 func (s *ProductMasterService) DeleteBrand(ctx context.Context, id int) error {
-	c, _ := s.repo.GetBrandByID(id)
-	if c == nil {
+	b, _ := s.repo.GetBrandByID(id)
+	if b == nil {
 		return errors.New("brand not found")
 	}
 	return s.repo.DeleteBrand(id)
 }
 
-// --- Types ---
+// --- Variants ---
 
-func (s *ProductMasterService) ListTypes() ([]repository.ProductType, error) {
-	return s.repo.ListTypes()
+func (s *ProductMasterService) ListVariants() ([]repository.ProductVariant, error) {
+	return s.repo.ListVariants()
 }
 
-func (s *ProductMasterService) CreateType(ctx context.Context, name, code string, displayOrder int) (*repository.ProductType, error) {
+func (s *ProductMasterService) CreateVariant(ctx context.Context, name string, displayOrder int) (*repository.ProductVariant, error) {
 	name = strings.TrimSpace(name)
-	code = strings.TrimSpace(strings.ToLower(strings.ReplaceAll(code, " ", "_")))
-	if name == "" || code == "" {
-		return nil, errors.New("type name and code are required")
+	if name == "" {
+		return nil, errors.New("variant name is required")
 	}
-	existing, _ := s.repo.GetTypeByCode(code)
+	existing, _ := s.repo.GetVariantByName(name)
 	if existing != nil {
-		return nil, errors.New("type code already exists")
+		return nil, errors.New("variant already exists")
 	}
-	return s.repo.CreateType(name, code, displayOrder)
+	return s.repo.CreateVariant(name, displayOrder)
 }
 
-func (s *ProductMasterService) UpdateType(ctx context.Context, id int, name, code string, displayOrder int) error {
-	t, _ := s.repo.GetTypeByID(id)
-	if t == nil {
-		return errors.New("type not found")
+func (s *ProductMasterService) UpdateVariant(ctx context.Context, id int, name string, displayOrder int) error {
+	v, _ := s.repo.GetVariantByID(id)
+	if v == nil {
+		return errors.New("variant not found")
 	}
 	name = strings.TrimSpace(name)
-	code = strings.TrimSpace(strings.ToLower(strings.ReplaceAll(code, " ", "_")))
-	if name == "" || code == "" {
-		return errors.New("type name and code are required")
+	if name == "" {
+		return errors.New("variant name is required")
 	}
-	existing, _ := s.repo.GetTypeByCode(code)
+	existing, _ := s.repo.GetVariantByName(name)
 	if existing != nil && existing.ID != id {
-		return errors.New("type code already used by another")
+		return errors.New("variant name already used by another")
 	}
-	return s.repo.UpdateType(id, name, code, displayOrder)
+	return s.repo.UpdateVariant(id, name, displayOrder)
 }
 
-func (s *ProductMasterService) DeleteType(ctx context.Context, id int) error {
-	t, _ := s.repo.GetTypeByID(id)
-	if t == nil {
-		return errors.New("type not found")
+func (s *ProductMasterService) DeleteVariant(ctx context.Context, id int) error {
+	v, _ := s.repo.GetVariantByID(id)
+	if v == nil {
+		return errors.New("variant not found")
 	}
-	return s.repo.DeleteType(id)
+	return s.repo.DeleteVariant(id)
 }
 
-// ValidateCategoryBrandType checks that category, brand, type exist in master tables.
-func (s *ProductMasterService) ValidateCategoryBrandType(category, brand, typeCode string) error {
+// ValidateCategoryBrandVariant checks category and brand exist; variantID if provided must exist.
+func (s *ProductMasterService) ValidateCategoryBrandVariant(category, brand string, variantID *int) error {
 	if category == "" {
 		return errors.New("category is required")
 	}
 	if brand == "" {
 		return errors.New("brand is required")
-	}
-	if typeCode == "" {
-		return errors.New("type is required")
 	}
 	cat, _ := s.repo.GetCategoryByName(category)
 	if cat == nil {
@@ -165,9 +160,11 @@ func (s *ProductMasterService) ValidateCategoryBrandType(category, brand, typeCo
 	if b == nil {
 		return errors.New("invalid brand: not found in master list")
 	}
-	t, _ := s.repo.GetTypeByCode(typeCode)
-	if t == nil {
-		return errors.New("invalid type: not found in master list")
+	if variantID != nil && *variantID > 0 {
+		v, _ := s.repo.GetVariantByID(*variantID)
+		if v == nil {
+			return errors.New("invalid variant: not found in master list")
+		}
 	}
 	return nil
 }

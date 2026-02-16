@@ -31,6 +31,11 @@ func (h *ProductManagementHandler) ListProducts(c *gin.Context) {
 		Page:     1,
 		Limit:    50,
 	}
+	if v := c.Query("variantId"); v != "" {
+		if id, err := strconv.Atoi(v); err == nil {
+			filter.VariantID = &id
+		}
+	}
 
 	if page := c.Query("page"); page != "" {
 		if p, err := strconv.Atoi(page); err == nil {
@@ -85,6 +90,10 @@ func (h *ProductManagementHandler) CreateProduct(c *gin.Context) {
 			utils.Error(c, 400, "SKU_EXISTS", err.Error())
 			return
 		}
+		if err.Error() == "type must be 'prepaid' or 'postpaid'" {
+			utils.Error(c, 400, "INVALID_TYPE", err.Error())
+			return
+		}
 		if strings.Contains(err.Error(), "invalid") || strings.Contains(err.Error(), "required") || strings.Contains(err.Error(), "not found in master") {
 			utils.Error(c, 400, "INVALID_REQUEST", err.Error())
 			return
@@ -135,6 +144,10 @@ func (h *ProductManagementHandler) UpdateProduct(c *gin.Context) {
 		}
 		if err.Error() == "sku_code already exists" {
 			utils.Error(c, 400, "SKU_EXISTS", err.Error())
+			return
+		}
+		if err.Error() == "type must be 'prepaid' or 'postpaid'" {
+			utils.Error(c, 400, "INVALID_TYPE", err.Error())
 			return
 		}
 		if strings.Contains(err.Error(), "invalid") || strings.Contains(err.Error(), "required") || strings.Contains(err.Error(), "not found in master") {
@@ -320,12 +333,12 @@ func (h *ProductManagementHandler) GetBrands(c *gin.Context) {
 	utils.Success(c, 200, "Brands retrieved", brands)
 }
 
-// GetTypes handles GET /v1/admin/products/types
-func (h *ProductManagementHandler) GetTypes(c *gin.Context) {
-	types, err := h.productMgmtService.GetTypes()
+// GetVariants handles GET /v1/admin/products/variants
+func (h *ProductManagementHandler) GetVariants(c *gin.Context) {
+	variants, err := h.productMgmtService.GetVariants()
 	if err != nil {
-		utils.Error(c, 500, "INTERNAL_ERROR", "Failed to retrieve types")
+		utils.Error(c, 500, "INTERNAL_ERROR", "Failed to retrieve variants")
 		return
 	}
-	utils.Success(c, 200, "Types retrieved", types)
+	utils.Success(c, 200, "Variants retrieved", variants)
 }

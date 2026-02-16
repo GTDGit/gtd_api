@@ -9,7 +9,7 @@ import (
 	"github.com/GTDGit/gtd_api/internal/utils"
 )
 
-// ProductMasterHandler handles CRUD for categories, brands, types.
+// ProductMasterHandler handles CRUD for categories, brands, variants.
 type ProductMasterHandler struct {
 	svc *service.ProductMasterService
 }
@@ -183,86 +183,84 @@ func (h *ProductMasterHandler) DeleteBrand(c *gin.Context) {
 	utils.Success(c, 200, "Brand deleted", nil)
 }
 
-// --- Types ---
+// --- Variants ---
 
-func (h *ProductMasterHandler) ListTypes(c *gin.Context) {
-	list, err := h.svc.ListTypes()
+func (h *ProductMasterHandler) ListVariants(c *gin.Context) {
+	list, err := h.svc.ListVariants()
 	if err != nil {
-		utils.Error(c, 500, "INTERNAL_ERROR", "Failed to list types")
+		utils.Error(c, 500, "INTERNAL_ERROR", "Failed to list variants")
 		return
 	}
-	utils.Success(c, 200, "Types retrieved", list)
+	utils.Success(c, 200, "Variants retrieved", list)
 }
 
-func (h *ProductMasterHandler) CreateType(c *gin.Context) {
+func (h *ProductMasterHandler) CreateVariant(c *gin.Context) {
 	var req struct {
 		Name         string `json:"name" binding:"required"`
-		Code         string `json:"code" binding:"required"`
 		DisplayOrder int    `json:"displayOrder"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		utils.Error(c, 400, "INVALID_REQUEST", "Invalid request body")
 		return
 	}
-	typ, err := h.svc.CreateType(c.Request.Context(), req.Name, req.Code, req.DisplayOrder)
+	v, err := h.svc.CreateVariant(c.Request.Context(), req.Name, req.DisplayOrder)
 	if err != nil {
-		if err.Error() == "type name and code are required" || err.Error() == "type code already exists" {
+		if err.Error() == "variant name is required" || err.Error() == "variant already exists" {
 			utils.Error(c, 400, "INVALID_REQUEST", err.Error())
 			return
 		}
-		utils.Error(c, 500, "INTERNAL_ERROR", "Failed to create type")
+		utils.Error(c, 500, "INTERNAL_ERROR", "Failed to create variant")
 		return
 	}
-	utils.Success(c, 201, "Type created", typ)
+	utils.Success(c, 201, "Variant created", v)
 }
 
-func (h *ProductMasterHandler) UpdateType(c *gin.Context) {
+func (h *ProductMasterHandler) UpdateVariant(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
-		utils.Error(c, 400, "INVALID_ID", "Invalid type ID")
+		utils.Error(c, 400, "INVALID_ID", "Invalid variant ID")
 		return
 	}
 	var req struct {
 		Name         string `json:"name" binding:"required"`
-		Code         string `json:"code" binding:"required"`
 		DisplayOrder int    `json:"displayOrder"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		utils.Error(c, 400, "INVALID_REQUEST", "Invalid request body")
 		return
 	}
-	if err := h.svc.UpdateType(c.Request.Context(), id, req.Name, req.Code, req.DisplayOrder); err != nil {
-		if err.Error() == "type not found" {
+	if err := h.svc.UpdateVariant(c.Request.Context(), id, req.Name, req.DisplayOrder); err != nil {
+		if err.Error() == "variant not found" {
 			utils.Error(c, 404, "NOT_FOUND", err.Error())
 			return
 		}
-		if err.Error() == "type name and code are required" || err.Error() == "type code already used by another" {
+		if err.Error() == "variant name is required" || err.Error() == "variant name already used by another" {
 			utils.Error(c, 400, "INVALID_REQUEST", err.Error())
 			return
 		}
-		utils.Error(c, 500, "INTERNAL_ERROR", "Failed to update type")
+		utils.Error(c, 500, "INTERNAL_ERROR", "Failed to update variant")
 		return
 	}
-	utils.Success(c, 200, "Type updated", nil)
+	utils.Success(c, 200, "Variant updated", nil)
 }
 
-func (h *ProductMasterHandler) DeleteType(c *gin.Context) {
+func (h *ProductMasterHandler) DeleteVariant(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
-		utils.Error(c, 400, "INVALID_ID", "Invalid type ID")
+		utils.Error(c, 400, "INVALID_ID", "Invalid variant ID")
 		return
 	}
-	if err := h.svc.DeleteType(c.Request.Context(), id); err != nil {
-		if err.Error() == "type not found" {
+	if err := h.svc.DeleteVariant(c.Request.Context(), id); err != nil {
+		if err.Error() == "variant not found" {
 			utils.Error(c, 404, "NOT_FOUND", err.Error())
 			return
 		}
-		if err.Error() == "cannot delete: type is used by products" {
+		if err.Error() == "cannot delete: variant is used by products" {
 			utils.Error(c, 400, "IN_USE", err.Error())
 			return
 		}
-		utils.Error(c, 500, "INTERNAL_ERROR", "Failed to delete type")
+		utils.Error(c, 500, "INTERNAL_ERROR", "Failed to delete variant")
 		return
 	}
-	utils.Success(c, 200, "Type deleted", nil)
+	utils.Success(c, 200, "Variant deleted", nil)
 }

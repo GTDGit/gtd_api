@@ -21,15 +21,14 @@ type ProductBrand struct {
 	DisplayOrder int    `db:"display_order"`
 }
 
-// ProductType model
-type ProductType struct {
+// ProductVariant model (Reguler, Pulsa Transfer, etc - NOT prepaid/postpaid)
+type ProductVariant struct {
 	ID           int    `db:"id"`
 	Name         string `db:"name"`
-	Code         string `db:"code"`
 	DisplayOrder int    `db:"display_order"`
 }
 
-// ProductMasterRepository handles product master data (categories, brands, types).
+// ProductMasterRepository handles product master data (categories, brands, variants).
 type ProductMasterRepository struct {
 	db *sqlx.DB
 }
@@ -185,75 +184,75 @@ func (r *ProductMasterRepository) DeleteBrand(id int) error {
 	return err
 }
 
-// --- Types ---
+// --- Variants ---
 
-func (r *ProductMasterRepository) ListTypes() ([]ProductType, error) {
-	const q = `SELECT id, name, code, display_order FROM product_types ORDER BY display_order, name`
-	var out []ProductType
+func (r *ProductMasterRepository) ListVariants() ([]ProductVariant, error) {
+	const q = `SELECT id, name, display_order FROM product_variants ORDER BY display_order, name`
+	var out []ProductVariant
 	if err := r.db.Select(&out, q); err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (r *ProductMasterRepository) GetTypeByID(id int) (*ProductType, error) {
-	const q = `SELECT id, name, code, display_order FROM product_types WHERE id = $1`
-	var t ProductType
-	if err := r.db.Get(&t, q, id); err != nil {
+func (r *ProductMasterRepository) GetVariantByID(id int) (*ProductVariant, error) {
+	const q = `SELECT id, name, display_order FROM product_variants WHERE id = $1`
+	var v ProductVariant
+	if err := r.db.Get(&v, q, id); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
 		}
 		return nil, err
 	}
-	return &t, nil
+	return &v, nil
 }
 
-func (r *ProductMasterRepository) GetTypeByCode(code string) (*ProductType, error) {
-	const q = `SELECT id, name, code, display_order FROM product_types WHERE code = $1`
-	var t ProductType
-	if err := r.db.Get(&t, q, code); err != nil {
+func (r *ProductMasterRepository) GetVariantByName(name string) (*ProductVariant, error) {
+	const q = `SELECT id, name, display_order FROM product_variants WHERE name = $1`
+	var v ProductVariant
+	if err := r.db.Get(&v, q, name); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
 		}
 		return nil, err
 	}
-	return &t, nil
+	return &v, nil
 }
 
-func (r *ProductMasterRepository) CreateType(name, code string, displayOrder int) (*ProductType, error) {
-	const q = `INSERT INTO product_types (name, code, display_order) VALUES ($1, $2, $3) RETURNING id, name, code, display_order`
-	var t ProductType
-	if err := r.db.Get(&t, q, name, code, displayOrder); err != nil {
+func (r *ProductMasterRepository) CreateVariant(name string, displayOrder int) (*ProductVariant, error) {
+	const q = `INSERT INTO product_variants (name, display_order) VALUES ($1, $2) RETURNING id, name, display_order`
+	var v ProductVariant
+	if err := r.db.Get(&v, q, name, displayOrder); err != nil {
 		return nil, err
 	}
-	return &t, nil
+	return &v, nil
 }
 
-func (r *ProductMasterRepository) UpdateType(id int, name, code string, displayOrder int) error {
-	const q = `UPDATE product_types SET name = $2, code = $3, display_order = $4, updated_at = NOW() WHERE id = $1`
-	_, err := r.db.Exec(q, id, name, code, displayOrder)
+func (r *ProductMasterRepository) UpdateVariant(id int, name string, displayOrder int) error {
+	const q = `UPDATE product_variants SET name = $2, display_order = $3, updated_at = NOW() WHERE id = $1`
+	_, err := r.db.Exec(q, id, name, displayOrder)
 	return err
 }
 
-func (r *ProductMasterRepository) CountProductsByTypeCode(code string) (int, error) {
-	const q = `SELECT COUNT(*) FROM products WHERE type = $1`
+func (r *ProductMasterRepository) CountProductsByVariantID(variantID int) (int, error) {
+	const q = `SELECT COUNT(*) FROM products WHERE variant_id = $1`
 	var n int
-	if err := r.db.Get(&n, q, code); err != nil {
+	if err := r.db.Get(&n, q, variantID); err != nil {
 		return 0, err
 	}
 	return n, nil
 }
 
-func (r *ProductMasterRepository) DeleteType(id int) error {
-	t, _ := r.GetTypeByID(id)
-	if t == nil {
+func (r *ProductMasterRepository) DeleteVariant(id int) error {
+	v, _ := r.GetVariantByID(id)
+	if v == nil {
 		return nil
 	}
-	n, _ := r.CountProductsByTypeCode(t.Code)
+	n, _ := r.CountProductsByVariantID(v.ID)
 	if n > 0 {
-		return errors.New("cannot delete: type is used by products")
+		return errors.New("cannot delete: variant is used by products")
 	}
-	const q = `DELETE FROM product_types WHERE id = $1`
+	const q = `DELETE FROM product_variants WHERE id = $1`
 	_, err := r.db.Exec(q, id)
 	return err
 }

@@ -31,7 +31,8 @@ type CreateProductRequest struct {
 	Name        string `json:"name" binding:"required"`
 	Category    string `json:"category" binding:"required"`
 	Brand       string `json:"brand" binding:"required"`
-	Type        string `json:"type" binding:"required"` // "prepaid" or "postpaid"
+	Type        string `json:"type" binding:"required"` // "prepaid" or "postpaid" only
+	VariantID   *int   `json:"variantId"`             // optional: Reguler, Pulsa Transfer, etc
 	Admin       int    `json:"admin"`
 	Commission  int    `json:"commission"`
 	Description string `json:"description"`
@@ -43,28 +44,28 @@ type UpdateProductRequest struct {
 	Name        string `json:"name"`
 	Category    string `json:"category"`
 	Brand       string `json:"brand"`
-	Type        string `json:"type"`
+	Type        string `json:"type"`      // prepaid or postpaid
+	VariantID   *int   `json:"variantId"` // optional
 	Admin       int    `json:"admin"`
 	Commission  int    `json:"commission"`
 	Description string `json:"description"`
 	IsActive    *bool  `json:"isActive"`
 }
 
-// CreateSKURequest represents the request to create/update a SKU.
+// CreateSKURequest and UpdateSKURequest unchanged
 type CreateSKURequest struct {
 	DigiSKUCode    string `json:"digiSkuCode" binding:"required"`
 	SellerName     string `json:"sellerName"`
-	Priority       int    `json:"priority" binding:"required"` // 1, 2, or 3
+	Priority       int    `json:"priority" binding:"required"`
 	Price          int    `json:"price" binding:"required"`
 	IsActive       bool   `json:"isActive"`
 	SupportMulti   bool   `json:"supportMulti"`
 	UnlimitedStock bool   `json:"unlimitedStock"`
 	Stock          int    `json:"stock"`
-	CutOffStart    string `json:"cutOffStart"` // "HH:MM:SS"
-	CutOffEnd      string `json:"cutOffEnd"`   // "HH:MM:SS"
+	CutOffStart    string `json:"cutOffStart"`
+	CutOffEnd      string `json:"cutOffEnd"`
 }
 
-// UpdateSKURequest represents the request to update a SKU.
 type UpdateSKURequest struct {
 	DigiSKUCode    string `json:"digiSkuCode"`
 	SellerName     string `json:"sellerName"`
@@ -80,12 +81,12 @@ type UpdateSKURequest struct {
 
 // CreateProduct creates a new product.
 func (s *ProductManagementService) CreateProduct(ctx context.Context, req *CreateProductRequest) (*models.Product, error) {
-	// Validate category, brand, type against master tables
-	if err := s.masterService.ValidateCategoryBrandType(req.Category, req.Brand, req.Type); err != nil {
+	if req.Type != "prepaid" && req.Type != "postpaid" {
+		return nil, errors.New("type must be 'prepaid' or 'postpaid'")
+	}
+	if err := s.masterService.ValidateCategoryBrandVariant(req.Category, req.Brand, req.VariantID); err != nil {
 		return nil, err
 	}
-
-	// Check if SKU code already exists
 	existing, _ := s.productRepo.GetBySKUCode(req.SKUCode)
 	if existing != nil {
 		return nil, errors.New("sku_code already exists")
@@ -96,17 +97,17 @@ func (s *ProductManagementService) CreateProduct(ctx context.Context, req *Creat
 		Name:        req.Name,
 		Category:    req.Category,
 		Brand:       req.Brand,
-		Type:        req.Type,
+		Type:        models.ProductType(req.Type),
+		VariantID:   req.VariantID,
 		Admin:       req.Admin,
 		Commission:  req.Commission,
 		Description: req.Description,
-		IsActive:    false, // Will be updated by SKU trigger
+		IsActive:    false,
 	}
 
 	if err := s.productRepo.Create(product); err != nil {
 		return nil, err
 	}
-
 	return product, nil
 }
 
@@ -132,9 +133,7 @@ func (s *ProductManagementService) UpdateProduct(id int, req *UpdateProductReque
 		return nil, err
 	}
 
-	// Update fields if provided
 	if req.SKUCode != "" {
-		// Check if new SKU code already exists
 		if req.SKUCode != product.SkuCode {
 			existing, _ := s.productRepo.GetBySKUCode(req.SKUCode)
 			if existing != nil {
@@ -147,29 +146,32 @@ func (s *ProductManagementService) UpdateProduct(id int, req *UpdateProductReque
 		product.Name = req.Name
 	}
 	if req.Category != "" {
-		if err := s.masterService.ValidateCategoryBrandType(req.Category, product.Brand, product.Type); err != nil {
+		if err := s.masterService.ValidateCategoryBrandVariant(req.Category, product.Brand, product.VariantID); err != nil {
 			return nil, err
 		}
 		product.Category = req.Category
 	}
 	if req.Brand != "" {
-		if err := s.masterService.ValidateCategoryBrandType(product.Category, req.Brand, product.Type); err != nil {
+		if err := s.masterService.ValidateCategoryBrandVariant(product.Category, req.Brand, product.VariantID); err != nil {
 			return nil, err
 		}
 		product.Brand = req.Brand
 	}
 	if req.Type != "" {
-		cat, brand := product.Category, product.Brand
-		if req.Category != "" {
-			cat = req.Category
+		if req.Type != "prepaid" && req.Type != "postpaid" {
+			return nil, errors.New("type must be 'prepaid' or 'postpaid'")
 		}
-		if req.Brand != "" {
-			brand = req.Brand
+		product.Type = models.ProductType(req.Type)
+	}
+	if req.VariantID != nil {
+		variantID := req.VariantID
+		if *variantID == 0 {
+			variantID = nil
 		}
-		if err := s.masterService.ValidateCategoryBrandType(cat, brand, req.Type); err != nil {
+		if err := s.masterService.ValidateCategoryBrandVariant(product.Category, product.Brand, variantID); err != nil {
 			return nil, err
 		}
-		product.Type = req.Type
+		product.VariantID = variantID
 	}
 	if req.Admin > 0 {
 		product.Admin = req.Admin
@@ -187,7 +189,6 @@ func (s *ProductManagementService) UpdateProduct(id int, req *UpdateProductReque
 	if err := s.productRepo.Update(product); err != nil {
 		return nil, err
 	}
-
 	return product, nil
 }
 
@@ -200,18 +201,14 @@ func (s *ProductManagementService) DeleteProduct(id int) error {
 		}
 		return err
 	}
-
 	return s.productRepo.Delete(product.ID)
 }
 
-// CreateSKU creates a new SKU for a product.
+// CreateSKU, UpdateSKU, DeleteSKU, GetProductSKUs - unchanged logic
 func (s *ProductManagementService) CreateSKU(productID int, req *CreateSKURequest) (*models.SKU, error) {
-	// Validate priority
 	if req.Priority < 1 || req.Priority > 3 {
 		return nil, errors.New("priority must be 1, 2, or 3")
 	}
-
-	// Check if product exists
 	_, err := s.productRepo.GetByID(productID)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -219,35 +216,22 @@ func (s *ProductManagementService) CreateSKU(productID int, req *CreateSKUReques
 		}
 		return nil, err
 	}
-
-	// Check if DigiSKUCode already exists
 	existing, _ := s.skuRepo.GetByDigiSKUCode(req.DigiSKUCode)
 	if existing != nil {
 		return nil, errors.New("digi_sku_code already exists")
 	}
-
 	sku := &models.SKU{
-		ProductID:      productID,
-		DigiSkuCode:    req.DigiSKUCode,
-		SellerName:     req.SellerName,
-		Priority:       req.Priority,
-		Price:          req.Price,
-		IsActive:       req.IsActive,
-		SupportMulti:   req.SupportMulti,
-		UnlimitedStock: req.UnlimitedStock,
-		Stock:          req.Stock,
-		CutOffStart:    req.CutOffStart,
-		CutOffEnd:      req.CutOffEnd,
+		ProductID: productID, DigiSkuCode: req.DigiSKUCode, SellerName: req.SellerName,
+		Priority: req.Priority, Price: req.Price, IsActive: req.IsActive,
+		SupportMulti: req.SupportMulti, UnlimitedStock: req.UnlimitedStock, Stock: req.Stock,
+		CutOffStart: req.CutOffStart, CutOffEnd: req.CutOffEnd,
 	}
-
 	if err := s.skuRepo.Create(sku); err != nil {
 		return nil, err
 	}
-
 	return sku, nil
 }
 
-// GetSKU retrieves a SKU by ID.
 func (s *ProductManagementService) GetSKU(id int) (*models.SKU, error) {
 	sku, err := s.skuRepo.GetByID(id)
 	if err != nil {
@@ -259,7 +243,6 @@ func (s *ProductManagementService) GetSKU(id int) (*models.SKU, error) {
 	return sku, nil
 }
 
-// UpdateSKU updates a SKU.
 func (s *ProductManagementService) UpdateSKU(id int, req *UpdateSKURequest) (*models.SKU, error) {
 	sku, err := s.skuRepo.GetByID(id)
 	if err != nil {
@@ -268,8 +251,6 @@ func (s *ProductManagementService) UpdateSKU(id int, req *UpdateSKURequest) (*mo
 		}
 		return nil, err
 	}
-
-	// Update fields if provided
 	if req.DigiSKUCode != "" {
 		if req.DigiSKUCode != sku.DigiSkuCode {
 			existing, _ := s.skuRepo.GetByDigiSKUCode(req.DigiSKUCode)
@@ -309,15 +290,12 @@ func (s *ProductManagementService) UpdateSKU(id int, req *UpdateSKURequest) (*mo
 	if req.CutOffEnd != "" {
 		sku.CutOffEnd = req.CutOffEnd
 	}
-
 	if err := s.skuRepo.Update(sku); err != nil {
 		return nil, err
 	}
-
 	return sku, nil
 }
 
-// DeleteSKU deletes a SKU.
 func (s *ProductManagementService) DeleteSKU(id int) error {
 	sku, err := s.skuRepo.GetByID(id)
 	if err != nil {
@@ -326,13 +304,10 @@ func (s *ProductManagementService) DeleteSKU(id int) error {
 		}
 		return err
 	}
-
 	return s.skuRepo.Delete(sku.ID)
 }
 
-// GetProductSKUs retrieves all SKUs for a product.
 func (s *ProductManagementService) GetProductSKUs(productID int) ([]*models.SKU, error) {
-	// Check if product exists
 	_, err := s.productRepo.GetByID(productID)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -340,13 +315,10 @@ func (s *ProductManagementService) GetProductSKUs(productID int) ([]*models.SKU,
 		}
 		return nil, err
 	}
-
 	skus, err := s.skuRepo.GetByProductID(productID)
 	if err != nil {
 		return nil, err
 	}
-
-	// Convert []models.SKU to []*models.SKU
 	result := make([]*models.SKU, len(skus))
 	for i := range skus {
 		result[i] = &skus[i]
@@ -354,32 +326,32 @@ func (s *ProductManagementService) GetProductSKUs(productID int) ([]*models.SKU,
 	return result, nil
 }
 
-// ListProductsFilter represents filter options for listing products.
+// ListProductsFilter - add VariantID
 type ListProductsFilter struct {
-	Type     string
-	Category string
-	Brand    string
-	Search   string
-	IsActive *bool
-	Page     int
-	Limit    int
+	Type      string
+	VariantID *int
+	Category  string
+	Brand     string
+	Search    string
+	IsActive  *bool
+	Page      int
+	Limit     int
 }
 
-// ListProducts returns all products for admin with filters and pagination.
 func (s *ProductManagementService) ListProducts(filter *ListProductsFilter) (*repository.AdminProductResult, error) {
 	repoFilter := &repository.AdminProductFilter{
-		Type:     filter.Type,
-		Category: filter.Category,
-		Brand:    filter.Brand,
-		Search:   filter.Search,
-		IsActive: filter.IsActive,
-		Page:     filter.Page,
-		Limit:    filter.Limit,
+		Type:      filter.Type,
+		VariantID: filter.VariantID,
+		Category:  filter.Category,
+		Brand:     filter.Brand,
+		Search:    filter.Search,
+		IsActive:  filter.IsActive,
+		Page:      filter.Page,
+		Limit:     filter.Limit,
 	}
 	return s.productRepo.GetAllAdmin(repoFilter)
 }
 
-// GetCategories returns all categories from master table (for dropdowns).
 func (s *ProductManagementService) GetCategories() ([]string, error) {
 	list, err := s.masterService.ListCategories()
 	if err != nil {
@@ -392,7 +364,6 @@ func (s *ProductManagementService) GetCategories() ([]string, error) {
 	return names, nil
 }
 
-// GetBrands returns all brands from master table (for dropdowns).
 func (s *ProductManagementService) GetBrands(_ string) ([]string, error) {
 	list, err := s.masterService.ListBrands()
 	if err != nil {
@@ -405,15 +376,7 @@ func (s *ProductManagementService) GetBrands(_ string) ([]string, error) {
 	return names, nil
 }
 
-// GetTypes returns all product types from master table (for dropdowns).
-func (s *ProductManagementService) GetTypes() ([]map[string]string, error) {
-	list, err := s.masterService.ListTypes()
-	if err != nil {
-		return nil, err
-	}
-	out := make([]map[string]string, len(list))
-	for i := range list {
-		out[i] = map[string]string{"code": list[i].Code, "name": list[i].Name}
-	}
-	return out, nil
+// GetVariants returns all product variants (Reguler, Pulsa Transfer, etc) for dropdown.
+func (s *ProductManagementService) GetVariants() ([]repository.ProductVariant, error) {
+	return s.masterService.ListVariants()
 }

@@ -376,13 +376,13 @@ func setupRoutes(router *gin.Engine, handlers *Handlers, authMiddleware *middlew
 		admin.GET("/products", handlers.ProductManagement.ListProducts)
 		admin.GET("/products/categories", handlers.ProductManagement.GetCategories)
 		admin.GET("/products/brands", handlers.ProductManagement.GetBrands)
-		admin.GET("/products/types", handlers.ProductManagement.GetTypes)
+		admin.GET("/products/variants", handlers.ProductManagement.GetVariants)
 		admin.POST("/products", handlers.ProductManagement.CreateProduct)
 		admin.GET("/products/:id", handlers.ProductManagement.GetProduct)
 		admin.PUT("/products/:id", handlers.ProductManagement.UpdateProduct)
 		admin.DELETE("/products/:id", handlers.ProductManagement.DeleteProduct)
 
-		// Product Master (categories, brands, types) CRUD
+		// Product Master (categories, brands, variants) CRUD
 		admin.GET("/product-master/categories", handlers.ProductMaster.ListCategories)
 		admin.POST("/product-master/categories", handlers.ProductMaster.CreateCategory)
 		admin.PUT("/product-master/categories/:id", handlers.ProductMaster.UpdateCategory)
@@ -391,10 +391,10 @@ func setupRoutes(router *gin.Engine, handlers *Handlers, authMiddleware *middlew
 		admin.POST("/product-master/brands", handlers.ProductMaster.CreateBrand)
 		admin.PUT("/product-master/brands/:id", handlers.ProductMaster.UpdateBrand)
 		admin.DELETE("/product-master/brands/:id", handlers.ProductMaster.DeleteBrand)
-		admin.GET("/product-master/types", handlers.ProductMaster.ListTypes)
-		admin.POST("/product-master/types", handlers.ProductMaster.CreateType)
-		admin.PUT("/product-master/types/:id", handlers.ProductMaster.UpdateType)
-		admin.DELETE("/product-master/types/:id", handlers.ProductMaster.DeleteType)
+		admin.GET("/product-master/variants", handlers.ProductMaster.ListVariants)
+		admin.POST("/product-master/variants", handlers.ProductMaster.CreateVariant)
+		admin.PUT("/product-master/variants/:id", handlers.ProductMaster.UpdateVariant)
+		admin.DELETE("/product-master/variants/:id", handlers.ProductMaster.DeleteVariant)
 
 		// SKU Management
 		admin.POST("/products/:id/skus", handlers.ProductManagement.CreateSKU)

@@ -4,30 +4,39 @@
 -- ============================================
 
 -- 1. Change products.type from enum to VARCHAR to allow new types (reguler, pulsa_transfer)
-ALTER TABLE products ALTER COLUMN type TYPE VARCHAR(50) USING type::text;
+--    Only ALTER if column is still using the product_type enum
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'products' AND column_name = 'type' AND udt_name = 'product_type'
+    ) THEN
+        ALTER TABLE products ALTER COLUMN type TYPE VARCHAR(50) USING type::text;
+    END IF;
+END $$;
 
 -- 2. Product categories (master)
-CREATE TABLE product_categories (
+CREATE TABLE IF NOT EXISTS product_categories (
     id SERIAL PRIMARY KEY,
     name VARCHAR(100) NOT NULL UNIQUE,
     display_order INT NOT NULL DEFAULT 0,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-CREATE INDEX idx_product_categories_name ON product_categories(name);
+CREATE INDEX IF NOT EXISTS idx_product_categories_name ON product_categories(name);
 
 -- 3. Product brands (master)
-CREATE TABLE product_brands (
+CREATE TABLE IF NOT EXISTS product_brands (
     id SERIAL PRIMARY KEY,
     name VARCHAR(100) NOT NULL UNIQUE,
     display_order INT NOT NULL DEFAULT 0,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-CREATE INDEX idx_product_brands_name ON product_brands(name);
+CREATE INDEX IF NOT EXISTS idx_product_brands_name ON product_brands(name);
 
 -- 4. Product types (master) - prepaid, postpaid, reguler, pulsa_transfer
-CREATE TABLE product_types (
+CREATE TABLE IF NOT EXISTS product_types (
     id SERIAL PRIMARY KEY,
     name VARCHAR(100) NOT NULL,
     code VARCHAR(50) NOT NULL UNIQUE,
@@ -35,7 +44,7 @@ CREATE TABLE product_types (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-CREATE INDEX idx_product_types_code ON product_types(code);
+CREATE INDEX IF NOT EXISTS idx_product_types_code ON product_types(code);
 
 -- 5. Seed product_types
 INSERT INTO product_types (name, code, display_order) VALUES

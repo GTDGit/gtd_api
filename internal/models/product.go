@@ -2,23 +2,16 @@ package models
 
 import "time"
 
-// ProductType enumerates the supported product types.
-type ProductType string
-
-const (
-	ProductTypePrepaid  ProductType = "prepaid"
-	ProductTypePostpaid ProductType = "postpaid"
-)
-
 // Product represents a product definition in the catalog.
 // Fields are tagged for both DB scanning and JSON serialization.
+// Type is stored as code from product_types (prepaid, postpaid, reguler, pulsa_transfer).
 type Product struct {
-	ID          int         `db:"id" json:"id"`
-	SkuCode     string      `db:"sku_code" json:"skuCode"`
-	Name        string      `db:"name" json:"productName"`
-	Category    string      `db:"category" json:"category"`
-	Brand       string      `db:"brand" json:"brand"`
-	Type        ProductType `db:"type" json:"type"`
+	ID          int    `db:"id" json:"id"`
+	SkuCode     string `db:"sku_code" json:"skuCode"`
+	Name        string `db:"name" json:"productName"`
+	Category    string `db:"category" json:"category"`
+	Brand       string `db:"brand" json:"brand"`
+	Type        string `db:"type" json:"type"`
 	Admin       int         `db:"admin" json:"admin,omitempty"`
 	Commission  int         `db:"commission" json:"commission,omitempty"`
 	Description string      `db:"description" json:"description"`

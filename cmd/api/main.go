@@ -124,7 +124,9 @@ func main() {
 	adminAuthSvc := service.NewAdminAuthService(adminRepo)
 	clientSvc := service.NewClientService(clientRepo)
 	productSvc := service.NewProductService(productRepo, skuRepo)
-	productMgmtSvc := service.NewProductManagementService(productRepo, skuRepo)
+	productMasterRepo := repository.NewProductMasterRepository(db)
+	productMasterSvc := service.NewProductMasterService(productMasterRepo)
+	productMgmtSvc := service.NewProductManagementService(productRepo, skuRepo, productMasterSvc)
 	callbackSvc := service.NewCallbackService(clientRepo, cbRepo, trxRepo)
 	// NOTE: Old SyncService disabled - price sync now handled by ProviderSyncWorker
 	// syncSvc := service.NewSyncService(digiProd, productRepo, skuRepo)
@@ -196,6 +198,7 @@ func main() {
 		Webhook:           handler.NewWebhookHandler(callbackSvc, cfg.Digiflazz.WebhookSecret),
 		Client:            handler.NewClientHandler(clientSvc),
 		ProductManagement: handler.NewProductManagementHandler(productMgmtSvc),
+		ProductMaster:     handler.NewProductMasterHandler(productMasterSvc),
 		AdminTransaction:  handler.NewAdminTransactionHandler(adminTrxSvc),
 		Auth:              handler.NewAuthHandler(adminAuthSvc),
 		Territory:         handler.NewTerritoryHandler(territoryRepo),
@@ -284,6 +287,7 @@ type Handlers struct {
 	Webhook           *handler.WebhookHandler
 	Client            *handler.ClientHandler
 	ProductManagement *handler.ProductManagementHandler
+	ProductMaster     *handler.ProductMasterHandler
 	AdminTransaction  *handler.AdminTransactionHandler
 	Auth              *handler.AuthHandler
 	Territory         *handler.TerritoryHandler
@@ -372,10 +376,25 @@ func setupRoutes(router *gin.Engine, handlers *Handlers, authMiddleware *middlew
 		admin.GET("/products", handlers.ProductManagement.ListProducts)
 		admin.GET("/products/categories", handlers.ProductManagement.GetCategories)
 		admin.GET("/products/brands", handlers.ProductManagement.GetBrands)
+		admin.GET("/products/types", handlers.ProductManagement.GetTypes)
 		admin.POST("/products", handlers.ProductManagement.CreateProduct)
 		admin.GET("/products/:id", handlers.ProductManagement.GetProduct)
 		admin.PUT("/products/:id", handlers.ProductManagement.UpdateProduct)
 		admin.DELETE("/products/:id", handlers.ProductManagement.DeleteProduct)
+
+		// Product Master (categories, brands, types) CRUD
+		admin.GET("/product-master/categories", handlers.ProductMaster.ListCategories)
+		admin.POST("/product-master/categories", handlers.ProductMaster.CreateCategory)
+		admin.PUT("/product-master/categories/:id", handlers.ProductMaster.UpdateCategory)
+		admin.DELETE("/product-master/categories/:id", handlers.ProductMaster.DeleteCategory)
+		admin.GET("/product-master/brands", handlers.ProductMaster.ListBrands)
+		admin.POST("/product-master/brands", handlers.ProductMaster.CreateBrand)
+		admin.PUT("/product-master/brands/:id", handlers.ProductMaster.UpdateBrand)
+		admin.DELETE("/product-master/brands/:id", handlers.ProductMaster.DeleteBrand)
+		admin.GET("/product-master/types", handlers.ProductMaster.ListTypes)
+		admin.POST("/product-master/types", handlers.ProductMaster.CreateType)
+		admin.PUT("/product-master/types/:id", handlers.ProductMaster.UpdateType)
+		admin.DELETE("/product-master/types/:id", handlers.ProductMaster.DeleteType)
 
 		// SKU Management
 		admin.POST("/products/:id/skus", handlers.ProductManagement.CreateSKU)

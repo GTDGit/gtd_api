@@ -11,15 +11,17 @@ import (
 
 // ProductManagementService handles product CRUD operations.
 type ProductManagementService struct {
-	productRepo *repository.ProductRepository
-	skuRepo     *repository.SKURepository
+	productRepo   *repository.ProductRepository
+	skuRepo       *repository.SKURepository
+	masterService *ProductMasterService
 }
 
 // NewProductManagementService constructs a ProductManagementService.
-func NewProductManagementService(productRepo *repository.ProductRepository, skuRepo *repository.SKURepository) *ProductManagementService {
+func NewProductManagementService(productRepo *repository.ProductRepository, skuRepo *repository.SKURepository, masterService *ProductMasterService) *ProductManagementService {
 	return &ProductManagementService{
-		productRepo: productRepo,
-		skuRepo:     skuRepo,
+		productRepo:   productRepo,
+		skuRepo:       skuRepo,
+		masterService: masterService,
 	}
 }
 
@@ -78,9 +80,9 @@ type UpdateSKURequest struct {
 
 // CreateProduct creates a new product.
 func (s *ProductManagementService) CreateProduct(ctx context.Context, req *CreateProductRequest) (*models.Product, error) {
-	// Validate type
-	if req.Type != "prepaid" && req.Type != "postpaid" {
-		return nil, errors.New("type must be 'prepaid' or 'postpaid'")
+	// Validate category, brand, type against master tables
+	if err := s.masterService.ValidateCategoryBrandType(req.Category, req.Brand, req.Type); err != nil {
+		return nil, err
 	}
 
 	// Check if SKU code already exists
@@ -94,7 +96,7 @@ func (s *ProductManagementService) CreateProduct(ctx context.Context, req *Creat
 		Name:        req.Name,
 		Category:    req.Category,
 		Brand:       req.Brand,
-		Type:        models.ProductType(req.Type),
+		Type:        req.Type,
 		Admin:       req.Admin,
 		Commission:  req.Commission,
 		Description: req.Description,
@@ -145,16 +147,29 @@ func (s *ProductManagementService) UpdateProduct(id int, req *UpdateProductReque
 		product.Name = req.Name
 	}
 	if req.Category != "" {
+		if err := s.masterService.ValidateCategoryBrandType(req.Category, product.Brand, product.Type); err != nil {
+			return nil, err
+		}
 		product.Category = req.Category
 	}
 	if req.Brand != "" {
+		if err := s.masterService.ValidateCategoryBrandType(product.Category, req.Brand, product.Type); err != nil {
+			return nil, err
+		}
 		product.Brand = req.Brand
 	}
 	if req.Type != "" {
-		if req.Type != "prepaid" && req.Type != "postpaid" {
-			return nil, errors.New("type must be 'prepaid' or 'postpaid'")
+		cat, brand := product.Category, product.Brand
+		if req.Category != "" {
+			cat = req.Category
 		}
-		product.Type = models.ProductType(req.Type)
+		if req.Brand != "" {
+			brand = req.Brand
+		}
+		if err := s.masterService.ValidateCategoryBrandType(cat, brand, req.Type); err != nil {
+			return nil, err
+		}
+		product.Type = req.Type
 	}
 	if req.Admin > 0 {
 		product.Admin = req.Admin
@@ -364,12 +379,41 @@ func (s *ProductManagementService) ListProducts(filter *ListProductsFilter) (*re
 	return s.productRepo.GetAllAdmin(repoFilter)
 }
 
-// GetCategories returns all distinct product categories.
+// GetCategories returns all categories from master table (for dropdowns).
 func (s *ProductManagementService) GetCategories() ([]string, error) {
-	return s.productRepo.GetDistinctCategories()
+	list, err := s.masterService.ListCategories()
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, len(list))
+	for i := range list {
+		names[i] = list[i].Name
+	}
+	return names, nil
 }
 
-// GetBrands returns all distinct brands, optionally filtered by category.
-func (s *ProductManagementService) GetBrands(category string) ([]string, error) {
-	return s.productRepo.GetDistinctBrands(category)
+// GetBrands returns all brands from master table (for dropdowns).
+func (s *ProductManagementService) GetBrands(_ string) ([]string, error) {
+	list, err := s.masterService.ListBrands()
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, len(list))
+	for i := range list {
+		names[i] = list[i].Name
+	}
+	return names, nil
+}
+
+// GetTypes returns all product types from master table (for dropdowns).
+func (s *ProductManagementService) GetTypes() ([]map[string]string, error) {
+	list, err := s.masterService.ListTypes()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]map[string]string, len(list))
+	for i := range list {
+		out[i] = map[string]string{"code": list[i].Code, "name": list[i].Name}
+	}
+	return out, nil
 }

@@ -2,6 +2,7 @@ package handler
 
 import (
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -84,8 +85,8 @@ func (h *ProductManagementHandler) CreateProduct(c *gin.Context) {
 			utils.Error(c, 400, "SKU_EXISTS", err.Error())
 			return
 		}
-		if err.Error() == "type must be 'prepaid' or 'postpaid'" {
-			utils.Error(c, 400, "INVALID_TYPE", err.Error())
+		if strings.Contains(err.Error(), "invalid") || strings.Contains(err.Error(), "required") || strings.Contains(err.Error(), "not found in master") {
+			utils.Error(c, 400, "INVALID_REQUEST", err.Error())
 			return
 		}
 		utils.Error(c, 500, "INTERNAL_ERROR", "Failed to create product")
@@ -136,8 +137,8 @@ func (h *ProductManagementHandler) UpdateProduct(c *gin.Context) {
 			utils.Error(c, 400, "SKU_EXISTS", err.Error())
 			return
 		}
-		if err.Error() == "type must be 'prepaid' or 'postpaid'" {
-			utils.Error(c, 400, "INVALID_TYPE", err.Error())
+		if strings.Contains(err.Error(), "invalid") || strings.Contains(err.Error(), "required") || strings.Contains(err.Error(), "not found in master") {
+			utils.Error(c, 400, "INVALID_REQUEST", err.Error())
 			return
 		}
 		utils.Error(c, 500, "INTERNAL_ERROR", "Failed to update product")
@@ -311,12 +312,20 @@ func (h *ProductManagementHandler) GetCategories(c *gin.Context) {
 
 // GetBrands handles GET /v1/admin/products/brands
 func (h *ProductManagementHandler) GetBrands(c *gin.Context) {
-	category := c.Query("category")
-	brands, err := h.productMgmtService.GetBrands(category)
+	brands, err := h.productMgmtService.GetBrands(c.Query("category"))
 	if err != nil {
 		utils.Error(c, 500, "INTERNAL_ERROR", "Failed to retrieve brands")
 		return
 	}
-
 	utils.Success(c, 200, "Brands retrieved", brands)
+}
+
+// GetTypes handles GET /v1/admin/products/types
+func (h *ProductManagementHandler) GetTypes(c *gin.Context) {
+	types, err := h.productMgmtService.GetTypes()
+	if err != nil {
+		utils.Error(c, 500, "INTERNAL_ERROR", "Failed to retrieve types")
+		return
+	}
+	utils.Success(c, 200, "Types retrieved", types)
 }

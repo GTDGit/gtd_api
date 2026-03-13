@@ -5,7 +5,7 @@ INSERT INTO clients (
 ('ppob-id', 'PPOB.id',
  'gb_live_zVXgcbRbtwhWSkf0b28x58Kq0BM1oWcF',
  'gb_sandbox_uG0zclLoCSto4QaEAO6DM0wc7XZ1Da1P',
- 'https://ppob.id/api/callback/gtd',
+ 'https://gateway.ppob.id/internal/webhook/gerbang',
  'gb_secret_arneMhAZ81FNYhHE0VY75dxdKE6JV0xG',
  ARRAY['103.xxx.xxx.xxx']),
 ('seaply', 'Seaply.co',

@@ -1,8 +1,11 @@
 package repository
 
 import (
+	"crypto/rand"
 	"database/sql"
+	"errors"
 	"fmt"
+	"math/big"
 	"time"
 
 	"github.com/jmoiron/sqlx"
@@ -35,19 +38,25 @@ func (r *TransactionRepository) Create(trx *models.Transaction) error {
             transaction_id, reference_id, client_id, product_id, sku_id, is_sandbox,
             customer_no, customer_name, type, status, serial_number, amount, admin,
             period, description, failed_reason, retry_count, next_retry_at, expired_at,
-            inquiry_id, digi_ref_id, buy_price, sell_price, created_at, processed_at
+            inquiry_id, digi_ref_id, buy_price, sell_price,
+            provider_id, provider_sku_id, provider_ref_id, provider_response,
+            created_at, processed_at
         ) VALUES (
             $1,$2,$3,$4,$5,$6,
             $7,$8,$9,$10,$11,$12,$13,
             $14,$15,$16,$17,$18,$19,
-            $20,$21,$22,$23,NOW(),$24
+            $20,$21,$22,$23,
+            $24,$25,$26,$27,
+            NOW(),$28
         ) RETURNING id`
 
 	return r.db.QueryRow(q,
 		trx.TransactionID, trx.ReferenceID, trx.ClientID, trx.ProductID, trx.SkuID, trx.IsSandbox,
 		trx.CustomerNo, trx.CustomerName, trx.Type, trx.Status, trx.SerialNumber, trx.Amount, trx.Admin,
 		trx.Period, nullableJSON(trx.Description), trx.FailedReason, trx.RetryCount, trx.NextRetryAt, trx.ExpiredAt,
-		trx.InquiryID, trx.DigiRefID, trx.BuyPrice, trx.SellPrice, trx.ProcessedAt,
+		trx.InquiryID, trx.DigiRefID, trx.BuyPrice, trx.SellPrice,
+		trx.ProviderID, trx.ProviderSKUID, trx.ProviderRefID, nullableJSON(trx.ProviderResponse),
+		trx.ProcessedAt,
 	).Scan(&trx.ID)
 }
 
@@ -74,6 +83,10 @@ func (r *TransactionRepository) Update(trx *models.Transaction) error {
             processed_at = $18,
             buy_price = $19,
             sell_price = $20,
+            provider_id = $21,
+            provider_sku_id = $22,
+            provider_ref_id = $23,
+            provider_response = $24,
             updated_at = NOW()
         WHERE transaction_id = $1`
 
@@ -104,6 +117,10 @@ func (r *TransactionRepository) Update(trx *models.Transaction) error {
 		trx.ProcessedAt,
 		trx.BuyPrice,
 		trx.SellPrice,
+		trx.ProviderID,
+		trx.ProviderSKUID,
+		trx.ProviderRefID,
+		nullableJSON(trx.ProviderResponse),
 	)
 	return err
 }
@@ -253,31 +270,31 @@ func (r *TransactionRepository) ExistsReferenceID(clientID int, referenceID stri
 
 // GenerateTransactionID returns an ID like GRB-YYYYMMDD-NNNNNN using Asia/Jakarta date.
 func (r *TransactionRepository) GenerateTransactionID() (string, error) {
-	// Determine today's date in Asia/Jakarta within the DB and compute next sequence.
-	const seqQ = `
-        SELECT COALESCE(MAX(
-            CAST(SUBSTRING(transaction_id FROM 14) AS INT)
-        ), 0) + 1 
-        FROM transactions
-        WHERE transaction_id LIKE 'GRB-' || TO_CHAR(NOW() AT TIME ZONE 'Asia/Jakarta', 'YYYYMMDD') || '-%'`
-
-	stmt, err := r.db.Preparex(seqQ)
-	if err != nil {
-		return "", err
-	}
-	defer stmt.Close()
-	var next int
-	if err := stmt.Get(&next); err != nil {
-		return "", err
-	}
-
 	// Get date string in Asia/Jakarta from DB to avoid TZ mismatches.
 	const dateQ = `SELECT TO_CHAR(NOW() AT TIME ZONE 'Asia/Jakarta', 'YYYYMMDD')`
 	var ymd string
 	if err := r.db.Get(&ymd, dateQ); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("GRB-%s-%06d", ymd, next), nil
+
+	const existsQ = `SELECT EXISTS(SELECT 1 FROM transactions WHERE transaction_id = $1)`
+	for attempt := 0; attempt < 10; attempt++ {
+		n, err := rand.Int(rand.Reader, big.NewInt(1000000))
+		if err != nil {
+			return "", err
+		}
+
+		candidate := fmt.Sprintf("GRB-%s-%06d", ymd, n.Int64())
+		var exists bool
+		if err := r.db.Get(&exists, existsQ, candidate); err != nil {
+			return "", err
+		}
+		if !exists {
+			return candidate, nil
+		}
+	}
+
+	return "", errors.New("failed to generate unique transaction id")
 }
 
 // GetInquiryForPayment returns the inquiry transaction eligible for linking to a payment.

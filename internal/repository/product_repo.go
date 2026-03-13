@@ -25,7 +25,7 @@ func NewProductRepository(db *sqlx.DB) *ProductRepository {
 func (r *ProductRepository) GetAll(productType, category string) ([]models.Product, error) {
 	const q = `
         SELECT * FROM products 
-        WHERE ($1 = '' OR type = $1) 
+        WHERE ($1 = '' OR type::text = $1) 
         AND ($2 = '' OR category = $2)
         AND is_active = true
         ORDER BY category, brand, name`
@@ -56,7 +56,7 @@ func (r *ProductRepository) GetAllPaged(productType, category, brand, search str
 	offset := (page - 1) * limit
 
 	// Base WHERE clause
-	const baseWhere = `WHERE ($1 = '' OR type = $1)
+	const baseWhere = `WHERE ($1 = '' OR type::text = $1)
         AND ($2 = '' OR category = $2)
         AND ($3 = '' OR brand = $3)
         AND ($4 = '' OR name ILIKE '%%' || $4 || '%%')
@@ -257,7 +257,7 @@ func (r *ProductRepository) GetAllAdmin(filter *AdminProductFilter) (*AdminProdu
 	argIdx := 1
 
 	if filter.Type != "" {
-		baseWhere += fmt.Sprintf(" AND p.type = $%d", argIdx)
+		baseWhere += fmt.Sprintf(" AND p.type::text = $%d", argIdx)
 		args = append(args, filter.Type)
 		argIdx++
 	}

@@ -7,7 +7,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-var jwtSecret = []byte("your-secret-key-change-in-production")
+var jwtSecret []byte
 
 type Claims struct {
 	UserID int    `json:"user_id"`
@@ -16,6 +16,10 @@ type Claims struct {
 }
 
 func GenerateJWT(userID int, email string) (string, error) {
+	if len(jwtSecret) == 0 {
+		return "", errors.New("jwt secret is not configured")
+	}
+
 	claims := Claims{
 		UserID: userID,
 		Email:  email,
@@ -29,6 +33,10 @@ func GenerateJWT(userID int, email string) (string, error) {
 }
 
 func ValidateJWT(tokenString string) (*Claims, error) {
+	if len(jwtSecret) == 0 {
+		return nil, errors.New("jwt secret is not configured")
+	}
+
 	token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (interface{}, error) {
 		return jwtSecret, nil
 	})

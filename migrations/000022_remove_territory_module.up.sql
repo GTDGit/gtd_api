@@ -1,0 +1,5 @@
+DROP TABLE IF EXISTS postal_codes;
+DROP TABLE IF EXISTS sub_districts;
+DROP TABLE IF EXISTS districts;
+DROP TABLE IF EXISTS cities;
+DROP TABLE IF EXISTS provinces;

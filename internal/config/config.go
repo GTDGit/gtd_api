@@ -17,16 +17,13 @@ type Config struct {
 	Env       string
 	JWTSecret string
 
-	DB        DatabaseConfig
-	Redis     RedisConfig
-	Digiflazz DigiflazzConfig
-	Worker    WorkerConfig
-	Identity  IdentityConfig
-	S3        S3Config
-	AWS       AWSConfig     `mapstructure:"aws"`
-	Tencent   TencentConfig `mapstructure:"tencent"`
-	Kiosbank  KiosbankConfig
-	Alterra   AlterraConfig
+	DB           DatabaseConfig
+	Redis        RedisConfig
+	Digiflazz    DigiflazzConfig
+	Worker       WorkerConfig
+	Kiosbank     KiosbankConfig
+	Alterra      AlterraConfig
+	Disbursement DisbursementConfig
 }
 
 // DatabaseConfig contains PostgreSQL connection parameters.
@@ -66,39 +63,6 @@ type WorkerConfig struct {
 	StatusCheckMaxAge         time.Duration
 }
 
-// IdentityConfig contains configuration for Identity OCR services
-type IdentityConfig struct {
-	GoogleCredentialsPath string
-	GoogleProjectID       string
-	GroqAPIKey            string
-	GroqModel             string
-}
-
-// S3Config contains AWS S3 configuration
-type S3Config struct {
-	Region          string
-	Bucket          string
-	Endpoint        string
-	AccessKeyID     string
-	SecretAccessKey string
-}
-
-// AWSConfig contains AWS general configuration
-type AWSConfig struct {
-	AccessKeyID       string
-	SecretAccessKey   string
-	LivenessRegion    string // ap-northeast-1 (Tokyo)
-	RekognitionRegion string // ap-southeast-1 (Singapore)
-}
-
-// TencentConfig contains Tencent Cloud FaceID configuration
-type TencentConfig struct {
-	SecretID  string
-	SecretKey string
-	Region    string // ap-jakarta or others
-	RuleID    string // "1" for default
-}
-
 // KiosbankConfig contains credentials for Kiosbank PPOB provider
 type KiosbankConfig struct {
 	BaseURL    string
@@ -117,6 +81,27 @@ type AlterraConfig struct {
 	PrivateKeyPath    string // Path to RSA private key file
 	PrivateKeyPEM     string // RSA private key PEM content (alternative to path)
 	CallbackPublicKey string // Alterra's public key PEM for verifying callback signatures
+}
+
+// DisbursementConfig contains provider configuration for bank transfers.
+type DisbursementConfig struct {
+	BNC BNCConfig
+}
+
+// BNCConfig contains configuration for Bank Neo disbursement integration.
+type BNCConfig struct {
+	Env                    string
+	BaseURL                string
+	ClientID               string
+	ClientSecret           string
+	PartnerID              string
+	ChannelID              string
+	SourceAccount          string
+	PrivateKeyPath         string
+	DisbCallbackURL        string
+	ConnectorClientKey     string
+	ConnectorPublicKeyPath string
+	ConnectorPublicKeyPEM  string
 }
 
 // Load reads configuration from environment variables. If a .env file exists
@@ -160,39 +145,6 @@ func Load() (*Config, error) {
 		WebhookSecret:  getEnv("DIGIFLAZZ_WEBHOOK_SECRET", ""),
 	}
 
-	// Identity (Google Vision & Groq)
-	cfg.Identity = IdentityConfig{
-		GoogleCredentialsPath: getEnv("GOOGLE_APPLICATION_CREDENTIALS", "keys/google/identity.json"),
-		GoogleProjectID:       getEnv("GOOGLE_PROJECT_ID", ""),
-		GroqAPIKey:            getEnv("GROQ_API_KEY", ""),
-		GroqModel:             getEnv("GROQ_MODEL", "llama-3.1-8b-instant"),
-	}
-
-	// S3 (AWS Jakarta region)
-	cfg.S3 = S3Config{
-		Region:          getEnv("S3_REGION", "ap-southeast-3"),
-		Bucket:          getEnv("S3_BUCKET", "gerbang-identity"),
-		Endpoint:        getEnv("S3_ENDPOINT", "https://s3.ap-southeast-3.amazonaws.com"),
-		AccessKeyID:     getEnv("AWS_ACCESS_KEY_ID", ""),
-		SecretAccessKey: getEnv("AWS_SECRET_ACCESS_KEY", ""),
-	}
-
-	// AWS General (Liveness & Rekognition)
-	cfg.AWS = AWSConfig{
-		AccessKeyID:       getEnv("AWS_ACCESS_KEY_ID", ""),
-		SecretAccessKey:   getEnv("AWS_SECRET_ACCESS_KEY", ""),
-		LivenessRegion:    getEnv("AWS_LIVENESS_REGION", "ap-northeast-1"),
-		RekognitionRegion: getEnv("AWS_REKOGNITION_REGION", "ap-southeast-1"),
-	}
-
-	// Tencent Cloud (FaceID)
-	cfg.Tencent = TencentConfig{
-		SecretID:  getEnv("TENCENT_SECRET_ID", ""),
-		SecretKey: getEnv("TENCENT_SECRET_KEY", ""),
-		Region:    getEnv("TENCENT_REGION", "ap-jakarta"),
-		RuleID:    getEnv("TENCENT_RULE_ID", "1"),
-	}
-
 	// Kiosbank PPOB Provider
 	cfg.Kiosbank = KiosbankConfig{
 		BaseURL:    getEnv("KIOSBANK_BASE_URL", "https://www.kiosbank.id"),
@@ -211,6 +163,32 @@ func Load() (*Config, error) {
 		PrivateKeyPath:    getEnv("ALTERRA_PRIVATE_KEY_PATH", ""),
 		PrivateKeyPEM:     getEnv("ALTERRA_PRIVATE_KEY_PEM", ""),
 		CallbackPublicKey: getEnv("ALTERRA_CALLBACK_PUBLIC_KEY", ""),
+	}
+
+	// Disbursement - BNC
+	cfg.Disbursement = DisbursementConfig{
+		BNC: BNCConfig{
+			Env:                    getEnv("BNC_ENV", "SANDBOX"),
+			BaseURL:                getEnv("BNC_BASE_URL", ""),
+			ClientID:               getEnv("BNC_CLIENT_ID", ""),
+			ClientSecret:           getEnv("BNC_CLIENT_SECRET", ""),
+			PartnerID:              getEnv("BNC_PARTNER_ID", ""),
+			ChannelID:              getEnv("BNC_CHANNEL_ID", ""),
+			SourceAccount:          getEnv("BNC_SOURCE_ACCOUNT", ""),
+			PrivateKeyPath:         getEnv("BNC_PRIVATE_KEY_PATH", ""),
+			DisbCallbackURL:        getEnv("BNC_DISB_CALLBACK_URL", ""),
+			ConnectorClientKey:     getEnv("BNC_CONNECTOR_CLIENT_KEY", ""),
+			ConnectorPublicKeyPath: getEnv("BNC_CONNECTOR_PUBLIC_KEY_PATH", ""),
+			ConnectorPublicKeyPEM:  getEnv("BNC_CONNECTOR_PUBLIC_KEY_PEM", ""),
+		},
+	}
+	if cfg.Disbursement.BNC.BaseURL == "" {
+		switch cfg.Disbursement.BNC.Env {
+		case "PRODUCTION":
+			cfg.Disbursement.BNC.BaseURL = "https://api.bankneo.co.id"
+		default:
+			cfg.Disbursement.BNC.BaseURL = "https://sandbox.bankneo.co.id"
+		}
 	}
 
 	// Workers (durations)

@@ -26,8 +26,10 @@ import (
 	"github.com/GTDGit/gtd_api/internal/repository"
 	"github.com/GTDGit/gtd_api/internal/service"
 	"github.com/GTDGit/gtd_api/internal/sse"
+	"github.com/GTDGit/gtd_api/internal/utils"
 	"github.com/GTDGit/gtd_api/internal/worker"
 	"github.com/GTDGit/gtd_api/pkg/alterra"
+	"github.com/GTDGit/gtd_api/pkg/bnc"
 	dfg "github.com/GTDGit/gtd_api/pkg/digiflazz"
 	"github.com/GTDGit/gtd_api/pkg/kiosbank"
 )
@@ -44,6 +46,7 @@ func main() {
 	// 2. Setup logger
 	setupLogger(cfg.Env)
 	log.Info().Str("env", cfg.Env).Msg("starting gtd api")
+	utils.SetJWTSecret(cfg.JWTSecret)
 
 	// 3. Connect database
 	db, err := database.Connect(&cfg.DB)
@@ -86,9 +89,8 @@ func main() {
 	trxRepo := repository.NewTransactionRepository(db)
 	cbRepo := repository.NewCallbackRepository(db)
 	adminRepo := repository.NewAdminUserRepository(db)
-	territoryRepo := repository.NewTerritoryRepository(db)
 	bankCodeRepo := repository.NewBankCodeRepository(db)
-	ocrRepo := repository.NewOCRRepository(db)
+	transferRepo := repository.NewTransferRepository(db)
 	ppobProviderRepo := repository.NewPPOBProviderRepository(db)
 
 	// 5a. Initialize PPOB provider clients
@@ -119,6 +121,32 @@ func main() {
 		}
 	}
 
+	var bncClient *bnc.Client
+	if cfg.Disbursement.BNC.ClientID != "" &&
+		cfg.Disbursement.BNC.ClientSecret != "" &&
+		cfg.Disbursement.BNC.PartnerID != "" &&
+		cfg.Disbursement.BNC.ChannelID != "" &&
+		cfg.Disbursement.BNC.SourceAccount != "" &&
+		cfg.Disbursement.BNC.PrivateKeyPath != "" {
+		var err error
+		bncClient, err = bnc.NewClient(bnc.Config{
+			BaseURL:        cfg.Disbursement.BNC.BaseURL,
+			ClientID:       cfg.Disbursement.BNC.ClientID,
+			ClientSecret:   cfg.Disbursement.BNC.ClientSecret,
+			PartnerID:      cfg.Disbursement.BNC.PartnerID,
+			ChannelID:      cfg.Disbursement.BNC.ChannelID,
+			SourceAccount:  cfg.Disbursement.BNC.SourceAccount,
+			PrivateKeyPath: cfg.Disbursement.BNC.PrivateKeyPath,
+		})
+		if err != nil {
+			log.Warn().Err(err).Msg("BNC disbursement client initialization failed - transfer API will be disabled")
+		} else {
+			log.Info().Msg("BNC disbursement client registered")
+		}
+	} else {
+		log.Info().Msg("BNC disbursement config incomplete - transfer API will be disabled")
+	}
+
 	// 6. Initialize services
 	authSvc := service.NewAuthService(clientRepo)
 	adminAuthSvc := service.NewAdminAuthService(adminRepo)
@@ -128,8 +156,7 @@ func main() {
 	productMasterSvc := service.NewProductMasterService(productMasterRepo)
 	productMgmtSvc := service.NewProductManagementService(productRepo, skuRepo, productMasterSvc)
 	callbackSvc := service.NewCallbackService(clientRepo, cbRepo, trxRepo)
-	// NOTE: Old SyncService disabled - price sync now handled by ProviderSyncWorker
-	// syncSvc := service.NewSyncService(digiProd, productRepo, skuRepo)
+	syncSvc := service.NewSyncService(digiProd, productRepo, skuRepo)
 	trxSvc := service.NewTransactionService(trxRepo, productRepo, skuRepo, cbRepo, digiProd, digiDev, productSvc, callbackSvc, inquiryCache)
 
 	// Wire up callback service to transaction service for immediate retry on webhook
@@ -143,23 +170,6 @@ func main() {
 
 	// Initialize Admin Transaction service
 	adminTrxSvc := service.NewAdminTransactionService(trxRepo, cbRepo, productSvc, trxSvc, callbackSvc)
-
-	// Initialize S3 service for Identity
-	s3Svc, err := service.NewS3Service(&cfg.S3)
-	if err != nil {
-		log.Warn().Err(err).Msg("S3 service initialization failed - OCR file upload will be disabled")
-	}
-
-	// Initialize OCR service
-	ocrSvc := service.NewOCRService(ocrRepo, territoryRepo, &cfg.Identity, s3Svc)
-
-	// Initialize Liveness repository and service
-	livenessRepo := repository.NewLivenessRepository(db)
-	livenessSvc := service.NewLivenessService(livenessRepo, cfg)
-
-	// Initialize FaceCompare repository and service
-	faceCompareRepo := repository.NewFaceCompareRepository(db)
-	faceCompareSvc := service.NewFaceCompareService(faceCompareRepo, s3Svc, cfg)
 
 	// Initialize Provider Router for multi-provider PPOB
 	providerRouter := service.NewProviderRouter(ppobProviderRepo)
@@ -188,6 +198,24 @@ func main() {
 	// Initialize provider callback service
 	providerCallbackSvc := service.NewProviderCallbackService(ppobProviderRepo, trxRepo, callbackSvc)
 	providerCallbackSvc.SetNotifier(sseNotifier)
+	transferCallbackSvc := service.NewTransferCallbackService(clientRepo, bankCodeRepo)
+	transferSvc := service.NewTransferService(
+		transferRepo,
+		bankCodeRepo,
+		bncClient,
+		transferCallbackSvc,
+		cfg.Disbursement.BNC.SourceAccount,
+	)
+	bncConnectorSvc := service.NewBNCConnectorService(
+		transferRepo,
+		transferSvc,
+		cfg.JWTSecret,
+		cfg.Disbursement.BNC.ClientSecret,
+		cfg.Disbursement.BNC.ConnectorClientKey,
+		cfg.Disbursement.BNC.ConnectorPublicKeyPEM,
+		cfg.Disbursement.BNC.ConnectorPublicKeyPath,
+		cfg.Disbursement.BNC.Env,
+	)
 
 	// 7. Initialize handlers
 	handlers := &Handlers{
@@ -201,11 +229,9 @@ func main() {
 		ProductMaster:     handler.NewProductMasterHandler(productMasterSvc),
 		AdminTransaction:  handler.NewAdminTransactionHandler(adminTrxSvc),
 		Auth:              handler.NewAuthHandler(adminAuthSvc),
-		Territory:         handler.NewTerritoryHandler(territoryRepo),
 		BankCode:          handler.NewBankCodeHandler(bankCodeRepo),
-		OCR:               handler.NewOCRHandler(ocrSvc),
-		Liveness:          handler.NewLivenessHandler(livenessSvc),
-		FaceCompare:       handler.NewFaceCompareHandler(faceCompareSvc),
+		Transfer:          handler.NewTransferHandler(transferSvc),
+		BNCConnector:      handler.NewBNCConnectorHandler(bncConnectorSvc),
 		PPOBProvider:      handler.NewPPOBProviderHandler(ppobProviderRepo),
 		ProviderCallback:  handler.NewProviderCallbackHandler(providerCallbackSvc, cfg.Alterra.CallbackPublicKey),
 		SSE:               handler.NewSSEHandler(sseHub),
@@ -230,8 +256,7 @@ func main() {
 	defer cancel()
 
 	// 11. Start workers
-	// NOTE: Old SyncWorker disabled - price sync now handled by ProviderSyncWorker for all providers
-	// go worker.NewSyncWorker(syncSvc, cfg.Worker.SyncInterval).Start(ctx)
+	go worker.NewSyncWorker(syncSvc, cfg.Worker.SyncInterval).Start(ctx)
 	go worker.NewRetryWorker(trxRepo, callbackSvc, cfg.Worker.RetryInterval).Start(ctx)
 	go worker.NewCallbackWorker(callbackSvc, cfg.Worker.CallbackInterval).Start(ctx)
 	go worker.NewDigiflazzCallbackWorker(cbRepo, trxRepo, trxSvc, callbackSvc, cfg.Worker.DigiflazzCallbackInterval).Start(ctx)
@@ -240,6 +265,13 @@ func main() {
 		cfg.Worker.StatusCheckInterval,
 		cfg.Worker.StatusCheckStaleAfter,
 		cfg.Worker.StatusCheckMaxAge,
+	).Start(ctx)
+	go worker.NewTransferStatusWorker(
+		transferSvc,
+		cfg.Worker.StatusCheckInterval,
+		cfg.Worker.StatusCheckStaleAfter,
+		cfg.Worker.StatusCheckMaxAge,
+		50,
 	).Start(ctx)
 
 	// Start provider price sync worker
@@ -290,11 +322,9 @@ type Handlers struct {
 	ProductMaster     *handler.ProductMasterHandler
 	AdminTransaction  *handler.AdminTransactionHandler
 	Auth              *handler.AuthHandler
-	Territory         *handler.TerritoryHandler
 	BankCode          *handler.BankCodeHandler
-	OCR               *handler.OCRHandler
-	Liveness          *handler.LivenessHandler
-	FaceCompare       *handler.FaceCompareHandler
+	Transfer          *handler.TransferHandler
+	BNCConnector      *handler.BNCConnectorHandler
 	PPOBProvider      *handler.PPOBProviderHandler
 	ProviderCallback  *handler.ProviderCallbackHandler
 	SSE               *handler.SSEHandler
@@ -306,7 +336,8 @@ func setupRoutes(router *gin.Engine, handlers *Handlers, authMiddleware *middlew
 	router.POST("/webhook/digiflazz", handlers.Webhook.HandleDigiflazzCallback)
 	router.POST("/webhook/kiosbank", handlers.ProviderCallback.HandleKiosbankCallback)
 	router.POST("/webhook/alterra", handlers.ProviderCallback.HandleAlterraCallback)
-	router.POST("/webhook/:provider", handlers.ProviderCallback.HandleGenericCallback)
+	router.POST("/bnc/v1.0/access-token/b2b", handlers.BNCConnector.CreateAccessToken)
+	router.POST("/bnc/v1.0/transfer/notify", handlers.BNCConnector.HandleTransferNotify)
 
 	router.GET("/v1/health", handlers.Health.GetHealth)
 	// API PPOB routes (protected with client API key)
@@ -319,43 +350,15 @@ func setupRoutes(router *gin.Engine, handlers *Handlers, authMiddleware *middlew
 		ppob.GET("/transaction/:transactionId", handlers.Transaction.GetTransaction)
 	}
 
-	// Territory routes (protected with client API key)
-	territory := router.Group("/v1/territory")
-	territory.Use(authMiddleware.Handle())
-	{
-		territory.GET("/province", handlers.Territory.GetProvinces)
-		territory.GET("/city", handlers.Territory.GetAllCities)
-		territory.GET("/city/:province_code", handlers.Territory.GetCitiesByProvince)
-		territory.GET("/district", handlers.Territory.GetAllDistricts)
-		territory.GET("/district/:city_code", handlers.Territory.GetDistrictsByCity)
-		territory.GET("/sub-district", handlers.Territory.GetAllSubDistricts)
-		territory.GET("/sub-district/:district_code", handlers.Territory.GetSubDistrictsByDistrict)
-		territory.GET("/postal-code", handlers.Territory.GetAllPostalCodes)
-		territory.GET("/postal-code/district/:district_code", handlers.Territory.GetPostalCodesByDistrict)
-		territory.GET("/postal-code/sub-district/:sub_district_code", handlers.Territory.GetPostalCodesBySubDistrict)
-	}
-
 	// Bank codes (protected with client API key)
 	router.GET("/v1/bank-codes", authMiddleware.Handle(), handlers.BankCode.GetBankCodes)
 
-	// Identity OCR routes (protected with client API key)
-	identity := router.Group("/v1/identity")
-	identity.Use(authMiddleware.Handle())
+	transfer := router.Group("/v1/transfer")
+	transfer.Use(authMiddleware.Handle())
 	{
-		// OCR endpoints
-		identity.POST("/ocr/ktp", handlers.OCR.KTPOCR)
-		identity.POST("/ocr/npwp", handlers.OCR.NPWPOCR)
-		identity.POST("/ocr/sim", handlers.OCR.SIMOCR)
-		identity.GET("/ocr/:id", handlers.OCR.GetOCRByID)
-
-		// Liveness endpoints
-		identity.POST("/liveness/session", handlers.Liveness.CreateSession)
-		identity.POST("/liveness/verify", handlers.Liveness.VerifyLiveness)
-		identity.GET("/liveness/session/:sessionId", handlers.Liveness.GetSession)
-
-		// Face Compare endpoints
-		identity.POST("/compare", handlers.FaceCompare.CompareFaces)
-		identity.GET("/compare/:id", handlers.FaceCompare.GetCompareByID)
+		transfer.POST("/inquiry", handlers.Transfer.CreateInquiry)
+		transfer.POST("", handlers.Transfer.CreateTransfer)
+		transfer.GET("/:transferId", handlers.Transfer.GetTransfer)
 	}
 
 	// Admin routes

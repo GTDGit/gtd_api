@@ -1,9 +1,21 @@
--- Drop (postal_codes dulu karena FK ke sub_districts)
-DROP TABLE IF EXISTS postal_codes;
-DROP TABLE IF EXISTS sub_districts;
-DROP TABLE IF EXISTS districts;
+CREATE TABLE provinces (
+    code VARCHAR(2) PRIMARY KEY,
+    name VARCHAR(100) NOT NULL
+);
 
--- Recreate districts (000010)
+CREATE TABLE cities (
+    code VARCHAR(2) NOT NULL,
+    province_code VARCHAR(2) NOT NULL,
+    full_code VARCHAR(4) PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    CONSTRAINT fk_cities_province
+        FOREIGN KEY (province_code)
+        REFERENCES provinces(code)
+);
+
+CREATE INDEX idx_cities_province
+ON cities(province_code);
+
 CREATE TABLE districts (
     code VARCHAR(2) NOT NULL,
     city_code VARCHAR(4) NOT NULL,
@@ -17,8 +29,6 @@ CREATE TABLE districts (
 CREATE INDEX idx_districts_city
 ON districts(city_code);
 
-
--- Recreate sub_districts (000011)
 CREATE TABLE sub_districts (
     code VARCHAR(4) NOT NULL,
     district_code VARCHAR(6) NOT NULL,
@@ -32,7 +42,6 @@ CREATE TABLE sub_districts (
 CREATE INDEX idx_sub_districts_district
 ON sub_districts(district_code);
 
--- Recreate postal_codes (000018)
 CREATE TABLE postal_codes (
     sub_district_code VARCHAR(10) NOT NULL,
     postal_code VARCHAR(5) NOT NULL,

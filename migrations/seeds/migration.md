@@ -5,18 +5,6 @@
 Jalankan seeds satu per satu dengan urutan yang benar:
 
 ```powershell
-# Province
-Get-Content "migrations/seeds/001_province.sql" | docker exec -i gtd-postgres psql -U gtd_user -d gtd
-
-# City
-Get-Content "migrations/seeds/002_city.sql" | docker exec -i gtd-postgres psql -U gtd_user -d gtd
-
-# District
-Get-Content "migrations/seeds/003_district.sql" | docker exec -i gtd-postgres psql -U gtd_user -d gtd
-
-# Sub District
-Get-Content "migrations/seeds/004_sub_district.sql" | docker exec -i gtd-postgres psql -U gtd_user -d gtd
-
 # Admin
 Get-Content "migrations/seeds/005_admin.sql" | docker exec -i gtd-postgres psql -U gtd_user -d gtd
 
@@ -28,9 +16,6 @@ Get-Content "migrations/seeds/007_payment_method.sql" | docker exec -i gtd-postg
 
 # Bank Code
 Get-Content "migrations/seeds/008_bank_code.sql" | docker exec -i gtd-postgres psql -U gtd_user -d gtd
-
-# Postal Code
-Get-Content "migrations/seeds/009_postal_code.sql" | docker exec -i gtd-postgres psql -U gtd_user -d gtd
 ```
 
 Atau jalankan semua sekaligus:
@@ -46,18 +31,6 @@ Get-ChildItem "migrations/seeds/*.sql" -Exclude "all.sql" | Sort-Object Name | F
 Jalankan seeds satu per satu dengan urutan yang benar:
 
 ```bash
-# Province
-docker exec -i gtd-postgres psql -U gtd_user -d gtd < migrations/seeds/001_province.sql
-
-# City
-docker exec -i gtd-postgres psql -U gtd_user -d gtd < migrations/seeds/002_city.sql
-
-# District
-docker exec -i gtd-postgres psql -U gtd_user -d gtd < migrations/seeds/003_district.sql
-
-# Sub District
-docker exec -i gtd-postgres psql -U gtd_user -d gtd < migrations/seeds/004_sub_district.sql
-
 # Admin
 docker exec -i gtd-postgres psql -U gtd_user -d gtd < migrations/seeds/005_admin.sql
 
@@ -69,9 +42,6 @@ docker exec -i gtd-postgres psql -U gtd_user -d gtd < migrations/seeds/007_payme
 
 # Bank Code
 docker exec -i gtd-postgres psql -U gtd_user -d gtd < migrations/seeds/008_bank_code.sql
-
-# Postal Code
-docker exec -i gtd-postgres psql -U gtd_user -d gtd < migrations/seeds/009_postal_code.sql
 ```
 
 Atau jalankan semua sekaligus:
@@ -103,8 +73,8 @@ docker exec -i gtd-postgres psql -U gtd_user -d gtd -c "DELETE FROM schema_migra
 ### Verifikasi data setelah seed
 
 ```bash
-docker exec -i gtd-postgres psql -U gtd_user -d gtd -c "SELECT COUNT(*) as total_provinces FROM provinces;"
-docker exec -i gtd-postgres psql -U gtd_user -d gtd -c "SELECT COUNT(*) as total_cities FROM cities;"
-docker exec -i gtd-postgres psql -U gtd_user -d gtd -c "SELECT COUNT(*) as total_districts FROM districts;"
-docker exec -i gtd-postgres psql -U gtd_user -d gtd -c "SELECT COUNT(*) as total_sub_districts FROM sub_districts;"
+docker exec -i gtd-postgres psql -U gtd_user -d gtd -c "SELECT COUNT(*) as total_admins FROM admin_users;"
+docker exec -i gtd-postgres psql -U gtd_user -d gtd -c "SELECT COUNT(*) as total_clients FROM clients;"
+docker exec -i gtd-postgres psql -U gtd_user -d gtd -c "SELECT COUNT(*) as total_payment_methods FROM payment_methods;"
+docker exec -i gtd-postgres psql -U gtd_user -d gtd -c "SELECT COUNT(*) as total_bank_codes FROM bank_codes;"
 ```

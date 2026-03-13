@@ -391,7 +391,7 @@ func (r *PPOBProviderRepository) GetProductsWithBestPrice(productType, category,
 	offset := (page - 1) * limit
 
 	baseWhere := `WHERE p.is_active = true
-		AND ($1 = '' OR p.type = $1)
+		AND ($1 = '' OR p.type::text = $1)
 		AND ($2 = '' OR p.category = $2)
 		AND ($3 = '' OR p.brand = $3)
 		AND ($4 = '' OR p.name ILIKE '%%' || $4 || '%%')`

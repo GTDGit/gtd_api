@@ -11,6 +11,7 @@ type ProviderCode string
 const (
 	ProviderKiosbank  ProviderCode = "kiosbank"
 	ProviderAlterra   ProviderCode = "alterra"
+	ProviderBRI       ProviderCode = "bri"
 	ProviderDigiflazz ProviderCode = "digiflazz"
 )
 

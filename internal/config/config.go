@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -23,6 +24,7 @@ type Config struct {
 	Worker       WorkerConfig
 	Kiosbank     KiosbankConfig
 	Alterra      AlterraConfig
+	BRI          BRIConfig
 	Disbursement DisbursementConfig
 }
 
@@ -81,6 +83,27 @@ type AlterraConfig struct {
 	PrivateKeyPath    string // Path to RSA private key file
 	PrivateKeyPEM     string // RSA private key PEM content (alternative to path)
 	CallbackPublicKey string // Alterra's public key PEM for verifying callback signatures
+}
+
+// BRIConfig contains configuration for BRI SNAP BI and BRIZZI integrations.
+type BRIConfig struct {
+	Env                    string
+	BaseURL                string
+	ClientID               string
+	ClientSecret           string
+	PartnerID              string
+	ChannelID              string
+	BRIVANumber            string
+	CompanyCode            string
+	SourceAccount          string
+	PrivateKeyPath         string
+	VACallbackURL          string
+	DisbCallbackURL        string
+	ConnectorClientKey     string
+	ConnectorPublicKeyPath string
+	ConnectorPublicKeyPEM  string
+	BRIZZIUsername         string
+	BRIZZIDenominations    []int
 }
 
 // DisbursementConfig contains provider configuration for bank transfers.
@@ -165,6 +188,35 @@ func Load() (*Config, error) {
 		CallbackPublicKey: getEnv("ALTERRA_CALLBACK_PUBLIC_KEY", ""),
 	}
 
+	// BRI SNAP BI / BRIZZI
+	cfg.BRI = BRIConfig{
+		Env:                    getEnv("BRI_ENV", "SANDBOX"),
+		BaseURL:                getEnv("BRI_BASE_URL", ""),
+		ClientID:               getEnv("BRI_CLIENT_ID", ""),
+		ClientSecret:           getEnv("BRI_CLIENT_SECRET", ""),
+		PartnerID:              getEnv("BRI_PARTNER_ID", ""),
+		ChannelID:              getEnv("BRI_CHANNEL_ID", ""),
+		BRIVANumber:            getEnv("BRI_BRIVA_NUMBER", ""),
+		CompanyCode:            getEnv("BRI_COMPANY_CODE", ""),
+		SourceAccount:          getEnv("BRI_SOURCE_ACCOUNT", ""),
+		PrivateKeyPath:         getEnv("BRI_PRIVATE_KEY_PATH", ""),
+		VACallbackURL:          getEnv("BRI_VA_CALLBACK_URL", ""),
+		DisbCallbackURL:        getEnv("BRI_DISB_CALLBACK_URL", ""),
+		ConnectorClientKey:     getEnv("BRI_CONNECTOR_CLIENT_KEY", ""),
+		ConnectorPublicKeyPath: getEnv("BRI_CONNECTOR_PUBLIC_KEY_PATH", ""),
+		ConnectorPublicKeyPEM:  getEnv("BRI_CONNECTOR_PUBLIC_KEY_PEM", ""),
+		BRIZZIUsername:         getEnv("BRI_BRIZZI_USERNAME", ""),
+		BRIZZIDenominations:    getEnvIntList("BRI_BRIZZI_DENOMINATIONS", []int{20000, 50000, 100000, 150000, 200000}),
+	}
+	if cfg.BRI.BaseURL == "" {
+		switch cfg.BRI.Env {
+		case "PRODUCTION":
+			cfg.BRI.BaseURL = "https://partner.api.bri.co.id"
+		default:
+			cfg.BRI.BaseURL = "https://sandbox.partner.api.bri.co.id"
+		}
+	}
+
 	// Disbursement - BNC
 	cfg.Disbursement = DisbursementConfig{
 		BNC: BNCConfig{
@@ -247,6 +299,32 @@ func getEnvInt(key string, def int) int {
 		return def
 	}
 	return i
+}
+
+// getEnvIntList parses a comma-separated integer environment variable.
+func getEnvIntList(key string, def []int) []int {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return append([]int(nil), def...)
+	}
+
+	parts := strings.Split(v, ",")
+	values := make([]int, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		n, err := strconv.Atoi(part)
+		if err != nil {
+			return append([]int(nil), def...)
+		}
+		values = append(values, n)
+	}
+	if len(values) == 0 {
+		return append([]int(nil), def...)
+	}
+	return values
 }
 
 // parseDurationEnv reads an environment variable and parses it as time.Duration.

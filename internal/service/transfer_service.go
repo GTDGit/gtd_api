@@ -20,12 +20,21 @@ import (
 )
 
 const (
+	briSourceBankCode               = "002"
 	bncSourceBankCode               = "490"
 	disbursementInquiryExpiry       = 30 * time.Minute
 	disbursementMinAmount     int64 = 10000
 	disbursementInterbankFee  int64 = 2500
 	transferStatusLookback          = 30 * 24 * time.Hour
 )
+
+type snapTransferClient interface {
+	ExternalAccountInquiry(ctx context.Context, bankCode, accountNo string) (*bnc.AccountInquiryResponse, error)
+	InternalAccountInquiry(ctx context.Context, accountNo string) (*bnc.AccountInquiryResponse, error)
+	InterbankTransfer(ctx context.Context, req bnc.TransferRequest) (*bnc.TransferResponse, error)
+	IntrabankTransfer(ctx context.Context, req bnc.TransferRequest) (*bnc.TransferResponse, error)
+	TransferStatus(ctx context.Context, req bnc.TransferStatusRequest) (*bnc.TransferStatusResponse, error)
+}
 
 var transferPurposeDescriptions = map[string]string{
 	"01": "Investasi",
@@ -75,31 +84,40 @@ type CreateTransferRequest struct {
 }
 
 type TransferService struct {
-	transferRepo  *repository.TransferRepository
-	bankRepo      *repository.BankCodeRepository
-	bncClient     *bnc.Client
-	callbackSvc   *TransferCallbackService
-	sourceAccount string
+	transferRepo     *repository.TransferRepository
+	bankRepo         *repository.BankCodeRepository
+	bncClient        snapTransferClient
+	briClient        snapTransferClient
+	callbackSvc      *TransferCallbackService
+	bncSourceAccount string
+	briSourceAccount string
 }
 
 func NewTransferService(
 	transferRepo *repository.TransferRepository,
 	bankRepo *repository.BankCodeRepository,
-	bncClient *bnc.Client,
+	bncClient snapTransferClient,
+	briClient snapTransferClient,
 	callbackSvc *TransferCallbackService,
-	sourceAccount string,
+	bncSourceAccount string,
+	briSourceAccount string,
 ) *TransferService {
 	return &TransferService{
-		transferRepo:  transferRepo,
-		bankRepo:      bankRepo,
-		bncClient:     bncClient,
-		callbackSvc:   callbackSvc,
-		sourceAccount: strings.TrimSpace(sourceAccount),
+		transferRepo:     transferRepo,
+		bankRepo:         bankRepo,
+		bncClient:        bncClient,
+		briClient:        briClient,
+		callbackSvc:      callbackSvc,
+		bncSourceAccount: strings.TrimSpace(bncSourceAccount),
+		briSourceAccount: strings.TrimSpace(briSourceAccount),
 	}
 }
 
 func (s *TransferService) Available() bool {
-	return s != nil && s.bncClient != nil && s.sourceAccount != ""
+	if s == nil {
+		return false
+	}
+	return (s.bncClient != nil && s.bncSourceAccount != "") || (s.briClient != nil && s.briSourceAccount != "")
 }
 
 func (s *TransferService) Inquiry(
@@ -124,15 +142,20 @@ func (s *TransferService) Inquiry(
 	}
 
 	var (
+		providerClient snapTransferClient
 		inquiryResp *bnc.AccountInquiryResponse
 		rawResp     json.RawMessage
 	)
+	providerClient, err = s.clientForProvider(provider)
+	if err != nil {
+		return nil, err
+	}
 
 	switch transferType {
 	case models.TransferTypeIntrabank:
-		inquiryResp, err = s.bncClient.InternalAccountInquiry(ctx, req.AccountNumber)
+		inquiryResp, err = providerClient.InternalAccountInquiry(ctx, req.AccountNumber)
 	default:
-		inquiryResp, err = s.bncClient.ExternalAccountInquiry(ctx, bank.Code, req.AccountNumber)
+		inquiryResp, err = providerClient.ExternalAccountInquiry(ctx, bank.Code, req.AccountNumber)
 	}
 	if err != nil {
 		return nil, mapInquiryError(err)
@@ -240,6 +263,11 @@ func (s *TransferService) Execute(
 		fee = disbursementInterbankFee
 	}
 
+	sourceBankCode, sourceAccount, err := s.sourceAccountForProvider(inquiry.Provider)
+	if err != nil {
+		return nil, err
+	}
+
 	transfer := &models.Transfer{
 		ReferenceID:         req.ReferenceID,
 		ClientID:            client.ID,
@@ -250,8 +278,8 @@ func (s *TransferService) Execute(
 		BankName:            stringPtr(bank.Name),
 		AccountNumber:       req.AccountNumber,
 		AccountName:         stringPtr(strings.TrimSpace(req.AccountName)),
-		SourceBankCode:      bncSourceBankCode,
-		SourceAccountNumber: s.sourceAccount,
+		SourceBankCode:      sourceBankCode,
+		SourceAccountNumber: sourceAccount,
 		Amount:              req.Amount,
 		Fee:                 fee,
 		TotalAmount:         req.Amount + fee,
@@ -277,12 +305,17 @@ func (s *TransferService) Execute(
 		TransactionDate:        transfer.CreatedAt,
 	}
 
+	providerClient, err := s.clientForProvider(inquiry.Provider)
+	if err != nil {
+		return nil, err
+	}
+
 	var providerResp *bnc.TransferResponse
 	switch inquiry.TransferType {
 	case models.TransferTypeIntrabank:
-		providerResp, err = s.bncClient.IntrabankTransfer(ctx, providerReq)
+		providerResp, err = providerClient.IntrabankTransfer(ctx, providerReq)
 	default:
-		providerResp, err = s.bncClient.InterbankTransfer(ctx, providerReq)
+		providerResp, err = providerClient.InterbankTransfer(ctx, providerReq)
 	}
 	if err != nil {
 		if isUncertainTransferError(err) {
@@ -436,7 +469,10 @@ func (s *TransferService) validateInquiryRequest(ctx context.Context, req *Creat
 		return nil, "", "", newTransferError(400, "INVALID_BANK_CODE", "Bank is not available for disbursement", nil)
 	}
 
-	transferType, provider := resolveTransferRoute(bank.Code)
+	transferType, provider, err := s.resolveTransferRoute(bank.Code)
+	if err != nil {
+		return nil, "", "", err
+	}
 	return bank, transferType, provider, nil
 }
 
@@ -513,14 +549,16 @@ func (s *TransferService) refreshTransferStatus(ctx context.Context, transfer *m
 	if transfer.Status == models.TransferStatusSuccess || transfer.Status == models.TransferStatusFailed {
 		return false, nil
 	}
-	if transfer.Provider != models.DisbursementProviderBNC {
-		return false, nil
-	}
 
 	previousProviderRef := derefString(transfer.ProviderRef)
 	previousProviderData := string(transfer.ProviderData)
 
-	statusResp, err := s.bncClient.TransferStatus(ctx, bnc.TransferStatusRequest{
+	providerClient, err := s.clientForProvider(transfer.Provider)
+	if err != nil {
+		return false, nil
+	}
+
+	statusResp, err := providerClient.TransferStatus(ctx, bnc.TransferStatusRequest{
 		OriginalPartnerReferenceNo: transfer.TransferID,
 		ServiceCode:                providerServiceCode(transfer.TransferType),
 		TransactionDate:            transfer.CreatedAt,
@@ -680,11 +718,58 @@ func (s *TransferService) buildTransferResponse(
 	return resp, nil
 }
 
-func resolveTransferRoute(bankCode string) (models.TransferType, models.DisbursementProvider) {
-	if strings.TrimSpace(bankCode) == bncSourceBankCode {
-		return models.TransferTypeIntrabank, models.DisbursementProviderBNC
+func (s *TransferService) resolveTransferRoute(bankCode string) (models.TransferType, models.DisbursementProvider, error) {
+	switch strings.TrimSpace(bankCode) {
+	case briSourceBankCode:
+		if s.briClient == nil || s.briSourceAccount == "" {
+			return "", "", newTransferError(503, "DISBURSEMENT_UNAVAILABLE", "BRI disbursement provider is not configured", nil)
+		}
+		return models.TransferTypeIntrabank, models.DisbursementProviderBRI, nil
+	case bncSourceBankCode:
+		if s.bncClient == nil || s.bncSourceAccount == "" {
+			return "", "", newTransferError(503, "DISBURSEMENT_UNAVAILABLE", "BNC disbursement provider is not configured", nil)
+		}
+		return models.TransferTypeIntrabank, models.DisbursementProviderBNC, nil
+	default:
+		if s.bncClient == nil || s.bncSourceAccount == "" {
+			return "", "", newTransferError(503, "DISBURSEMENT_UNAVAILABLE", "BNC disbursement provider is not configured", nil)
+		}
+		return models.TransferTypeInterbank, models.DisbursementProviderBNC, nil
 	}
-	return models.TransferTypeInterbank, models.DisbursementProviderBNC
+}
+
+func (s *TransferService) clientForProvider(provider models.DisbursementProvider) (snapTransferClient, error) {
+	switch provider {
+	case models.DisbursementProviderBRI:
+		if s.briClient == nil {
+			return nil, newTransferError(503, "DISBURSEMENT_UNAVAILABLE", "BRI disbursement provider is not configured", nil)
+		}
+		return s.briClient, nil
+	case models.DisbursementProviderBNC:
+		if s.bncClient == nil {
+			return nil, newTransferError(503, "DISBURSEMENT_UNAVAILABLE", "BNC disbursement provider is not configured", nil)
+		}
+		return s.bncClient, nil
+	default:
+		return nil, newTransferError(503, "DISBURSEMENT_UNAVAILABLE", "Selected disbursement provider is not configured", nil)
+	}
+}
+
+func (s *TransferService) sourceAccountForProvider(provider models.DisbursementProvider) (string, string, error) {
+	switch provider {
+	case models.DisbursementProviderBRI:
+		if s.briSourceAccount == "" {
+			return "", "", newTransferError(503, "DISBURSEMENT_UNAVAILABLE", "BRI source account is not configured", nil)
+		}
+		return briSourceBankCode, s.briSourceAccount, nil
+	case models.DisbursementProviderBNC:
+		if s.bncSourceAccount == "" {
+			return "", "", newTransferError(503, "DISBURSEMENT_UNAVAILABLE", "BNC source account is not configured", nil)
+		}
+		return bncSourceBankCode, s.bncSourceAccount, nil
+	default:
+		return "", "", newTransferError(503, "DISBURSEMENT_UNAVAILABLE", "Selected source account is not configured", nil)
+	}
 }
 
 func providerServiceCode(transferType models.TransferType) string {

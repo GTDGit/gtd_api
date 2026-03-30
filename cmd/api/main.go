@@ -29,6 +29,7 @@ import (
 	"github.com/GTDGit/gtd_api/internal/utils"
 	"github.com/GTDGit/gtd_api/internal/worker"
 	"github.com/GTDGit/gtd_api/pkg/alterra"
+	"github.com/GTDGit/gtd_api/pkg/bri"
 	"github.com/GTDGit/gtd_api/pkg/bnc"
 	dfg "github.com/GTDGit/gtd_api/pkg/digiflazz"
 	"github.com/GTDGit/gtd_api/pkg/kiosbank"
@@ -92,6 +93,7 @@ func main() {
 	bankCodeRepo := repository.NewBankCodeRepository(db)
 	transferRepo := repository.NewTransferRepository(db)
 	ppobProviderRepo := repository.NewPPOBProviderRepository(db)
+	paymentRepo := repository.NewPaymentRepository(db)
 
 	// 5a. Initialize PPOB provider clients
 	var kioskbankClient *kiosbank.Client
@@ -147,6 +149,28 @@ func main() {
 		log.Info().Msg("BNC disbursement config incomplete - transfer API will be disabled")
 	}
 
+	var briClient *bri.Client
+	if cfg.BRI.ClientID != "" && cfg.BRI.ClientSecret != "" {
+		var err error
+		briClient, err = bri.NewClient(bri.Config{
+			BaseURL:        cfg.BRI.BaseURL,
+			ClientID:       cfg.BRI.ClientID,
+			ClientSecret:   cfg.BRI.ClientSecret,
+			PartnerID:      cfg.BRI.PartnerID,
+			ChannelID:      cfg.BRI.ChannelID,
+			SourceAccount:  cfg.BRI.SourceAccount,
+			PrivateKeyPath: cfg.BRI.PrivateKeyPath,
+			BRIZZIUsername: cfg.BRI.BRIZZIUsername,
+		})
+		if err != nil {
+			log.Warn().Err(err).Msg("BRI client initialization failed - BRIVA/BRIZZI/transfer BRI will be partially disabled")
+		} else {
+			log.Info().Msg("BRI client registered")
+		}
+	} else {
+		log.Info().Msg("BRI config incomplete - BRIVA/BRIZZI/transfer BRI will be disabled")
+	}
+
 	// 6. Initialize services
 	authSvc := service.NewAuthService(clientRepo)
 	adminAuthSvc := service.NewAdminAuthService(adminRepo)
@@ -183,6 +207,11 @@ func main() {
 		providerRouter.RegisterProvider(models.ProviderAlterra, alterraAdapter)
 		log.Info().Msg("Alterra provider registered")
 	}
+	if briClient != nil && cfg.BRI.BRIZZIUsername != "" {
+		briAdapter := service.NewBRIProviderClient(briClient, cfg.BRI.BRIZZIDenominations)
+		providerRouter.RegisterProvider(models.ProviderBRI, briAdapter)
+		log.Info().Msg("BRI provider registered for BRIZZI")
+	}
 	// Digiflazz is always available as backup
 	digiAdapter := service.NewDigiflazzProviderClient(digiProd, digiDev)
 	providerRouter.RegisterProvider(models.ProviderDigiflazz, digiAdapter)
@@ -203,8 +232,10 @@ func main() {
 		transferRepo,
 		bankCodeRepo,
 		bncClient,
+		briClient,
 		transferCallbackSvc,
 		cfg.Disbursement.BNC.SourceAccount,
+		cfg.BRI.SourceAccount,
 	)
 	bncConnectorSvc := service.NewBNCConnectorService(
 		transferRepo,
@@ -215,6 +246,19 @@ func main() {
 		cfg.Disbursement.BNC.ConnectorPublicKeyPEM,
 		cfg.Disbursement.BNC.ConnectorPublicKeyPath,
 		cfg.Disbursement.BNC.Env,
+	)
+	briConnectorClientKey := cfg.BRI.ConnectorClientKey
+	if briConnectorClientKey == "" {
+		briConnectorClientKey = cfg.BRI.ClientID
+	}
+	briConnectorSvc := service.NewBRIConnectorService(
+		paymentRepo,
+		cfg.JWTSecret,
+		cfg.BRI.ClientSecret,
+		briConnectorClientKey,
+		cfg.BRI.ConnectorPublicKeyPEM,
+		cfg.BRI.ConnectorPublicKeyPath,
+		cfg.BRI.Env,
 	)
 
 	// 7. Initialize handlers
@@ -232,6 +276,7 @@ func main() {
 		BankCode:          handler.NewBankCodeHandler(bankCodeRepo),
 		Transfer:          handler.NewTransferHandler(transferSvc),
 		BNCConnector:      handler.NewBNCConnectorHandler(bncConnectorSvc),
+		BRIConnector:      handler.NewBRIConnectorHandler(briConnectorSvc),
 		PPOBProvider:      handler.NewPPOBProviderHandler(ppobProviderRepo),
 		ProviderCallback:  handler.NewProviderCallbackHandler(providerCallbackSvc, cfg.Alterra.CallbackPublicKey),
 		SSE:               handler.NewSSEHandler(sseHub),
@@ -325,6 +370,7 @@ type Handlers struct {
 	BankCode          *handler.BankCodeHandler
 	Transfer          *handler.TransferHandler
 	BNCConnector      *handler.BNCConnectorHandler
+	BRIConnector      *handler.BRIConnectorHandler
 	PPOBProvider      *handler.PPOBProviderHandler
 	ProviderCallback  *handler.ProviderCallbackHandler
 	SSE               *handler.SSEHandler
@@ -338,6 +384,8 @@ func setupRoutes(router *gin.Engine, handlers *Handlers, authMiddleware *middlew
 	router.POST("/webhook/alterra", handlers.ProviderCallback.HandleAlterraCallback)
 	router.POST("/bnc/v1.0/access-token/b2b", handlers.BNCConnector.CreateAccessToken)
 	router.POST("/bnc/v1.0/transfer/notify", handlers.BNCConnector.HandleTransferNotify)
+	router.POST("/snap/v1.0/access-token/b2b", handlers.BRIConnector.CreateAccessToken)
+	router.POST("/snap/v1.0/transfer-va/notify-payment-intrabank", handlers.BRIConnector.HandleVAPaymentNotify)
 
 	router.GET("/v1/health", handlers.Health.GetHealth)
 	// API PPOB routes (protected with client API key)

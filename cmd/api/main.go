@@ -379,9 +379,9 @@ type Handlers struct {
 // setupRoutes registers all routes.
 func setupRoutes(router *gin.Engine, handlers *Handlers, authMiddleware *middleware.AuthMiddleware, jwtMiddleware *middleware.JWTMiddleware) {
 	// Provider webhook endpoints
-	router.POST("/webhook/digiflazz", handlers.Webhook.HandleDigiflazzCallback)
-	router.POST("/webhook/kiosbank", handlers.ProviderCallback.HandleKiosbankCallback)
-	router.POST("/webhook/alterra", handlers.ProviderCallback.HandleAlterraCallback)
+	router.POST("/v1/webhook/digiflazz", handlers.Webhook.HandleDigiflazzCallback)
+	router.POST("/v1/webhook/kiosbank", handlers.ProviderCallback.HandleKiosbankCallback)
+	router.POST("/v1/webhook/alterra", handlers.ProviderCallback.HandleAlterraCallback)
 	router.POST("/bnc/v1.0/access-token/b2b", handlers.BNCConnector.CreateAccessToken)
 	router.POST("/bnc/v1.0/transfer/notify", handlers.BNCConnector.HandleTransferNotify)
 	router.POST("/snap/v1.0/access-token/b2b", handlers.BRIConnector.CreateAccessToken)

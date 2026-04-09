@@ -59,13 +59,19 @@ func (h *TransactionHandler) CreateTransaction(c *gin.Context) {
     }
 
     message := "Transaction created"
+    httpCode := 201
     if req.Type == "inquiry" {
-        message = "Inquiry success"
+        httpCode = 200
+        if trx.Status == models.StatusFailed {
+            message = "Inquiry failed"
+        } else {
+            message = "Inquiry success"
+        }
     } else if req.Type == "payment" {
         message = "Payment " + strings.ToLower(string(trx.Status))
     }
 
-    utils.Success(c, 201, message, h.formatTransaction(trx))
+    utils.Success(c, httpCode, message, h.formatTransaction(trx))
 }
 
 // GetTransaction handles GET /v1/transaction/:transactionId

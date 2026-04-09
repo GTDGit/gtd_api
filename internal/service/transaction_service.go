@@ -1215,15 +1215,40 @@ func (s *TransactionService) executeInquiryWithProviders(
 			return s.cachedInquiryToTransaction(inquiryData, client.ID, product.ID), nil
 		}
 
-		// Not successful - log and try next provider
+		// Not successful - this is a valid biller response (e.g., wrong number, timeout)
+		// Return as failed inquiry instead of trying next providers
 		log.Warn().
 			Str("provider", string(opt.ProviderCode)).
 			Str("rc", resp.RC).
 			Str("message", resp.Message).
-			Msg("Inquiry failed with provider, trying next")
+			Msg("Inquiry failed with provider (biller error)")
+
+		// Store failed inquiry as provider_response for logging
+		failedReason := resp.Message
+		if failedReason == "" {
+			failedReason = fmt.Sprintf("Inquiry failed: RC %s", resp.RC)
+		}
+		failedTrx := &models.Transaction{
+			TransactionID: trxID,
+			ReferenceID:   req.ReferenceID,
+			ClientID:      client.ID,
+			ProductID:     product.ID,
+			SkuCode:       req.SkuCode,
+			CustomerNo:    req.CustomerNo,
+			Type:          models.TrxTypeInquiry,
+			Status:        models.StatusFailed,
+			FailedReason:  &failedReason,
+			FailedCode:    &resp.RC,
+			Description:   models.NullableRawMessage(resp.Description),
+		}
+		if resp.RawResponse != nil {
+			failedTrx.ProviderResponse = models.NullableRawMessage(resp.RawResponse)
+		}
+
+		return failedTrx, nil
 	}
 
-	// All providers failed, fall back to legacy Digiflazz
+	// All providers failed (network errors), fall back to legacy Digiflazz
 	log.Info().Msg("All multi-providers failed for inquiry, falling back to Digiflazz")
 	return s.executeInquiryWithDigiflazz(ctx, req, client, product, trxID, eod, false)
 }

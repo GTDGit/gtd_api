@@ -176,9 +176,14 @@ func (s *TransactionService) processPrepaid(ctx context.Context, req *CreateTran
 
 	// 6. Try multi-provider routing if available
 	if s.providerRouter != nil && !isSandbox {
-		// Check if we have providers for this product
-		providers, err := s.providerRouter.GetProviderOptions(product.ID)
-		if err == nil && len(providers) > 0 {
+		var providers []models.ProviderOption
+		var provErr error
+		if req.Provider != "" {
+			providers, provErr = s.providerRouter.GetProviderOptionsAll(product.ID)
+		} else {
+			providers, provErr = s.providerRouter.GetProviderOptions(product.ID)
+		}
+		if provErr == nil && len(providers) > 0 {
 			return s.executeWithProviderRouter(ctx, trx, ProviderTrxPrepaid, req.Provider)
 		}
 		// No providers configured, fallback to legacy Digiflazz flow
@@ -457,7 +462,14 @@ func (s *TransactionService) processInquiry(ctx context.Context, req *CreateTran
 
 	// Try multi-provider inquiry if available and not sandbox
 	if s.providerRouter != nil && !isSandbox {
-		providers, provErr := s.providerRouter.GetProviderOptionsPostpaid(product.ID)
+		var providers []models.ProviderOption
+		var provErr error
+		if req.Provider != "" {
+			// When a specific provider is requested, include unavailable SKUs
+			providers, provErr = s.providerRouter.GetProviderOptionsAll(product.ID)
+		} else {
+			providers, provErr = s.providerRouter.GetProviderOptionsPostpaid(product.ID)
+		}
 		if provErr == nil && len(providers) > 0 {
 			return s.executeInquiryWithProviders(ctx, req, client, product, trxID, providers, eod)
 		}

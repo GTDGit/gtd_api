@@ -354,6 +354,33 @@ func (r *PPOBProviderRepository) GetProvidersForProductPostpaid(productID int) (
 	return options, nil
 }
 
+// GetProvidersForProductAll returns providers including unavailable ones.
+// Used when a specific provider is explicitly requested and availability should be ignored.
+func (r *PPOBProviderRepository) GetProvidersForProductAll(productID int) ([]models.ProviderOption, error) {
+	const q = `
+		SELECT
+			pr.id AS provider_id,
+			pr.code AS provider_code,
+			ps.id AS provider_sku_id,
+			ps.provider_sku_code,
+			ps.price,
+			ps.admin,
+			ps.commission,
+			pr.is_backup
+		FROM ppob_provider_skus ps
+		JOIN ppob_providers pr ON ps.provider_id = pr.id
+		WHERE ps.product_id = $1
+		AND ps.is_active = true
+		AND pr.is_active = true
+		ORDER BY pr.is_backup ASC, (ps.admin - ps.commission) ASC, pr.priority ASC`
+
+	var options []models.ProviderOption
+	if err := r.db.Select(&options, q, productID); err != nil {
+		return nil, err
+	}
+	return options, nil
+}
+
 // GetBestPriceForProduct returns the best (lowest) price from non-backup providers.
 func (r *PPOBProviderRepository) GetBestPriceForProduct(productID int) (*int, *int, error) {
 	const q = `

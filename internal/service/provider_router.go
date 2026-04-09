@@ -330,17 +330,8 @@ func (r *ProviderRouter) executeWithProvider(ctx context.Context, productID int,
 		return nil, fmt.Errorf("forced provider %s not registered", req.ForceProvider)
 	}
 
-	// Get provider options based on transaction type
-	var options []models.ProviderOption
-	var err error
-	switch req.Type {
-	case ProviderTrxPrepaid:
-		options, err = r.providerRepo.GetProvidersForProduct(productID)
-	case ProviderTrxInquiry, ProviderTrxPayment:
-		options, err = r.providerRepo.GetProvidersForProductPostpaid(productID)
-	default:
-		return nil, fmt.Errorf("invalid transaction type: %s", req.Type)
-	}
+	// Get provider options — include unavailable since this is a forced provider request
+	options, err := r.providerRepo.GetProvidersForProductAll(productID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get providers: %w", err)
 	}
@@ -429,4 +420,9 @@ func (r *ProviderRouter) GetProviderOptions(productID int) ([]models.ProviderOpt
 // GetProviderOptionsPostpaid returns providers sorted by effective admin (admin - commission) ASC
 func (r *ProviderRouter) GetProviderOptionsPostpaid(productID int) ([]models.ProviderOption, error) {
 	return r.providerRepo.GetProvidersForProductPostpaid(productID)
+}
+
+// GetProviderOptionsAll returns all providers including unavailable ones (for explicit provider requests)
+func (r *ProviderRouter) GetProviderOptionsAll(productID int) ([]models.ProviderOption, error) {
+	return r.providerRepo.GetProvidersForProductAll(productID)
 }

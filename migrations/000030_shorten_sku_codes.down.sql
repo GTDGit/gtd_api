@@ -5,6 +5,8 @@
 
 BEGIN;
 
+UPDATE products SET sku_code = 'ALT-TVKABEL-623' WHERE sku_code = '0705002';
+
 UPDATE products SET sku_code = 'ALT-PULSA-AXIS-5000' WHERE sku_code = '0101001';
 UPDATE products SET sku_code = 'ALT-PULSA-AXIS-10000' WHERE sku_code = '0101002';
 UPDATE products SET sku_code = 'ALT-PULSA-AXIS-15000' WHERE sku_code = '0101003';

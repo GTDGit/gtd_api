@@ -6,6 +6,9 @@
 
 BEGIN;
 
+-- Fix product from older migration (000026) not covered by 000028/000029
+UPDATE products SET sku_code = '0705002' WHERE sku_code = 'ALT-TVKABEL-623';
+
 UPDATE products SET sku_code = '0101001' WHERE sku_code = 'ALT-PULSA-AXIS-5000';
 UPDATE products SET sku_code = '0101002' WHERE sku_code = 'ALT-PULSA-AXIS-10000';
 UPDATE products SET sku_code = '0101003' WHERE sku_code = 'ALT-PULSA-AXIS-15000';

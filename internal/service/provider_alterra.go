@@ -181,7 +181,7 @@ func (c *AlterraProviderClient) GetPriceList(ctx context.Context, category strin
 			Category:    p.ProductType,
 			Brand:       p.Operator,
 			Price:       p.Price,
-			IsActive:    p.Enable,
+			IsActive:    bool(p.Enable),
 		})
 	}
 

@@ -1,6 +1,30 @@
 package alterra
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"strings"
+)
+
+// FlexBool handles JSON booleans that may come as strings ("true"/"false")
+type FlexBool bool
+
+func (fb *FlexBool) UnmarshalJSON(data []byte) error {
+	var raw any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	switch v := raw.(type) {
+	case bool:
+		*fb = FlexBool(v)
+	case string:
+		*fb = FlexBool(strings.EqualFold(v, "true") || v == "1")
+	case float64:
+		*fb = FlexBool(v != 0)
+	default:
+		*fb = false
+	}
+	return nil
+}
 
 // Common Response
 
@@ -26,7 +50,7 @@ type Product struct {
 	Operator    string `json:"operator"`
 	Nominal     int    `json:"nominal"`
 	Price       int    `json:"price"`
-	Enable      bool   `json:"enable"`
+	Enable      FlexBool `json:"enable"`
 }
 
 // ProductListResponse represents product list response
@@ -79,7 +103,7 @@ type TransactionProduct struct {
 	Operator    string `json:"operator"`
 	Nominal     int    `json:"nominal"`
 	Price       int    `json:"price"`
-	Enabled     bool   `json:"enabled"`
+	Enabled     FlexBool `json:"enabled"`
 }
 
 // TransactionData contains additional transaction data

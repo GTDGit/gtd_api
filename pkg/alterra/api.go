@@ -96,7 +96,7 @@ func (c *Client) Inquiry(ctx context.Context, customerID string, productID int, 
 	return &resp, nil
 }
 
-// Payment performs a postpaid payment
+// Payment performs a postpaid payment (uses /purchase endpoint per Alterra docs)
 func (c *Client) Payment(ctx context.Context, customerID string, productID int, orderID string, data json.RawMessage) (*TransactionResponse, error) {
 	if data == nil {
 		data = json.RawMessage("{}")
@@ -110,7 +110,7 @@ func (c *Client) Payment(ctx context.Context, customerID string, productID int, 
 	}
 
 	var resp TransactionResponse
-	if err := c.doRequest(ctx, http.MethodPost, "/api/v5/transaction/payment", req, &resp); err != nil {
+	if err := c.doRequest(ctx, http.MethodPost, "/api/v5/transaction/purchase", req, &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil

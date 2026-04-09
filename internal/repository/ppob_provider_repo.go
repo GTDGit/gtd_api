@@ -176,13 +176,14 @@ func (r *PPOBProviderRepository) GetProviderSKUByID(id int) (*models.PPOBProvide
 // GetProviderSKUsByProduct returns all provider SKUs for a product.
 func (r *PPOBProviderRepository) GetProviderSKUsByProduct(productID int, activeOnly bool) ([]models.PPOBProviderSKU, error) {
 	q := `
-		SELECT 
+		SELECT
 			ps.*,
 			pr.code AS provider_code,
 			pr.name AS provider_name,
 			pr.is_backup,
 			p.name AS product_name,
-			p.sku_code
+			p.sku_code,
+			p.type::text AS product_type
 		FROM ppob_provider_skus ps
 		JOIN ppob_providers pr ON ps.provider_id = pr.id
 		JOIN products p ON ps.product_id = p.id
@@ -203,13 +204,14 @@ func (r *PPOBProviderRepository) GetProviderSKUsByProduct(productID int, activeO
 // GetProviderSKUsByProvider returns all SKUs for a provider.
 func (r *PPOBProviderRepository) GetProviderSKUsByProvider(providerID int) ([]models.PPOBProviderSKU, error) {
 	const q = `
-		SELECT 
+		SELECT
 			ps.*,
 			pr.code AS provider_code,
 			pr.name AS provider_name,
 			pr.is_backup,
 			p.name AS product_name,
-			p.sku_code
+			p.sku_code,
+			p.type::text AS product_type
 		FROM ppob_provider_skus ps
 		JOIN ppob_providers pr ON ps.provider_id = pr.id
 		JOIN products p ON ps.product_id = p.id
@@ -269,13 +271,14 @@ func (r *PPOBProviderRepository) GetAllProviderSKUsPaged(providerID int, search 
 
 	// Fetch
 	listQ := `
-		SELECT 
+		SELECT
 			ps.*,
 			pr.code AS provider_code,
 			pr.name AS provider_name,
 			pr.is_backup,
 			p.name AS product_name,
-			p.sku_code
+			p.sku_code,
+			p.type::text AS product_type
 		FROM ppob_provider_skus ps
 		JOIN ppob_providers pr ON ps.provider_id = pr.id
 		JOIN products p ON ps.product_id = p.id ` + baseWhere + `

@@ -51,6 +51,7 @@ type PPOBProviderSKU struct {
 	ProviderName string       `db:"provider_name" json:"providerName,omitempty"`
 	ProductName  string       `db:"product_name" json:"productName,omitempty"`
 	SkuCode      string       `db:"sku_code" json:"skuCode,omitempty"`
+	ProductType  string       `db:"product_type" json:"productType,omitempty"`
 	IsBackup     bool         `db:"is_backup" json:"isBackup,omitempty"`
 }
 

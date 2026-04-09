@@ -302,13 +302,15 @@ func (r *ProductRepository) GetAllAdmin(filter *AdminProductFilter) (*AdminProdu
 		SELECT
 			p.*,
 			COALESCE(ps.provider_count, 0) AS provider_count,
-			ps.min_price
+			ps.min_price,
+			ps.min_admin
 		FROM products p
 		LEFT JOIN (
 			SELECT
 				psk.product_id,
 				COUNT(DISTINCT psk.provider_id) AS provider_count,
-				MIN(CASE WHEN psk.price > 0 THEN psk.price ELSE NULL END) AS min_price
+				MIN(CASE WHEN psk.price > 0 THEN psk.price ELSE NULL END) AS min_price,
+				MIN(CASE WHEN psk.admin > 0 THEN (psk.admin - psk.commission) ELSE NULL END) AS min_admin
 			FROM ppob_provider_skus psk
 			JOIN ppob_providers ppr ON psk.provider_id = ppr.id
 			WHERE psk.is_active = true AND psk.is_available = true AND ppr.is_active = true

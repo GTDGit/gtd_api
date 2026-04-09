@@ -748,13 +748,20 @@ def generate_sql(all_products):
     lines.append("-- 5. Insert provider SKU mappings for Alterra (dynamic provider_id lookup)")
 
     for p in unique:
+        # Prepaid: cost goes in price field. Postpaid: cost goes in admin field.
+        if p['type'] == 'postpaid':
+            price_val, admin_val = 0, p['price']
+            conflict_set = "admin = EXCLUDED.admin"
+        else:
+            price_val, admin_val = p['price'], 0
+            conflict_set = "price = EXCLUDED.price"
         lines.append(
             f"INSERT INTO ppob_provider_skus (provider_id, product_id, provider_sku_code, provider_product_name, price, admin, commission, is_active, is_available) "
             f"SELECT (SELECT id FROM ppob_providers WHERE code = 'alterra'), p.id, '{p['alterra_product_id']}', '{escape_sql(p['description'])}', "
-            f"{p['price']}, 0, 0, true, true "
+            f"{price_val}, {admin_val}, 0, true, true "
             f"FROM products p WHERE p.sku_code = '{escape_sql(p['sku_code'])}' "
             f"ON CONFLICT (provider_id, provider_sku_code) DO UPDATE SET "
-            f"price = EXCLUDED.price, provider_product_name = EXCLUDED.provider_product_name, "
+            f"{conflict_set}, provider_product_name = EXCLUDED.provider_product_name, "
             f"is_active = true, is_available = true;"
         )
 

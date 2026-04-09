@@ -30,4 +30,5 @@ type Product struct {
 
 	ProviderCount int  `db:"provider_count" json:"providerCount"`
 	MinPrice      *int `db:"min_price" json:"minPrice,omitempty"`
+	MinAdmin      *int `db:"min_admin" json:"minAdmin,omitempty"`
 }

@@ -334,23 +334,39 @@ func (r *ProductRepository) GetAllAdmin(filter *AdminProductFilter) (*AdminProdu
 	}, nil
 }
 
-// GetDistinctCategories returns all distinct categories.
-func (r *ProductRepository) GetDistinctCategories() ([]string, error) {
-	const q = `SELECT DISTINCT category FROM products WHERE category != '' ORDER BY category`
+// GetDistinctCategories returns all distinct categories, optionally filtered by type.
+func (r *ProductRepository) GetDistinctCategories(productType string) ([]string, error) {
+	q := `SELECT DISTINCT category FROM products WHERE category != ''`
+	args := []interface{}{}
+	argIdx := 1
+	if productType != "" {
+		q += ` AND type = $` + fmt.Sprintf("%d", argIdx)
+		args = append(args, productType)
+		argIdx++
+	}
+	q += ` ORDER BY category`
+
 	var categories []string
-	if err := r.db.Select(&categories, q); err != nil {
+	if err := r.db.Select(&categories, q, args...); err != nil {
 		return nil, err
 	}
 	return categories, nil
 }
 
-// GetDistinctBrands returns all distinct brands, optionally filtered by category.
-func (r *ProductRepository) GetDistinctBrands(category string) ([]string, error) {
+// GetDistinctBrands returns all distinct brands, optionally filtered by category and type.
+func (r *ProductRepository) GetDistinctBrands(category, productType string) ([]string, error) {
 	q := `SELECT DISTINCT brand FROM products WHERE brand != ''`
 	args := []interface{}{}
+	argIdx := 1
 	if category != "" {
-		q += ` AND category = $1`
+		q += ` AND category = $` + fmt.Sprintf("%d", argIdx)
 		args = append(args, category)
+		argIdx++
+	}
+	if productType != "" {
+		q += ` AND type = $` + fmt.Sprintf("%d", argIdx)
+		args = append(args, productType)
+		argIdx++
 	}
 	q += ` ORDER BY brand`
 

@@ -312,9 +312,9 @@ func (h *ProductManagementHandler) DeleteSKU(c *gin.Context) {
 	utils.Success(c, 200, "SKU deleted successfully", nil)
 }
 
-// GetCategories handles GET /v1/admin/products/categories
+// GetCategories handles GET /v1/admin/products/categories?type=prepaid
 func (h *ProductManagementHandler) GetCategories(c *gin.Context) {
-	categories, err := h.productMgmtService.GetCategories()
+	categories, err := h.productMgmtService.GetCategories(c.Query("type"))
 	if err != nil {
 		utils.Error(c, 500, "INTERNAL_ERROR", "Failed to retrieve categories")
 		return
@@ -323,9 +323,9 @@ func (h *ProductManagementHandler) GetCategories(c *gin.Context) {
 	utils.Success(c, 200, "Categories retrieved", categories)
 }
 
-// GetBrands handles GET /v1/admin/products/brands
+// GetBrands handles GET /v1/admin/products/brands?category=Pulsa&type=prepaid
 func (h *ProductManagementHandler) GetBrands(c *gin.Context) {
-	brands, err := h.productMgmtService.GetBrands(c.Query("category"))
+	brands, err := h.productMgmtService.GetBrands(c.Query("category"), c.Query("type"))
 	if err != nil {
 		utils.Error(c, 500, "INTERNAL_ERROR", "Failed to retrieve brands")
 		return

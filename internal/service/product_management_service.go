@@ -352,28 +352,12 @@ func (s *ProductManagementService) ListProducts(filter *ListProductsFilter) (*re
 	return s.productRepo.GetAllAdmin(repoFilter)
 }
 
-func (s *ProductManagementService) GetCategories() ([]string, error) {
-	list, err := s.masterService.ListCategories()
-	if err != nil {
-		return nil, err
-	}
-	names := make([]string, len(list))
-	for i := range list {
-		names[i] = list[i].Name
-	}
-	return names, nil
+func (s *ProductManagementService) GetCategories(productType string) ([]string, error) {
+	return s.productRepo.GetDistinctCategories(productType)
 }
 
-func (s *ProductManagementService) GetBrands(_ string) ([]string, error) {
-	list, err := s.masterService.ListBrands()
-	if err != nil {
-		return nil, err
-	}
-	names := make([]string, len(list))
-	for i := range list {
-		names[i] = list[i].Name
-	}
-	return names, nil
+func (s *ProductManagementService) GetBrands(category, productType string) ([]string, error) {
+	return s.productRepo.GetDistinctBrands(category, productType)
 }
 
 // GetVariants returns all product variants (Reguler, Pulsa Transfer, etc) for dropdown.

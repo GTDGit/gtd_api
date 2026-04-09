@@ -5,11 +5,14 @@ Usage:
   python scripts/parse_alterra_catalog.py
 
 Reads: docs/ppob/alterra/20262801 - BPA Product Catalogue  (OPEN).xlsx
-Writes: migrations/000026_overhaul_products_proper.up.sql
-        migrations/000026_overhaul_products_proper.down.sql
+Writes: migrations/000028_reseed_alterra_pricing.up.sql
+        migrations/000028_reseed_alterra_pricing.down.sql
 
-Categories: Pulsa, Listrik, BPJS Kesehatan, PDAM, Gas PGN, Telepon Pascabayar,
-            Internet, TV Kabel, Streaming, Voucher Game, E-Money, Voucher, Edukasi, PBB, Donasi
+Pricing model:
+  Prepaid:  price = buy price (service_fee or sell_price), commission = collection_fee if any
+  Postpaid: admin = service_fee (our cost per trx), commission = collection_fee_for_partner (our revenue)
+  Markup:   products.admin = ~0.2% of price/denom, min 10, max 2000 (prepaid)
+            products.admin = suggested admin from Excel (postpaid)
 """
 
 import openpyxl
@@ -18,8 +21,8 @@ import re
 
 EXCEL_PATH = os.path.join(os.path.dirname(__file__), "..", "docs", "ppob", "alterra",
                           "20262801 - BPA Product Catalogue  (OPEN).xlsx")
-UP_PATH = os.path.join(os.path.dirname(__file__), "..", "migrations", "000026_overhaul_products_proper.up.sql")
-DOWN_PATH = os.path.join(os.path.dirname(__file__), "..", "migrations", "000026_overhaul_products_proper.down.sql")
+UP_PATH = os.path.join(os.path.dirname(__file__), "..", "migrations", "000028_reseed_alterra_pricing.up.sql")
+DOWN_PATH = os.path.join(os.path.dirname(__file__), "..", "migrations", "000028_reseed_alterra_pricing.down.sql")
 
 
 def escape_sql(s):
@@ -29,7 +32,7 @@ def escape_sql(s):
 
 
 def format_rupiah(amount):
-    """Format number as Indonesian Rupiah string: 5000 -> '5.000', 1000000 -> '1.000.000'"""
+    """Format number as Indonesian Rupiah string: 5000 -> '5.000'"""
     s = str(int(amount))
     result = []
     for i, c in enumerate(reversed(s)):
@@ -86,6 +89,8 @@ def normalize_brand(operator):
         return "BRIZZI"
     if "maxim" in op:
         return "MAXIM"
+    if "grab" in op:
+        return "GRAB"
 
     # Clean up generic
     brand = str(operator).strip().upper()
@@ -100,9 +105,22 @@ def safe_int(val):
     if isinstance(val, (int, float)):
         return int(val)
     try:
-        return int(str(val).replace(",", "").replace(".", "").strip())
+        cleaned = str(val).replace(",", "").replace(".", "").strip()
+        return int(cleaned) if cleaned else 0
     except (ValueError, TypeError):
         return 0
+
+
+def safe_float(val):
+    """Safely convert value to float (for percentage commission)."""
+    if val is None:
+        return 0.0
+    if isinstance(val, (int, float)):
+        return float(val)
+    try:
+        return float(str(val).strip())
+    except (ValueError, TypeError):
+        return 0.0
 
 
 def is_product_id(val):
@@ -110,12 +128,38 @@ def is_product_id(val):
     return isinstance(val, (int, float)) and val is not None and val > 0
 
 
+def calc_markup(price_or_denom):
+    """Calculate markup proportional to denomination.
+    ~0.2% of price, min 10, max 2000, rounded to nearest 10."""
+    if price_or_denom <= 0:
+        return 0
+    markup = round(price_or_denom * 0.002 / 10) * 10
+    return max(10, min(2000, markup))
+
+
+def parse_suggested_admin(val):
+    """Parse suggested admin fee from Excel (handles strings like '2,750 - 3,000')."""
+    if val is None:
+        return 0
+    if isinstance(val, (int, float)):
+        return int(val)
+    s = str(val).strip()
+    # Try to extract first number from range like "2,750 - 3,000"
+    m = re.search(r'[\d,]+', s)
+    if m:
+        return safe_int(m.group(0).replace(",", ""))
+    return 0
+
+
 # ============================================================
-# Sheet parsers
+# Sheet parsers - each returns list of product dicts with:
+#   sku_code, name, category, brand, type, description,
+#   alterra_product_id, price, admin, commission, suggested_admin
 # ============================================================
 
 def parse_pulsa(ws):
-    """Parse Pulsa sheet - prepaid mobile top-up."""
+    """Parse Pulsa sheet - prepaid mobile top-up.
+    Cols: Product ID, Tipe, Produk, Denom, Operator, Price Type, Sell Price"""
     products = []
     for row in ws.iter_rows(min_row=2, values_only=True):
         vals = list(row)[:7]
@@ -134,22 +178,21 @@ def parse_pulsa(ws):
         sku_code = f"ALT-PULSA-{brand}-{denom}" if denom > 0 else f"ALT-PULSA-{brand}-{product_id}"
 
         products.append({
-            "sku_code": sku_code,
-            "name": display_name,
-            "category": "Pulsa",
-            "brand": brand,
-            "type": "prepaid",
-            "description": name,
-            "alterra_product_id": product_id,
-            "price": sell_price,
+            "sku_code": sku_code, "name": display_name,
+            "category": "Pulsa", "brand": brand, "type": "prepaid",
+            "description": name, "alterra_product_id": product_id,
+            "price": sell_price, "admin": 0, "commission": 0,
+            "suggested_admin": calc_markup(sell_price),
         })
     return products
 
 
 def parse_pln_bpjs_postpaid(ws):
-    """Parse 'PLN, BPJS & Postpaid' sheet - multiple sections."""
+    """Parse 'PLN, BPJS & Postpaid' sheet - multiple sections with varying column meanings.
+    Key: column header row tells us whether col 4 is 'Service Fee Sepulsa' or 'Collection Fee for Partner'."""
     products = []
     current_section = None
+    col4_is_collection_fee = False  # Track what column 4 means
 
     for row in ws.iter_rows(values_only=True):
         vals = list(row)[:8]
@@ -160,27 +203,39 @@ def parse_pln_bpjs_postpaid(ws):
             lower = first_val.lower().strip()
             if "pln prepaid" in lower:
                 current_section = "pln_prepaid"
+                col4_is_collection_fee = False
                 continue
             elif "pln postpaid" in lower:
                 current_section = "pln_postpaid"
+                col4_is_collection_fee = False
                 continue
             elif "bpjs" in lower and ("product" in lower or "produk" in lower):
                 current_section = "bpjs"
+                col4_is_collection_fee = False
                 continue
             elif "telkom postpaid" in lower:
                 current_section = "telkom_postpaid"
+                col4_is_collection_fee = False
                 continue
             elif "mobile postpaid" in lower:
                 current_section = "mobile_postpaid"
+                col4_is_collection_fee = False
                 continue
             elif "internet service" in lower:
                 current_section = "internet_service"
+                col4_is_collection_fee = False
                 continue
             elif "insurance" in lower:
                 current_section = "insurance"
+                col4_is_collection_fee = False
                 continue
+
+            # Detect column header rows - crucial for knowing if col4 = service_fee or collection_fee
             if "product id" in lower:
+                header_str = " ".join(str(v).lower() for v in vals if v)
+                col4_is_collection_fee = "collection fee" in header_str
                 continue
+            continue
 
         if not is_product_id(first_val):
             continue
@@ -189,13 +244,14 @@ def parse_pln_bpjs_postpaid(ws):
         tipe = str(vals[1]).strip() if vals[1] else ""
         name = str(vals[2]).strip() if vals[2] else ""
         operator = str(vals[3]).strip() if vals[3] else ""
-        service_fee = safe_int(vals[4])
+        fee_val = safe_int(vals[4])
+        suggested = parse_suggested_admin(vals[5])
 
         if current_section == "insurance":
+            # Skip insurance products for now
             continue
 
         if current_section == "pln_prepaid":
-            # Extract denomination from name
             denom = 0
             m = re.search(r'[\d,]+', name.replace("PLN Prepaid Rp. ", "").replace("PLN Prepaid Rp.", ""))
             if m:
@@ -205,56 +261,106 @@ def parse_pln_bpjs_postpaid(ws):
             products.append({
                 "sku_code": sku_code, "name": display_name,
                 "category": "Listrik", "brand": "PLN", "type": "prepaid",
-                "description": name, "alterra_product_id": product_id, "price": service_fee,
+                "description": name, "alterra_product_id": product_id,
+                "price": fee_val, "admin": 0, "commission": 0,
+                "suggested_admin": calc_markup(fee_val),
             })
 
         elif current_section == "pln_postpaid":
+            # admin = service_fee (1150), commission = 0
             products.append({
                 "sku_code": f"ALT-LISTRIK-PLN-POSTPAID-{product_id}",
-                "name": "Tagihan Listrik",
-                "category": "Listrik", "brand": "PLN", "type": "postpaid",
-                "description": name, "alterra_product_id": product_id, "price": service_fee,
+                "name": "Tagihan Listrik", "category": "Listrik", "brand": "PLN",
+                "type": "postpaid", "description": name,
+                "alterra_product_id": product_id,
+                "price": 0, "admin": fee_val, "commission": 0,
+                "suggested_admin": suggested if suggested > 0 else 2750,
             })
 
         elif current_section == "bpjs":
-            products.append({
-                "sku_code": f"ALT-BPJS-{product_id}",
-                "name": "BPJS Kesehatan",
-                "category": "BPJS Kesehatan", "brand": "BPJS", "type": "postpaid",
-                "description": name, "alterra_product_id": product_id, "price": service_fee,
-            })
+            if col4_is_collection_fee:
+                # BPJS Ketenagakerjaan: admin=0, commission=collection_fee
+                products.append({
+                    "sku_code": f"ALT-BPJS-{product_id}",
+                    "name": name if name else "BPJS Ketenagakerjaan",
+                    "category": "BPJS Kesehatan", "brand": "BPJS", "type": "postpaid",
+                    "description": name, "alterra_product_id": product_id,
+                    "price": 0, "admin": 0, "commission": fee_val,
+                    "suggested_admin": 2500,
+                })
+            else:
+                # BPJS Kesehatan: admin=service_fee, commission=0
+                products.append({
+                    "sku_code": f"ALT-BPJS-{product_id}",
+                    "name": name if name else "BPJS Kesehatan",
+                    "category": "BPJS Kesehatan", "brand": "BPJS", "type": "postpaid",
+                    "description": name, "alterra_product_id": product_id,
+                    "price": 0, "admin": fee_val, "commission": 0,
+                    "suggested_admin": suggested if suggested > 0 else 2500,
+                })
 
         elif current_section == "telkom_postpaid":
             products.append({
                 "sku_code": f"ALT-TELPASCABAYAR-TELKOM-{product_id}",
                 "name": name if name else "Tagihan Telkom",
                 "category": "Telepon Pascabayar", "brand": "TELKOM", "type": "postpaid",
-                "description": name, "alterra_product_id": product_id, "price": service_fee,
+                "description": name, "alterra_product_id": product_id,
+                "price": 0, "admin": fee_val, "commission": 0,
+                "suggested_admin": suggested if suggested > 0 else 2500,
             })
 
         elif current_section == "mobile_postpaid":
             brand = normalize_brand(operator)
-            products.append({
-                "sku_code": f"ALT-TELPASCABAYAR-{brand}-{product_id}",
-                "name": name if name else f"Pascabayar {brand}",
-                "category": "Telepon Pascabayar", "brand": brand, "type": "postpaid",
-                "description": name, "alterra_product_id": product_id, "price": service_fee,
-            })
+            if col4_is_collection_fee:
+                # XL, Indosat, Tri, Smartfren: admin=0, commission=collection_fee
+                products.append({
+                    "sku_code": f"ALT-TELPASCABAYAR-{brand}-{product_id}",
+                    "name": name if name else f"Pascabayar {brand}",
+                    "category": "Telepon Pascabayar", "brand": brand, "type": "postpaid",
+                    "description": name, "alterra_product_id": product_id,
+                    "price": 0, "admin": 0, "commission": fee_val,
+                    "suggested_admin": 2500,
+                })
+            else:
+                # Halo: admin=service_fee, commission=0
+                products.append({
+                    "sku_code": f"ALT-TELPASCABAYAR-{brand}-{product_id}",
+                    "name": name if name else f"Pascabayar {brand}",
+                    "category": "Telepon Pascabayar", "brand": brand, "type": "postpaid",
+                    "description": name, "alterra_product_id": product_id,
+                    "price": 0, "admin": fee_val, "commission": 0,
+                    "suggested_admin": suggested if suggested > 0 else 2500,
+                })
 
         elif current_section == "internet_service":
             brand = normalize_brand(operator)
-            products.append({
-                "sku_code": f"ALT-INTERNET-{brand}-{product_id}",
-                "name": name if name else f"Internet {brand}",
-                "category": "Internet", "brand": brand, "type": "postpaid",
-                "description": name, "alterra_product_id": product_id, "price": service_fee,
-            })
+            if col4_is_collection_fee:
+                # Collection fee model: admin=0, commission=collection_fee
+                products.append({
+                    "sku_code": f"ALT-INTERNET-{brand}-{product_id}",
+                    "name": name if name else f"Internet {brand}",
+                    "category": "Internet", "brand": brand, "type": "postpaid",
+                    "description": name, "alterra_product_id": product_id,
+                    "price": 0, "admin": 0, "commission": fee_val,
+                    "suggested_admin": 3500,
+                })
+            else:
+                # Service fee model: admin=service_fee, commission=0
+                products.append({
+                    "sku_code": f"ALT-INTERNET-{brand}-{product_id}",
+                    "name": name if name else f"Internet {brand}",
+                    "category": "Internet", "brand": brand, "type": "postpaid",
+                    "description": name, "alterra_product_id": product_id,
+                    "price": 0, "admin": fee_val, "commission": 0,
+                    "suggested_admin": suggested if suggested > 0 else 3500,
+                })
 
     return products
 
 
 def parse_pbb(ws):
-    """Parse PBB sheet - property tax."""
+    """Parse PBB sheet - property tax.
+    Cols: Product ID, Tipe, Label, Suggested Admin, Service Fee Sepulsa, BPD"""
     products = []
     for row in ws.iter_rows(values_only=True):
         vals = list(row)[:7]
@@ -268,30 +374,33 @@ def parse_pbb(ws):
 
         product_id = int(first_val)
         name = str(vals[2]).strip() if vals[2] else ""
+        suggested = safe_int(vals[3])
         service_fee = safe_int(vals[4])
         bpd = str(vals[5]).strip() if vals[5] else ""
 
-        # Clean name
         clean_name = name.replace("\t", "").strip()
-        brand = "PBB"
 
         products.append({
             "sku_code": f"ALT-PBB-{product_id}",
             "name": clean_name if clean_name else f"PBB {bpd}",
-            "category": "PBB", "brand": brand, "type": "postpaid",
+            "category": "PBB", "brand": "PBB", "type": "postpaid",
             "description": f"{clean_name} - {bpd}" if bpd else clean_name,
-            "alterra_product_id": product_id, "price": service_fee,
+            "alterra_product_id": product_id,
+            "price": 0, "admin": service_fee, "commission": 0,
+            "suggested_admin": suggested if suggested > 0 else 3000,
         })
     return products
 
 
 def parse_gas_pdam(ws):
-    """Parse Gas & PDAM sheet."""
+    """Parse Gas & PDAM sheet.
+    Gas cols: Product ID, Tipe, Produk, Suggested Admin, Operator, Service Fee Sepulsa
+    PDAM cols: Product ID, Tipe, Area, Max Admin, Operator Code, Service Fee, Status, Source, Provinsi, Fee Partner"""
     products = []
     current_section = None
 
     for row in ws.iter_rows(values_only=True):
-        vals = list(row)[:8]
+        vals = list(row)[:10]
         first_val = vals[0]
 
         if isinstance(first_val, str):
@@ -309,59 +418,92 @@ def parse_gas_pdam(ws):
             continue
 
         product_id = int(first_val)
-        name = str(vals[2]).strip() if vals[2] else ""
-        operator = str(vals[4]).strip() if vals[4] else name
-        service_fee = safe_int(vals[5])
 
         if current_section == "gas":
+            name = str(vals[2]).strip() if vals[2] else ""
+            suggested = safe_int(vals[3])
+            operator = str(vals[4]).strip() if vals[4] else name
+            service_fee = safe_int(vals[5])
             brand = normalize_brand(operator) if operator else "PGN"
             products.append({
                 "sku_code": f"ALT-GAS-{product_id}",
-                "name": name,
-                "category": "Gas PGN", "brand": brand, "type": "postpaid",
-                "description": name, "alterra_product_id": product_id, "price": service_fee,
+                "name": name, "category": "Gas PGN", "brand": brand,
+                "type": "postpaid", "description": name,
+                "alterra_product_id": product_id,
+                "price": 0, "admin": service_fee, "commission": 0,
+                "suggested_admin": suggested if suggested > 0 else 3000,
             })
 
         elif current_section == "pdam":
-            # Check status column if available
+            name = str(vals[2]).strip() if vals[2] else ""
+            max_admin = safe_int(vals[3])
+            service_fee = safe_int(vals[5])
             status = str(vals[6]).strip().upper() if vals[6] else "OPEN"
+
             if status != "OPEN" and status != "":
                 continue
 
-            # Extract PDAM name as brand
-            pdam_name = name.upper().replace("PDAM ", "").strip()
-            brand = f"PDAM {pdam_name}" if not name.upper().startswith("PDAM") else name.upper()
-            # Simplify brand
-            brand = name.upper() if len(name) < 40 else pdam_name[:30]
+            # commission = max_admin - service_fee (what Alterra pays us)
+            commission = max(0, max_admin - service_fee) if max_admin > 0 and service_fee > 0 else 0
 
             products.append({
                 "sku_code": f"ALT-PDAM-{product_id}",
-                "name": name,
-                "category": "PDAM", "brand": "PDAM", "type": "postpaid",
-                "description": name, "alterra_product_id": product_id, "price": service_fee,
+                "name": name, "category": "PDAM", "brand": "PDAM",
+                "type": "postpaid", "description": name,
+                "alterra_product_id": product_id,
+                "price": 0, "admin": service_fee, "commission": commission,
+                "suggested_admin": max_admin if max_admin > 0 else 2500,
             })
 
     return products
 
 
 def parse_ticket_ewallet(ws):
-    """Parse Ticket & Ewallet sheet - use product type column to categorize."""
-    products = []
-    col_has_denom = False
-    col_has_type = False
+    """Parse Ticket & Ewallet sheet - multiple sections with different column layouts.
 
-    for i, row in enumerate(ws.iter_rows(values_only=True)):
-        vals = list(row)[:8]
+    Sheet structure:
+      Row 1:  "Ticketing" section header
+      Row 3:  Product ID header (6 cols: ID, Type, Name, Suggested Admin, Operator, Service Fee)
+      Row 4:  KAI data
+      Row 6:  Product ID header (3 cols: ID, Produk, Service Fee) → e-meterai
+      Row 7:  E-meterai data
+      Row 9:  "GRAB DRIVER" section header
+      Row 10: Product ID header (7 cols with End User Price)
+      Row 11+: GRAB DRIVER data
+      Row 17: Product ID header (6 cols with Denom) → ewallet
+      Row 18+: All other e-wallet data
+    """
+    products = []
+    current_section = None
+
+    for row in ws.iter_rows(values_only=True):
+        vals = list(row)[:10]
         first_val = vals[0]
 
-        # Detect column format from header rows
+        # Detect section headers (non-data text rows)
         if isinstance(first_val, str):
             lower = first_val.lower().strip()
-            if "product id" in lower or "product id" == lower:
-                # Check what columns we have
-                headers = [str(v).lower().strip() if v else "" for v in vals]
-                col_has_type = any("tipe" in h or "type" in h for h in headers[1:3])
-                col_has_denom = any("denom" in h for h in headers)
+
+            # Named section headers
+            if "ticketing" in lower:
+                current_section = "ticketing"
+                continue
+            elif "grab driver" in lower:
+                current_section = "grab_driver"
+                continue
+
+            # Column header rows - detect format by column count and content
+            if "product id" in lower:
+                header_str = " ".join(str(v).lower() for v in vals if v)
+                populated_cols = sum(1 for v in vals[:7] if v is not None)
+                if "end user price" in header_str:
+                    current_section = "grab_driver"
+                elif populated_cols <= 3:
+                    # Compact format: ID, Produk, Fee → e-meterai
+                    current_section = "emeterai"
+                elif "denom" in header_str:
+                    current_section = "ewallet"
+                # else: keep current_section (e.g. ticketing header with 6 cols)
                 continue
             continue
 
@@ -370,24 +512,55 @@ def parse_ticket_ewallet(ws):
 
         product_id = int(first_val)
 
-        # Determine product type from column 1 (if type column exists)
-        tipe = str(vals[1]).strip().lower() if vals[1] and col_has_type else ""
-
-        # Route based on product type value
-        if "ticket" in tipe or "train" in tipe:
+        if current_section == "ticketing":
+            # Cols: ID, Type, Name, Suggested Admin, Operator, Service Fee
             name = str(vals[2]).strip() if vals[2] else ""
+            suggested = safe_int(vals[3])
             operator = str(vals[4]).strip() if vals[4] else ""
             service_fee = safe_int(vals[5])
             brand = normalize_brand(operator) if operator else "LAINNYA"
             products.append({
                 "sku_code": f"ALT-TIKET-{product_id}",
-                "name": name,
-                "category": "Tiket", "brand": brand, "type": "prepaid",
-                "description": name, "alterra_product_id": product_id, "price": service_fee,
+                "name": name, "category": "Tiket", "brand": brand,
+                "type": "prepaid", "description": name,
+                "alterra_product_id": product_id,
+                "price": service_fee, "admin": 0, "commission": 0,
+                "suggested_admin": calc_markup(service_fee) if service_fee > 0 else suggested,
             })
 
-        elif "ewallet" in tipe or "wallet" in tipe:
-            # E-wallet product - cols vary but typically: ID, Tipe, Produk, Denom, Operator, Price
+        elif current_section == "emeterai":
+            # Cols: ID, Produk, Service Fee
+            name = str(vals[1]).strip() if vals[1] else ""
+            service_fee = safe_int(vals[2])
+            brand = "E-METERAI" if "meterai" in name.lower() else "LAINNYA"
+            products.append({
+                "sku_code": f"ALT-EMONEY-{product_id}",
+                "name": name, "category": "E-Money", "brand": brand,
+                "type": "prepaid", "description": name,
+                "alterra_product_id": product_id,
+                "price": service_fee, "admin": 0, "commission": 0,
+                "suggested_admin": calc_markup(service_fee),
+            })
+
+        elif current_section == "grab_driver":
+            # Cols: ID, Type, Name, Denom, Operator, End User Price / Service Fee
+            name = str(vals[2]).strip() if vals[2] else ""
+            denom = safe_int(vals[3])
+            operator = str(vals[4]).strip() if vals[4] else ""
+            price = safe_int(vals[5])
+            brand = normalize_brand(operator) if operator else "GRAB"
+            display_name = f"Rp {format_rupiah(denom)}" if denom > 0 else name
+            products.append({
+                "sku_code": f"ALT-EMONEY-{brand}-{product_id}",
+                "name": display_name, "category": "E-Money", "brand": brand,
+                "type": "prepaid", "description": name,
+                "alterra_product_id": product_id,
+                "price": price, "admin": 0, "commission": 0,
+                "suggested_admin": calc_markup(price),
+            })
+
+        elif current_section == "ewallet":
+            # Cols: ID, Type, Name, Denom, Operator, Service Fee
             name = str(vals[2]).strip() if vals[2] else ""
             denom = safe_int(vals[3])
             operator = str(vals[4]).strip() if vals[4] else ""
@@ -399,46 +572,21 @@ def parse_ticket_ewallet(ws):
 
             brand = normalize_brand(operator) if operator else normalize_brand(name)
             display_name = f"Rp {format_rupiah(denom)}" if denom > 0 else name
-
             products.append({
                 "sku_code": f"ALT-EMONEY-{brand}-{product_id}",
-                "name": display_name,
-                "category": "E-Money", "brand": brand, "type": "prepaid",
-                "description": name, "alterra_product_id": product_id, "price": service_fee,
-            })
-
-        elif not col_has_type:
-            # No type column - likely e-meterai or similar (ID, Produk, Fee)
-            name = str(vals[1]).strip() if vals[1] else ""
-            service_fee = safe_int(vals[2])
-            brand = "E-METERAI" if "meterai" in name.lower() else "LAINNYA"
-            products.append({
-                "sku_code": f"ALT-EMONEY-{product_id}",
-                "name": name,
-                "category": "E-Money", "brand": brand, "type": "prepaid",
-                "description": name, "alterra_product_id": product_id, "price": service_fee,
-            })
-
-        else:
-            # Unknown type - still add as e-money
-            name = str(vals[2]).strip() if vals[2] else ""
-            denom = safe_int(vals[3])
-            operator = str(vals[4]).strip() if vals[4] else ""
-            service_fee = safe_int(vals[5])
-            brand = normalize_brand(operator) if operator else normalize_brand(name)
-            display_name = f"Rp {format_rupiah(denom)}" if denom > 0 else name
-            products.append({
-                "sku_code": f"ALT-EMONEY-{brand}-{product_id}",
-                "name": display_name,
-                "category": "E-Money", "brand": brand, "type": "prepaid",
-                "description": name, "alterra_product_id": product_id, "price": service_fee,
+                "name": display_name, "category": "E-Money", "brand": brand,
+                "type": "prepaid", "description": name,
+                "alterra_product_id": product_id,
+                "price": service_fee, "admin": 0, "commission": 0,
+                "suggested_admin": calc_markup(service_fee),
             })
 
     return products
 
 
 def parse_game(ws):
-    """Parse Game sheet - game top-ups."""
+    """Parse Game sheet - prepaid game top-ups.
+    Cols: Product ID, Product Type, Product Name, Nominal, Publisher, Service Fee Sepulsa"""
     products = []
     for row in ws.iter_rows(min_row=2, values_only=True):
         vals = list(row)[:7]
@@ -452,7 +600,6 @@ def parse_game(ws):
         publisher = str(vals[4]).strip() if vals[4] else ""
         service_fee = safe_int(vals[5])
 
-        # Extract game name as brand
         brand = publisher.upper().replace("TOPUP ", "").replace("TOP UP ", "").strip()
         brand = re.sub(r'[^A-Z0-9 &\-]', '', brand).strip()
         if not brand:
@@ -460,32 +607,47 @@ def parse_game(ws):
 
         products.append({
             "sku_code": f"ALT-GAME-{product_id}",
-            "name": name,
-            "category": "Voucher Game", "brand": brand, "type": "prepaid",
-            "description": name, "alterra_product_id": product_id, "price": service_fee,
+            "name": name, "category": "Voucher Game", "brand": brand,
+            "type": "prepaid", "description": name,
+            "alterra_product_id": product_id,
+            "price": service_fee, "admin": 0, "commission": 0,
+            "suggested_admin": calc_markup(service_fee),
         })
     return products
 
 
 def parse_streaming_tv(ws):
-    """Parse Streaming & TV sheet."""
+    """Parse Streaming & TV sheet - multiple sections.
+    Streaming: Service Fee Sepulsa (prepaid, price=service_fee)
+    Spotify/YouTube: Collection Fee for Partner as % (prepaid, price=denom, commission=denom*%)
+    TV Cable Prepaid: Collection Fee for Partner as absolute (prepaid, price=denom, commission=fee)"""
     products = []
     current_section = None
+    col5_is_collection_fee = False
 
     for row in ws.iter_rows(values_only=True):
-        vals = list(row)[:8]
+        vals = list(row)[:10]
         first_val = vals[0]
 
         if isinstance(first_val, str):
             lower = first_val.lower()
-            if "streaming" in lower and ("voucher" in lower or "prepaid" in lower):
+            if "streaming voucher" in lower:
                 current_section = "streaming"
+                col5_is_collection_fee = False
+                continue
+            elif "tv cable prepaid" in lower:
+                current_section = "tv_prepaid"
+                col5_is_collection_fee = True
                 continue
             elif "tv" in lower and ("postpaid" in lower or "cable" in lower or "tagihan" in lower):
                 current_section = "tv_postpaid"
+                col5_is_collection_fee = True
                 continue
-            if "product" in lower:
+            if "product id" in lower:
+                header_str = " ".join(str(v).lower() for v in vals if v)
+                col5_is_collection_fee = "collection fee" in header_str
                 continue
+            continue
 
         if not is_product_id(first_val):
             continue
@@ -495,31 +657,66 @@ def parse_streaming_tv(ws):
         name = str(vals[2]).strip() if vals[2] else ""
         denom = safe_int(vals[3])
         publisher = str(vals[4]).strip() if vals[4] else ""
-        service_fee = safe_int(vals[5])
+        fee_val = safe_float(vals[5])
 
         brand = publisher.upper().strip()
         brand = re.sub(r'[^A-Z0-9 &\-]', '', brand).strip() or "LAINNYA"
 
-        tipe_lower = tipe.lower()
-        if current_section == "tv_postpaid" or "postpaid" in tipe_lower or "tagihan" in tipe_lower or "cable" in tipe_lower:
-            category = "TV Kabel"
-            prod_type = "postpaid"
-        else:
-            category = "Streaming"
-            prod_type = "prepaid"
+        if col5_is_collection_fee:
+            # Collection fee model: price = denom, commission calculated from fee
+            if fee_val < 1:
+                # Percentage: commission = denom * percentage
+                commission = int(round(denom * fee_val))
+            else:
+                # Absolute value
+                commission = int(fee_val)
 
-        cat_prefix = "TVKABEL" if category == "TV Kabel" else "STREAMING"
-        products.append({
-            "sku_code": f"ALT-{cat_prefix}-{product_id}",
-            "name": name,
-            "category": category, "brand": brand, "type": prod_type,
-            "description": name, "alterra_product_id": product_id, "price": service_fee,
-        })
+            if current_section == "tv_postpaid":
+                cat_prefix = "TVKABEL"
+                category = "TV Kabel"
+                prod_type = "postpaid"
+                products.append({
+                    "sku_code": f"ALT-{cat_prefix}-{product_id}",
+                    "name": name, "category": category, "brand": brand,
+                    "type": prod_type, "description": name,
+                    "alterra_product_id": product_id,
+                    "price": 0, "admin": 0, "commission": commission,
+                    "suggested_admin": 3000,
+                })
+            else:
+                # Prepaid with collection fee (Spotify, YouTube, K-Vision)
+                if "paytv" in tipe.lower() or current_section == "tv_prepaid":
+                    category = "TV Kabel"
+                    cat_prefix = "TVKABEL"
+                else:
+                    category = "Streaming"
+                    cat_prefix = "STREAMING"
+                products.append({
+                    "sku_code": f"ALT-{cat_prefix}-{product_id}",
+                    "name": name, "category": category, "brand": brand,
+                    "type": "prepaid", "description": name,
+                    "alterra_product_id": product_id,
+                    "price": denom, "admin": 0, "commission": commission,
+                    "suggested_admin": calc_markup(denom),
+                })
+        else:
+            # Service fee model: price = service_fee
+            service_fee = int(fee_val)
+            products.append({
+                "sku_code": f"ALT-STREAMING-{product_id}",
+                "name": name, "category": "Streaming", "brand": brand,
+                "type": "prepaid", "description": name,
+                "alterra_product_id": product_id,
+                "price": service_fee, "admin": 0, "commission": 0,
+                "suggested_admin": calc_markup(service_fee),
+            })
+
     return products
 
 
 def parse_voucher_deals(ws):
-    """Parse Voucher Deals sheet."""
+    """Parse Voucher Deals sheet - prepaid vouchers.
+    Cols: Product ID, Product Type, Product Name, Denom, Operator, Service Fee Sepulsa"""
     products = []
     for row in ws.iter_rows(min_row=2, values_only=True):
         vals = list(row)[:7]
@@ -539,15 +736,18 @@ def parse_voucher_deals(ws):
 
         products.append({
             "sku_code": f"ALT-VOUCHER-{product_id}",
-            "name": display_name,
-            "category": "Voucher", "brand": brand, "type": "prepaid",
-            "description": name, "alterra_product_id": product_id, "price": service_fee,
+            "name": display_name, "category": "Voucher", "brand": brand,
+            "type": "prepaid", "description": name,
+            "alterra_product_id": product_id,
+            "price": service_fee, "admin": 0, "commission": 0,
+            "suggested_admin": calc_markup(service_fee),
         })
     return products
 
 
 def parse_donation(ws):
-    """Parse Donation sheet."""
+    """Parse Donation sheet - prepaid with collection fee.
+    Cols: Product ID, Tipe, Label, Denom, Operator, Collection Fee for Partner"""
     products = []
     for row in ws.iter_rows(min_row=2, values_only=True):
         vals = list(row)[:7]
@@ -559,7 +759,7 @@ def parse_donation(ws):
         name = str(vals[2]).strip() if vals[2] else ""
         denom = safe_int(vals[3])
         operator = str(vals[4]).strip() if vals[4] else ""
-        service_fee = safe_int(vals[5])
+        collection_fee = safe_int(vals[5])
 
         brand = operator.upper().replace("INFAQ ", "").strip()
         brand = re.sub(r'[^A-Z0-9 &\-]', '', brand).strip() or "LAINNYA"
@@ -567,15 +767,47 @@ def parse_donation(ws):
 
         products.append({
             "sku_code": f"ALT-DONASI-{product_id}",
-            "name": display_name,
-            "category": "Donasi", "brand": brand, "type": "prepaid",
-            "description": name, "alterra_product_id": product_id, "price": service_fee,
+            "name": display_name, "category": "Donasi", "brand": brand,
+            "type": "prepaid", "description": name,
+            "alterra_product_id": product_id,
+            "price": denom, "admin": 0, "commission": collection_fee,
+            "suggested_admin": calc_markup(denom),
+        })
+    return products
+
+
+def parse_property(ws):
+    """Parse Property sheet - postpaid residential payments.
+    Cols: Product ID, Product Type, Product Name, Service Fee Sepulsa, Max Admin Fee"""
+    products = []
+    for row in ws.iter_rows(values_only=True):
+        vals = list(row)[:5]
+        first_val = vals[0]
+
+        if isinstance(first_val, str):
+            continue
+        if not is_product_id(first_val):
+            continue
+
+        product_id = int(first_val)
+        name = str(vals[2]).strip() if vals[2] else ""
+        service_fee = safe_int(vals[3])
+        max_admin = safe_int(vals[4])
+
+        products.append({
+            "sku_code": f"ALT-PROPERTY-{product_id}",
+            "name": name, "category": "Properti", "brand": "PROPERTI",
+            "type": "postpaid", "description": name,
+            "alterra_product_id": product_id,
+            "price": 0, "admin": service_fee, "commission": 0,
+            "suggested_admin": max_admin if max_admin > 0 else 3000,
         })
     return products
 
 
 def parse_edukasi(ws):
-    """Parse Edukasi sheet - postpaid education payments."""
+    """Parse Edukasi sheet - postpaid education payments.
+    Cols: Product ID, Tipe, Label, Operator, Service Fee Sepulsa, Suggested Admin"""
     products = []
     for row in ws.iter_rows(values_only=True):
         vals = list(row)[:7]
@@ -587,28 +819,31 @@ def parse_edukasi(ws):
         name = str(vals[2]).strip() if vals[2] else ""
         operator = str(vals[3]).strip() if vals[3] else ""
         service_fee = safe_int(vals[4])
+        suggested = parse_suggested_admin(vals[5])
 
         brand = operator.upper().strip() if operator else "LAINNYA"
         brand = re.sub(r'[^A-Z0-9 &\-]', '', brand).strip() or "LAINNYA"
 
         products.append({
             "sku_code": f"ALT-EDU-{product_id}",
-            "name": name,
-            "category": "Edukasi", "brand": brand, "type": "postpaid",
-            "description": name, "alterra_product_id": product_id, "price": service_fee,
+            "name": name, "category": "Edukasi", "brand": brand,
+            "type": "postpaid", "description": name,
+            "alterra_product_id": product_id,
+            "price": 0, "admin": service_fee, "commission": 0,
+            "suggested_admin": suggested if suggested > 0 else 3000,
         })
     return products
 
 
 def parse_voucher_edukasi(ws):
-    """Parse Voucher Edukasi sheet - prepaid education vouchers."""
+    """Parse Voucher Edukasi sheet - prepaid education vouchers with collection fee.
+    Cols: Product ID, Product Type, Product Name, Denom, Operator, Collection Fee for Partner"""
     products = []
     prev_product_id = None
     for row in ws.iter_rows(min_row=2, values_only=True):
         vals = list(row)[:7]
         raw_id = vals[0]
 
-        # Handle Excel formula references like '=A2+1'
         if isinstance(raw_id, str) and raw_id.startswith("="):
             if prev_product_id is not None:
                 raw_id = prev_product_id + 1
@@ -622,7 +857,7 @@ def parse_voucher_edukasi(ws):
         name = str(vals[2]).strip() if vals[2] else ""
         denom = safe_int(vals[3])
         operator = str(vals[4]).strip() if vals[4] else ""
-        service_fee = safe_int(vals[5])
+        collection_fee = safe_int(vals[5])
 
         brand = operator.upper().strip() if operator else "LAINNYA"
         brand = re.sub(r'[^A-Z0-9 &\-]', '', brand).strip() or "LAINNYA"
@@ -630,9 +865,11 @@ def parse_voucher_edukasi(ws):
 
         products.append({
             "sku_code": f"ALT-VOUCHEREDU-{product_id}",
-            "name": display_name,
-            "category": "Edukasi", "brand": brand, "type": "prepaid",
-            "description": name, "alterra_product_id": product_id, "price": service_fee,
+            "name": display_name, "category": "Edukasi", "brand": brand,
+            "type": "prepaid", "description": name,
+            "alterra_product_id": product_id,
+            "price": denom, "admin": 0, "commission": collection_fee,
+            "suggested_admin": calc_markup(denom),
         })
     return products
 
@@ -641,24 +878,12 @@ def parse_voucher_edukasi(ws):
 # SQL Generation
 # ============================================================
 
-# Master categories with display order
 CATEGORIES = [
-    ("Pulsa", 1),
-    ("Listrik", 2),
-    ("BPJS Kesehatan", 3),
-    ("PDAM", 4),
-    ("Gas PGN", 5),
-    ("Telepon Pascabayar", 6),
-    ("Internet", 7),
-    ("TV Kabel", 8),
-    ("Streaming", 9),
-    ("Voucher Game", 10),
-    ("E-Money", 11),
-    ("Voucher", 12),
-    ("Donasi", 13),
-    ("Edukasi", 14),
-    ("PBB", 15),
-    ("Tiket", 16),
+    ("Pulsa", 1), ("Listrik", 2), ("BPJS Kesehatan", 3), ("PDAM", 4),
+    ("Gas PGN", 5), ("Telepon Pascabayar", 6), ("Internet", 7),
+    ("TV Kabel", 8), ("Streaming", 9), ("Voucher Game", 10),
+    ("E-Money", 11), ("Voucher", 12), ("Donasi", 13), ("Edukasi", 14),
+    ("PBB", 15), ("Tiket", 16), ("Properti", 17),
 ]
 
 
@@ -696,9 +921,10 @@ def generate_sql(all_products):
 
     lines = []
     lines.append("-- ============================================")
-    lines.append("-- Migration 000026: Complete Product Data Overhaul")
+    lines.append("-- Migration 000028: Reseed Alterra Pricing")
     lines.append("-- Auto-generated by scripts/parse_alterra_catalog.py")
-    lines.append("-- Proper Indonesian PPOB standard categories, brands, and naming")
+    lines.append("-- Correct pricing: prepaid->price, postpaid->admin/commission")
+    lines.append("-- Markup in products.admin, commission captured from collection_fee")
     lines.append("-- ============================================")
     lines.append("")
     lines.append("BEGIN;")
@@ -733,35 +959,34 @@ def generate_sql(all_products):
     lines.append("ON CONFLICT (name) DO UPDATE SET display_order = EXCLUDED.display_order;")
     lines.append("")
 
-    # 4. Insert products
-    lines.append("-- 4. Insert products")
+    # 4. Insert products with markup in admin field
+    lines.append("-- 4. Insert products (admin = markup for prepaid, suggested admin for postpaid)")
     for p in unique:
+        product_admin = p["suggested_admin"]
         lines.append(
             f"INSERT INTO products (sku_code, name, category, brand, type, admin, commission, description, is_active) "
             f"VALUES ('{escape_sql(p['sku_code'])}', '{escape_sql(p['name'])}', '{escape_sql(p['category'])}', "
-            f"'{escape_sql(p['brand'])}', '{p['type']}', 0, 0, "
+            f"'{escape_sql(p['brand'])}', '{p['type']}', {product_admin}, 0, "
             f"'{escape_sql(p['description'])}', true) "
-            f"ON CONFLICT (sku_code) DO NOTHING;"
+            f"ON CONFLICT (sku_code) DO UPDATE SET admin = EXCLUDED.admin;"
         )
 
     lines.append("")
-    lines.append("-- 5. Insert provider SKU mappings for Alterra (dynamic provider_id lookup)")
+    lines.append("-- 5. Insert provider SKU mappings for Alterra")
 
     for p in unique:
-        # Prepaid: cost goes in price field. Postpaid: cost goes in admin field.
-        if p['type'] == 'postpaid':
-            price_val, admin_val = 0, p['price']
-            conflict_set = "admin = EXCLUDED.admin"
-        else:
-            price_val, admin_val = p['price'], 0
-            conflict_set = "price = EXCLUDED.price"
+        price_val = p["price"]
+        admin_val = p["admin"]
+        commission_val = p["commission"]
+
         lines.append(
             f"INSERT INTO ppob_provider_skus (provider_id, product_id, provider_sku_code, provider_product_name, price, admin, commission, is_active, is_available) "
             f"SELECT (SELECT id FROM ppob_providers WHERE code = 'alterra'), p.id, '{p['alterra_product_id']}', '{escape_sql(p['description'])}', "
-            f"{price_val}, {admin_val}, 0, true, true "
+            f"{price_val}, {admin_val}, {commission_val}, true, true "
             f"FROM products p WHERE p.sku_code = '{escape_sql(p['sku_code'])}' "
             f"ON CONFLICT (provider_id, provider_sku_code) DO UPDATE SET "
-            f"{conflict_set}, provider_product_name = EXCLUDED.provider_product_name, "
+            f"price = EXCLUDED.price, admin = EXCLUDED.admin, commission = EXCLUDED.commission, "
+            f"provider_product_name = EXCLUDED.provider_product_name, "
             f"is_active = true, is_available = true;"
         )
 
@@ -799,6 +1024,7 @@ def main():
         ("Streaming & TV", parse_streaming_tv),
         ("Voucher Deals", parse_voucher_deals),
         ("Donation", parse_donation),
+        ("Property", parse_property),
         ("Edukasi", parse_edukasi),
         ("Voucher Edukasi", parse_voucher_edukasi),
     ]
@@ -818,11 +1044,14 @@ def main():
     categories = {}
     brands_set = set()
     types = {"prepaid": 0, "postpaid": 0}
+    with_commission = 0
     for p in all_products:
         cat = p["category"]
         categories[cat] = categories.get(cat, 0) + 1
         types[p["type"]] += 1
         brands_set.add(p["brand"])
+        if p["commission"] > 0:
+            with_commission += 1
 
     print(f"\nTotal products: {len(all_products)}")
     print("By category:")
@@ -832,12 +1061,21 @@ def main():
     for t, count in types.items():
         print(f"  {t}: {count}")
     print(f"Unique brands: {len(brands_set)}")
+    print(f"Products with commission > 0: {with_commission}")
+
+    # Show some pricing samples
+    print("\n--- Pricing Samples ---")
+    for cat in sorted(categories.keys()):
+        samples = [p for p in all_products if p["category"] == cat][:2]
+        for s in samples:
+            print(f"  {cat} ({s['type']}): price={s['price']}, admin={s['admin']}, "
+                  f"commission={s['commission']}, product_markup={s['suggested_admin']} | {s['name']}")
 
     # Deduplicate count
     seen = set()
     for p in all_products:
         seen.add(p["alterra_product_id"])
-    print(f"Unique products (by alterra_product_id): {len(seen)}")
+    print(f"\nUnique products (by alterra_product_id): {len(seen)}")
 
     # Generate SQL
     up_sql = generate_sql(all_products)

@@ -930,13 +930,9 @@ def generate_sql(all_products):
     lines.append("BEGIN;")
     lines.append("")
 
-    # 1. Clean everything
-    lines.append("-- 1. Clean all existing data")
-    lines.append("DELETE FROM ppob_provider_skus;")
-    lines.append("DELETE FROM skus;")
-    lines.append("DELETE FROM products;")
-    lines.append("DELETE FROM product_categories;")
-    lines.append("DELETE FROM product_brands;")
+    # 1. Clean provider SKUs for Alterra only (products have FK from transactions, can't delete)
+    lines.append("-- 1. Clean Alterra provider SKUs only (products preserved for FK integrity)")
+    lines.append("DELETE FROM ppob_provider_skus WHERE provider_id = (SELECT id FROM ppob_providers WHERE code = 'alterra');")
     lines.append("")
 
     # 2. Seed master categories
@@ -959,8 +955,8 @@ def generate_sql(all_products):
     lines.append("ON CONFLICT (name) DO UPDATE SET display_order = EXCLUDED.display_order;")
     lines.append("")
 
-    # 4. Insert products with markup in admin field
-    lines.append("-- 4. Insert products (admin = markup for prepaid, suggested admin for postpaid)")
+    # 4. Upsert products with markup in admin field
+    lines.append("-- 4. Upsert products (admin = markup for prepaid, suggested admin for postpaid)")
     for p in unique:
         product_admin = p["suggested_admin"]
         lines.append(
@@ -968,7 +964,9 @@ def generate_sql(all_products):
             f"VALUES ('{escape_sql(p['sku_code'])}', '{escape_sql(p['name'])}', '{escape_sql(p['category'])}', "
             f"'{escape_sql(p['brand'])}', '{p['type']}', {product_admin}, 0, "
             f"'{escape_sql(p['description'])}', true) "
-            f"ON CONFLICT (sku_code) DO UPDATE SET admin = EXCLUDED.admin;"
+            f"ON CONFLICT (sku_code) DO UPDATE SET name = EXCLUDED.name, category = EXCLUDED.category, "
+            f"brand = EXCLUDED.brand, type = EXCLUDED.type, admin = EXCLUDED.admin, "
+            f"description = EXCLUDED.description;"
         )
 
     lines.append("")

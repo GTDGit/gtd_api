@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strconv"
 	"sync"
 	"time"
@@ -128,12 +129,18 @@ func (c *AlterraProviderClient) Payment(ctx context.Context, req *ProviderReques
 	return c.convertResponse(resp, req.RefID, responseTime), nil
 }
 
-// CheckStatus checks transaction status
+// CheckStatus checks transaction status using Alterra's transaction ID
 func (c *AlterraProviderClient) CheckStatus(ctx context.Context, refID string) (*ProviderResponse, error) {
 	client := c.getClient(false)
 	startTime := time.Now()
 
-	resp, err := client.GetTransactionByOrderID(ctx, refID)
+	// refID is Alterra's transaction ID (numeric string)
+	trxID, err := strconv.Atoi(refID)
+	if err != nil {
+		return nil, fmt.Errorf("invalid alterra transaction id %q: %w", refID, err)
+	}
+
+	resp, err := client.GetTransactionByID(ctx, trxID)
 	responseTime := time.Since(startTime)
 
 	if err != nil {

@@ -89,21 +89,32 @@ type CheckStatusResponse struct {
 	Data        PaymentData `json:"data"`
 }
 
+// toPaymentResponse converts CheckStatusResponse to PaymentResponse for reuse
+func (r *CheckStatusResponse) ToPaymentResponse() *PaymentResponse {
+	return &PaymentResponse{
+		BaseResponse: r.BaseResponse,
+		CustomerID:   r.CustomerID,
+		ProductID:    r.ProductID,
+		ReferenceID:  r.ReferenceID,
+		Data:         r.Data,
+	}
+}
+
 // PriceListItem represents a product in price list
+// getDaftar-Harga returns: code, name, category, price, status
+// getPulsa-Prabayar returns: code, name, price
 type PriceListItem struct {
-	ProductID   string `json:"productID"`
-	ProductName string `json:"productName"`
-	Category    string `json:"category,omitempty"`
-	Brand       string `json:"brand,omitempty"`
-	Price       int    `json:"price,omitempty"`
-	Admin       int    `json:"admin,omitempty"`
-	Status      string `json:"status"`
+	Code     string `json:"code"`
+	Name     string `json:"name"`
+	Category string `json:"category,omitempty"`
+	Price    string `json:"price,omitempty"`
+	Status   string `json:"status,omitempty"`
 }
 
 // PriceListResponse is the response from Price List
 type PriceListResponse struct {
 	BaseResponse
-	Data []PriceListItem `json:"data"`
+	Record []PriceListItem `json:"record"`
 }
 
 // CallbackPayload represents the callback from Kiosbank

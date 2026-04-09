@@ -12,23 +12,28 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/GTDGit/gtd_api/internal/models"
+	"github.com/GTDGit/gtd_api/internal/repository"
 	"github.com/GTDGit/gtd_api/pkg/kiosbank"
 )
 
 // KiosbankProviderClient implements PPOBProviderClient for Kiosbank
 type KiosbankProviderClient struct {
-	prodClient *kiosbank.Client
-	devClient  *kiosbank.Client
-	healthy    bool
-	healthMu   sync.RWMutex
+	prodClient   *kiosbank.Client
+	devClient    *kiosbank.Client
+	trxRepo      *repository.TransactionRepository
+	providerRepo *repository.PPOBProviderRepository
+	healthy      bool
+	healthMu     sync.RWMutex
 }
 
 // NewKiosbankProviderClient creates a new Kiosbank provider client
-func NewKiosbankProviderClient(prodClient, devClient *kiosbank.Client) *KiosbankProviderClient {
+func NewKiosbankProviderClient(prodClient, devClient *kiosbank.Client, trxRepo *repository.TransactionRepository, providerRepo *repository.PPOBProviderRepository) *KiosbankProviderClient {
 	return &KiosbankProviderClient{
-		prodClient: prodClient,
-		devClient:  devClient,
-		healthy:    true,
+		prodClient:   prodClient,
+		devClient:    devClient,
+		trxRepo:      trxRepo,
+		providerRepo: providerRepo,
+		healthy:      true,
 	}
 }
 
@@ -75,7 +80,13 @@ func (c *KiosbankProviderClient) Inquiry(ctx context.Context, req *ProviderReque
 	client := c.getClient(req.IsSandbox)
 	startTime := time.Now()
 
-	resp, err := client.Inquiry(ctx, req.SKUCode, req.CustomerNo, req.RefID)
+	// Extract BPJS periode from Extra
+	periode := ""
+	if v, ok := req.Extra["periode"].(string); ok {
+		periode = v
+	}
+
+	resp, err := client.Inquiry(ctx, req.SKUCode, req.CustomerNo, req.RefID, periode)
 	responseTime := time.Since(startTime)
 
 	if err != nil {
@@ -100,7 +111,21 @@ func (c *KiosbankProviderClient) Payment(ctx context.Context, req *ProviderReque
 	}
 	total := tagihan + admin
 
-	resp, err := client.Payment(ctx, req.SKUCode, req.CustomerNo, req.RefID, tagihan, admin, total)
+	// Extract product-specific fields
+	noHandphone := ""
+	if v, ok := req.Extra["noHandphone"].(string); ok {
+		noHandphone = v
+	}
+	nama := ""
+	if v, ok := req.Extra["nama"].(string); ok {
+		nama = v
+	}
+	kode := ""
+	if v, ok := req.Extra["kode"].(string); ok {
+		kode = v
+	}
+
+	resp, err := client.Payment(ctx, req.SKUCode, req.CustomerNo, req.RefID, tagihan, admin, total, noHandphone, nama, kode)
 	responseTime := time.Since(startTime)
 
 	if err != nil {
@@ -112,11 +137,47 @@ func (c *KiosbankProviderClient) Payment(ctx context.Context, req *ProviderReque
 	return c.convertPaymentResponse(resp, req.RefID, responseTime), nil
 }
 
-// CheckStatus checks transaction status
+// CheckStatus checks transaction status by looking up original transaction data
 func (c *KiosbankProviderClient) CheckStatus(ctx context.Context, refID string) (*ProviderResponse, error) {
-	// Kiosbank requires all original parameters for check status
-	// This should be called with the full request info stored somewhere
-	return nil, fmt.Errorf("CheckStatus not implemented for %s: requires original request parameters", c.Code())
+	// Look up the transaction by provider_ref_id to get original params
+	trx, err := c.trxRepo.GetByProviderRefID(refID)
+	if err != nil {
+		return nil, fmt.Errorf("cannot check status: transaction not found for ref %s: %w", refID, err)
+	}
+
+	// Get provider SKU code (Kiosbank productID)
+	if trx.ProviderSKUID == nil {
+		return nil, fmt.Errorf("cannot check status: no provider SKU ID for transaction %s", trx.TransactionID)
+	}
+	providerSKU, err := c.providerRepo.GetProviderSKUByID(*trx.ProviderSKUID)
+	if err != nil {
+		return nil, fmt.Errorf("cannot check status: failed to get provider SKU: %w", err)
+	}
+
+	// Reconstruct original amounts
+	tagihan := 0
+	if trx.Amount != nil {
+		tagihan = *trx.Amount
+	}
+	admin := trx.Admin
+	total := tagihan + admin
+
+	// Transaction date for tglTransaksi
+	tglTransaksi := trx.CreatedAt.Format("2006-01-02")
+
+	client := c.getClient(trx.IsSandbox)
+	startTime := time.Now()
+
+	resp, err := client.CheckStatus(ctx, providerSKU.ProviderSKUCode, trx.CustomerNo, trx.TransactionID, tagihan, admin, total, tglTransaksi)
+	responseTime := time.Since(startTime)
+
+	if err != nil {
+		c.markUnhealthy()
+		return nil, err
+	}
+
+	c.markHealthy()
+	return c.convertPaymentResponse(resp.ToPaymentResponse(), refID, responseTime), nil
 }
 
 // GetPriceList fetches current prices
@@ -131,18 +192,13 @@ func (c *KiosbankProviderClient) GetPriceList(ctx context.Context, category stri
 		return nil, err
 	}
 
-	for _, p := range pulsaResp.Data {
-		if category != "" && p.Category != category {
-			continue
-		}
+	for _, p := range pulsaResp.Record {
+		price := parseAmount(p.Price)
 		products = append(products, ProviderProduct{
-			SKUCode:     p.ProductID,
-			ProductName: p.ProductName,
-			Category:    p.Category,
-			Brand:       p.Brand,
-			Price:       p.Price,
-			Admin:       p.Admin,
-			IsActive:    p.Status == "ACTIVE",
+			SKUCode:     p.Code,
+			ProductName: p.Name,
+			Price:       price,
+			IsActive:    true, // pulsa pricelist doesn't have status field
 		})
 	}
 
@@ -152,18 +208,18 @@ func (c *KiosbankProviderClient) GetPriceList(ctx context.Context, category stri
 		return nil, err
 	}
 
-	for _, p := range generalResp.Data {
-		if category != "" && p.Category != category {
+	for _, p := range generalResp.Record {
+		if category != "" && !strings.EqualFold(p.Category, category) {
 			continue
 		}
+		price := parseAmount(p.Price)
+		isActive := strings.EqualFold(p.Status, "AKTIF")
 		products = append(products, ProviderProduct{
-			SKUCode:     p.ProductID,
-			ProductName: p.ProductName,
+			SKUCode:     p.Code,
+			ProductName: p.Name,
 			Category:    p.Category,
-			Brand:       p.Brand,
-			Price:       p.Price,
-			Admin:       p.Admin,
-			IsActive:    p.Status == "ACTIVE",
+			Price:       price,
+			IsActive:    isActive,
 		})
 	}
 
@@ -238,6 +294,12 @@ func (c *KiosbankProviderClient) convertPaymentResponse(resp *kiosbank.PaymentRe
 	amount := parseAmount(resp.Data.Tagihan)
 	admin := parseAmount(resp.Data.Admin)
 
+	// Extract serial number from known fields
+	sn := resp.Data.SerialNumber
+	if sn == "" {
+		sn = resp.Data.Token
+	}
+
 	// Create description
 	desc := map[string]any{
 		"idPelanggan": resp.Data.IDPelanggan,
@@ -260,7 +322,7 @@ func (c *KiosbankProviderClient) convertPaymentResponse(resp *kiosbank.PaymentRe
 		Status:        getStatusFromRC(resp.RC),
 		RC:            resp.RC,
 		Message:       resp.Description,
-		SerialNumber:  resp.Data.SerialNumber,
+		SerialNumber:  sn,
 		CustomerName:  resp.Data.Nama,
 		Amount:        amount,
 		Admin:         admin,

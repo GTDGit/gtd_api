@@ -200,7 +200,7 @@ func main() {
 	// Initialize Provider Router for multi-provider PPOB
 	providerRouter := service.NewProviderRouter(ppobProviderRepo)
 	if kioskbankClient != nil {
-		kiosbankAdapter := service.NewKiosbankProviderClient(kioskbankClient, kioskbankClient) // Same client for prod/dev
+		kiosbankAdapter := service.NewKiosbankProviderClient(kioskbankClient, kioskbankClient, trxRepo, ppobProviderRepo) // Same client for prod/dev
 		providerRouter.RegisterProvider(models.ProviderKiosbank, kiosbankAdapter)
 		log.Info().Msg("Kiosbank provider registered")
 	}

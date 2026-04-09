@@ -206,8 +206,14 @@ func (r *ProviderRouter) Execute(ctx context.Context, productID int, req *Provid
 			req.RefID = baseRefID
 		}
 
-		// Update SKU code for this provider
+		// Update SKU code and amounts for this provider
 		req.SKUCode = opt.ProviderSKUCode
+		req.Amount = opt.Price
+		if req.Extra == nil {
+			req.Extra = make(map[string]any)
+		}
+		req.Extra["admin"] = opt.Admin
+		req.Extra["commission"] = opt.Commission
 
 		result.ProvidersTried = append(result.ProvidersTried, opt)
 
@@ -215,6 +221,7 @@ func (r *ProviderRouter) Execute(ctx context.Context, productID int, req *Provid
 			Str("provider", string(opt.ProviderCode)).
 			Str("sku_code", opt.ProviderSKUCode).
 			Int("price", opt.Price).
+			Int("admin", opt.Admin).
 			Bool("is_backup", opt.IsBackup).
 			Str("ref_id", req.RefID).
 			Msg("Trying provider")
@@ -350,12 +357,20 @@ func (r *ProviderRouter) executeWithProvider(ctx context.Context, productID int,
 		return nil, fmt.Errorf("provider %s not available for product %d", req.ForceProvider, productID)
 	}
 
-	// Update SKU code for this provider
+	// Update SKU code and amounts for this provider
 	req.SKUCode = opt.ProviderSKUCode
+	req.Amount = opt.Price
+	if req.Extra == nil {
+		req.Extra = make(map[string]any)
+	}
+	req.Extra["admin"] = opt.Admin
+	req.Extra["commission"] = opt.Commission
 
 	log.Info().
 		Str("provider", string(opt.ProviderCode)).
 		Str("sku_code", opt.ProviderSKUCode).
+		Int("price", opt.Price).
+		Int("admin", opt.Admin).
 		Str("type", string(req.Type)).
 		Str("ref_id", req.RefID).
 		Msg("Executing with forced provider")

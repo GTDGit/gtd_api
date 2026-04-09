@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -46,10 +48,13 @@ func (s *ProviderCallbackService) ProcessKiosbankCallback(ctx context.Context, p
 	// Log the callback for audit
 	rawPayload, _ := json.Marshal(payload)
 
-	// Extract reference ID
-	refID, _ := payload["ref_id"].(string)
+	// Extract reference ID — Kiosbank uses "referenceID" (capital ID)
+	refID, _ := payload["referenceID"].(string)
 	if refID == "" {
 		refID, _ = payload["referenceId"].(string)
+	}
+	if refID == "" {
+		refID, _ = payload["ref_id"].(string)
 	}
 	if refID == "" {
 		return fmt.Errorf("no reference ID in Kiosbank callback")
@@ -123,13 +128,16 @@ func (s *ProviderCallbackService) ProcessKiosbankCallback(ctx context.Context, p
 	now := time.Now()
 	if kiosbank.IsSuccess(rc) {
 		trx.Status = models.StatusSuccess
-		if sn, ok := payload["sn"].(string); ok && sn != "" {
-			trx.SerialNumber = &sn
-		}
-		// Set buy_price from callback
-		if price, ok := payload["price"].(float64); ok && price > 0 {
-			bp := int(price)
-			trx.BuyPrice = &bp
+		// Extract serial number from data sub-object (product-specific keys)
+		if data, ok := payload["data"].(map[string]any); ok {
+			sn := extractKiosbankSN(data)
+			if sn != "" {
+				trx.SerialNumber = &sn
+			}
+			// Extract buy price from data (tagihan or harga)
+			if bp := extractKiosbankBuyPrice(data); bp > 0 {
+				trx.BuyPrice = &bp
+			}
 		}
 		trx.ProcessedAt = &now
 		if err := s.trxRepo.Update(trx); err != nil {
@@ -281,6 +289,62 @@ func (s *ProviderCallbackService) ProcessAlterraCallback(ctx context.Context, pa
 	_ = s.providerRepo.UpdateProviderCallbackProcessed(callback.ID, true)
 
 	return nil
+}
+
+// extractKiosbankSN extracts serial number from Kiosbank callback data object.
+// Different products use different field names for the serial/token.
+func extractKiosbankSN(data map[string]any) string {
+	// PLN Token
+	if tk, ok := data["TK"].(string); ok && tk != "" {
+		return tk
+	}
+	// Generic SN
+	if sn, ok := data["sn"].(string); ok && sn != "" {
+		return sn
+	}
+	// Voucher code (streaming, game voucher)
+	if kv, ok := data["kodeVoucher"].(string); ok && kv != "" {
+		return kv
+	}
+	// Biller reference number
+	if nr, ok := data["noReferensi"].(string); ok && nr != "" {
+		return nr
+	}
+	return ""
+}
+
+// extractKiosbankBuyPrice extracts buy price from Kiosbank callback data.
+func extractKiosbankBuyPrice(data map[string]any) int {
+	// Try tagihan (postpaid)
+	if v, ok := data["tagihan"].(string); ok && v != "" {
+		return parseCallbackAmount(v)
+	}
+	// Try harga (prepaid/singlepayment)
+	if v, ok := data["harga"].(string); ok && v != "" {
+		return parseCallbackAmount(v)
+	}
+	// Try RS (PLN token - rupiah)
+	if v, ok := data["RS"].(string); ok && v != "" {
+		return parseCallbackAmount(v)
+	}
+	// Try as float64 (JSON number)
+	if v, ok := data["tagihan"].(float64); ok && v > 0 {
+		return int(v)
+	}
+	return 0
+}
+
+// parseCallbackAmount parses a Kiosbank amount string (may have leading zeros) to int.
+func parseCallbackAmount(s string) int {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0
+	}
+	v, err := strconv.Atoi(s)
+	if err != nil {
+		return 0
+	}
+	return v
 }
 
 // ProcessGenericCallback processes a generic provider callback

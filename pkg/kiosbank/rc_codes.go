@@ -52,27 +52,30 @@ var successCodes = map[string]bool{
 }
 
 // pendingCodes are RC values that indicate pending/processing (for Payment)
+// Per Kiosbank docs: these RCs are PENDING for payment, wait for callback
 var pendingCodes = map[string]bool{
-	RCBillerNoResponse:     true,
-	RCNoResponseFromBiller: true,
-	RCNoResponseFromHost:   true,
-	RCStorageIssue:         true,
-	RCBillerLinkDown:       true,
-	RCTimeout:              true,
-	RCProcessing:           true,
+	RCUndefinedError:       true, // 01: Payment=PENDING per docs
+	RCBillerNoResponse:     true, // 03
+	RCNoResponseFromBiller: true, // 04
+	RCNoResponseFromHost:   true, // 05
+	RCStorageIssue:         true, // 14
+	RCDataNotFound:         true, // 19: Payment=PENDING per docs
+	RCBillerLinkDown:       true, // 38
+	RCTimeout:              true, // 39
+	RCProcessFailure:       true, // 67: Payment=PENDING per docs
+	RCProcessing:           true, // 71
 }
 
 // fatalCodes are RC values that indicate definite failure (no retry)
 var fatalCodes = map[string]bool{
-	RCUndefinedError:      true, // Error tidak terdefinisi - should fail immediately
 	RCFormatError:         true,
 	RCCannotProcess:       true,
 	RCInsufficientBalance: true,
 	RCUnknownProduct:      true,
-	RCTransactionFailed:   true,
+	RCTransactionFailed:   true, // 17: definitive failure
 	RCNotRegistered:       true,
-	RCDataNotFound:        true, // Data tidak ditemukan - should fail for inquiry
 	RCCannotTransact:      true,
+	RCSessionExpired:      true,
 	RCAdminError:          true,
 	RCUnknownMessage:      true,
 	RCNotAuthorized:       true,
@@ -83,7 +86,6 @@ var fatalCodes = map[string]bool{
 	RCBillNotAvailable:    true,
 	RCAlreadyPaid:         true,
 	RCInvalidCustomer:     true,
-	RCProcessFailure:      true, // Gagal proses - should fail immediately
 	RCDailyLimitReached:   true,
 	RCNumberNotAllowed:    true,
 	RCInvalidAmount:       true,

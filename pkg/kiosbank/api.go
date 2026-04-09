@@ -21,7 +21,7 @@ func (c *Client) SignOn(ctx context.Context) (*SignOnResponse, error) {
 }
 
 // Inquiry checks customer bill information
-func (c *Client) Inquiry(ctx context.Context, productID, customerID, referenceID string) (*InquiryResponse, error) {
+func (c *Client) Inquiry(ctx context.Context, productID, customerID, referenceID, periode string) (*InquiryResponse, error) {
 	sessionID, err := c.ensureSession(ctx)
 	if err != nil {
 		return nil, err
@@ -33,6 +33,7 @@ func (c *Client) Inquiry(ctx context.Context, productID, customerID, referenceID
 		ProductID:   productID,
 		CustomerID:  customerID,
 		ReferenceID: formatReferenceID(referenceID),
+		Periode:     periode,
 	}
 
 	var resp InquiryResponse
@@ -43,7 +44,7 @@ func (c *Client) Inquiry(ctx context.Context, productID, customerID, referenceID
 }
 
 // Payment pays a postpaid bill
-func (c *Client) Payment(ctx context.Context, productID, customerID, referenceID string, tagihan, admin, total int) (*PaymentResponse, error) {
+func (c *Client) Payment(ctx context.Context, productID, customerID, referenceID string, tagihan, admin, total int, noHandphone, nama, kode string) (*PaymentResponse, error) {
 	sessionID, err := c.ensureSession(ctx)
 	if err != nil {
 		return nil, err
@@ -58,6 +59,9 @@ func (c *Client) Payment(ctx context.Context, productID, customerID, referenceID
 		Tagihan:     formatAmount(tagihan),
 		Admin:       formatAmount(admin),
 		Total:       formatAmount(total),
+		NoHandphone: noHandphone,
+		Nama:        nama,
+		Kode:        kode,
 	}
 
 	var resp PaymentResponse
@@ -93,21 +97,23 @@ func (c *Client) SinglePayment(ctx context.Context, productID, customerID, refer
 }
 
 // CheckStatus checks transaction status
-func (c *Client) CheckStatus(ctx context.Context, productID, customerID, referenceID string, tagihan, admin, total int) (*CheckStatusResponse, error) {
+// tglTransaksi must be YYYY-MM-DD format (date of original payment)
+func (c *Client) CheckStatus(ctx context.Context, productID, customerID, referenceID string, tagihan, admin, total int, tglTransaksi string) (*CheckStatusResponse, error) {
 	sessionID, err := c.ensureSession(ctx)
 	if err != nil {
 		return nil, err
 	}
 
 	req := CheckStatusRequest{
-		SessionID:   sessionID,
-		MerchantID:  c.config.MerchantID,
-		ProductID:   productID,
-		CustomerID:  customerID,
-		ReferenceID: formatReferenceID(referenceID),
-		Tagihan:     formatAmount(tagihan),
-		Admin:       formatAmount(admin),
-		Total:       formatAmount(total),
+		SessionID:    sessionID,
+		MerchantID:   c.config.MerchantID,
+		ProductID:    productID,
+		CustomerID:   customerID,
+		ReferenceID:  formatReferenceID(referenceID),
+		Tagihan:      formatAmount(tagihan),
+		Admin:        formatAmount(admin),
+		Total:        formatAmount(total),
+		TglTransaksi: tglTransaksi,
 	}
 
 	var resp CheckStatusResponse

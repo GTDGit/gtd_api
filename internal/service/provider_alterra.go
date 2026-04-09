@@ -111,11 +111,14 @@ func (c *AlterraProviderClient) Payment(ctx context.Context, req *ProviderReques
 		return nil, err
 	}
 
-	// Get extra data if provided
-	var data json.RawMessage
+	// Build data with reference_no from inquiry (required by Alterra for postpaid payment)
+	paymentData := map[string]any{}
 	if req.Extra != nil {
-		data, _ = json.Marshal(req.Extra)
+		if refNo, ok := req.Extra["reference_no"].(string); ok && refNo != "" {
+			paymentData["reference_no"] = refNo
+		}
 	}
+	data, _ := json.Marshal(paymentData)
 
 	resp, err := client.Payment(ctx, req.CustomerNo, productID, req.RefID, data)
 	responseTime := time.Since(startTime)
@@ -220,16 +223,26 @@ func (c *AlterraProviderClient) markUnhealthy() {
 func (c *AlterraProviderClient) convertResponse(resp *alterra.TransactionResponse, refID string, responseTime time.Duration) *ProviderResponse {
 	rawResp, _ := json.Marshal(resp)
 
+	// Get reference_no from inquiry (top-level or data)
+	referenceNo := resp.ReferenceNo
+	if referenceNo == "" && resp.Data != nil {
+		referenceNo = resp.Data.ReferenceNo
+		if referenceNo == "" {
+			referenceNo = resp.Data.RefNumber
+		}
+	}
+
 	// Create description from data
 	var description json.RawMessage
 	if resp.Data != nil {
 		desc := map[string]any{
-			"nominal":   resp.Data.Nominal,
-			"admin":     resp.Data.Admin,
-			"token":     resp.Data.Token,
-			"kwh":       resp.Data.KWH,
-			"period":    resp.Data.Period,
-			"refNumber": resp.Data.RefNumber,
+			"nominal":     resp.Data.Nominal,
+			"admin":       resp.Data.Admin,
+			"token":       resp.Data.Token,
+			"kwh":         resp.Data.KWH,
+			"period":      resp.Data.Period,
+			"refNumber":   resp.Data.RefNumber,
+			"referenceNo": referenceNo,
 		}
 		if resp.Data.Identifier != nil {
 			desc["identifier"] = resp.Data.Identifier
@@ -237,6 +250,9 @@ func (c *AlterraProviderClient) convertResponse(resp *alterra.TransactionRespons
 		if resp.Data.BillInfo != nil {
 			desc["billInfo"] = resp.Data.BillInfo
 		}
+		description, _ = json.Marshal(desc)
+	} else if referenceNo != "" {
+		desc := map[string]any{"referenceNo": referenceNo}
 		description, _ = json.Marshal(desc)
 	}
 

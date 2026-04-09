@@ -28,6 +28,7 @@ type InquiryData struct {
 	ProviderSKUCode string `json:"providerSkuCode,omitempty"`
 	ProviderID      int    `json:"providerId,omitempty"`
 	ProviderSKUID   int    `json:"providerSkuId,omitempty"`
+	ProviderRefNo   string `json:"providerRefNo,omitempty"` // Provider reference (e.g., Alterra reference_no for payment)
 }
 
 // InquiryCache provides inquiry caching operations.

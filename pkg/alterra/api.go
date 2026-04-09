@@ -82,11 +82,25 @@ func (c *Client) Purchase(ctx context.Context, customerID string, productID int,
 
 // Inquiry performs a postpaid inquiry
 func (c *Client) Inquiry(ctx context.Context, customerID string, productID int, orderID string, data json.RawMessage) (*TransactionResponse, error) {
+	// Build inquiry data: product_id is required inside data
+	inquiryData := map[string]any{
+		"product_id": productID,
+	}
+	// Merge any additional data fields
+	if len(data) > 0 && string(data) != "{}" {
+		var extra map[string]any
+		if err := json.Unmarshal(data, &extra); err == nil {
+			for k, v := range extra {
+				inquiryData[k] = v
+			}
+		}
+	}
+	dataJSON, _ := json.Marshal(inquiryData)
+
 	req := InquiryRequest{
-		CustomerID: customerID,
-		ProductID:  productID,
-		OrderID:    orderID,
-		Data:       data,
+		CustomerID:  customerID,
+		InquiryType: "Customer_information",
+		Data:        dataJSON,
 	}
 
 	var resp TransactionResponse

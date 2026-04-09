@@ -1169,6 +1169,19 @@ func (s *TransactionService) executeInquiryWithProviders(
 		}
 
 		if resp.Success {
+			// Extract provider reference_no from description (needed for payment)
+			providerRefNo := ""
+			if len(resp.Description) > 0 {
+				var descMap map[string]any
+				if err := json.Unmarshal(resp.Description, &descMap); err == nil {
+					if rn, ok := descMap["referenceNo"].(string); ok && rn != "" {
+						providerRefNo = rn
+					} else if rn, ok := descMap["refNumber"].(string); ok && rn != "" {
+						providerRefNo = rn
+					}
+				}
+			}
+
 			// Cache inquiry with provider info
 			inquiryData := &cache.InquiryData{
 				TransactionID:   trxID,
@@ -1186,6 +1199,7 @@ func (s *TransactionService) executeInquiryWithProviders(
 				ProviderSKUCode: opt.ProviderSKUCode,
 				ProviderID:      opt.ProviderID,
 				ProviderSKUID:   opt.ProviderSKUID,
+				ProviderRefNo:   providerRefNo,
 			}
 
 			if err := s.inquiryCache.Set(ctx, inquiryData); err != nil {
@@ -1234,6 +1248,9 @@ func (s *TransactionService) executeInquiryWithDigiflazz(
 	}
 
 	digi := s.getDigiflazzClient(isSandbox)
+	if digi == nil {
+		return nil, fmt.Errorf("no provider available for inquiry (Digiflazz client not configured)")
+	}
 	resp, err := digi.Inquiry(ctx, digiSKU, digiCustomerNo, trxID, isSandbox)
 
 	log.Info().
@@ -1287,6 +1304,13 @@ func (s *TransactionService) executePaymentWithProvider(
 		return nil, fmt.Errorf("provider adapter not found: %s", inquiryData.ProviderCode)
 	}
 
+	extra := map[string]any{
+		"admin": inquiryData.Admin,
+	}
+	if inquiryData.ProviderRefNo != "" {
+		extra["reference_no"] = inquiryData.ProviderRefNo
+	}
+
 	provReq := &ProviderRequest{
 		RefID:      inquiryData.TransactionID, // Use inquiry transaction ID as ref for payment
 		SKUCode:    inquiryData.ProviderSKUCode,
@@ -1294,9 +1318,7 @@ func (s *TransactionService) executePaymentWithProvider(
 		Amount:     inquiryData.Amount,
 		Type:       ProviderTrxPayment,
 		IsSandbox:  payment.IsSandbox,
-		Extra: map[string]any{
-			"admin": inquiryData.Admin,
-		},
+		Extra:      extra,
 	}
 
 	// Store provider info on the payment transaction

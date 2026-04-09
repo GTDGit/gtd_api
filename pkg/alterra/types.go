@@ -80,10 +80,9 @@ type PurchaseRequest struct {
 
 // InquiryRequest represents an inquiry request
 type InquiryRequest struct {
-	CustomerID string          `json:"customer_id"`
-	ProductID  int             `json:"product_id"`
-	OrderID    string          `json:"order_id"`
-	Data       json.RawMessage `json:"data,omitempty"`
+	CustomerID  string          `json:"customer_id"`
+	InquiryType string          `json:"inquiry_type"`
+	Data        json.RawMessage `json:"data"`
 }
 
 // PaymentRequest represents a payment request
@@ -116,6 +115,7 @@ type TransactionData struct {
 	Period      string          `json:"period,omitempty"`
 	BillInfo    json.RawMessage `json:"bill_info,omitempty"`
 	RefNumber   string          `json:"ref_number,omitempty"`
+	ReferenceNo string          `json:"reference_no,omitempty"` // Inquiry reference (billing/utility)
 	VendorRefNo string          `json:"vendor_refnum,omitempty"`
 }
 
@@ -133,6 +133,7 @@ type TransactionResponse struct {
 	ResponseCode  string             `json:"response_code"`
 	Amount        int                `json:"amount"`
 	Admin         int                `json:"admin,omitempty"`
+	ReferenceNo   string             `json:"reference_no,omitempty"` // Inquiry reference for subsequent purchase
 	Product       TransactionProduct `json:"product"`
 	Data          *TransactionData   `json:"data"`
 	Error         *ErrorDetail       `json:"error"`

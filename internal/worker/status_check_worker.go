@@ -209,6 +209,13 @@ func (w *StatusCheckWorker) checkMultiProviderTransaction(ctx context.Context, t
 }
 
 func (w *StatusCheckWorker) checkDigiflazzTransaction(ctx context.Context, trx *models.Transaction) {
+	if w.digiProd == nil && w.digiDev == nil {
+		log.Warn().
+			Str("transaction_id", trx.TransactionID).
+			Msg("Digiflazz clients not configured, skipping legacy status check")
+		return
+	}
+
 	if trx.DigiRefID == nil || *trx.DigiRefID == "" {
 		log.Error().
 			Str("transaction_id", trx.TransactionID).

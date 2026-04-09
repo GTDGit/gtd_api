@@ -21,25 +21,28 @@ func NewHealthHandler(digiflazz *digiflazz.Client) *HealthHandler {
     return &HealthHandler{digiflazz: digiflazz}
 }
 
-// GetHealth responds with service and Digiflazz status.
+// GetHealth responds with service status.
 func (h *HealthHandler) GetHealth(c *gin.Context) {
-    balance, err := h.digiflazz.GetBalance(c.Request.Context())
-
-    digiStatus := "connected"
-    var digiBalance int
-    if err != nil {
-        digiStatus = "disconnected"
-    } else {
-        digiBalance = balance.Deposit
-    }
-
-    utils.Success(c, 200, "Service is healthy", gin.H{
+    data := gin.H{
         "status":  "healthy",
         "version": "1.0.0",
         "uptime":  int(time.Since(startTime).Seconds()),
-        "digiflazz": gin.H{
+    }
+
+    if h.digiflazz != nil {
+        balance, err := h.digiflazz.GetBalance(c.Request.Context())
+        digiStatus := "connected"
+        var digiBalance int
+        if err != nil {
+            digiStatus = "disconnected"
+        } else {
+            digiBalance = balance.Deposit
+        }
+        data["digiflazz"] = gin.H{
             "status":  digiStatus,
             "balance": digiBalance,
-        },
-    })
+        }
+    }
+
+    utils.Success(c, 200, "Service is healthy", data)
 }

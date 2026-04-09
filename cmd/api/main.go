@@ -79,9 +79,10 @@ func main() {
 	// 3c. Initialize inquiry cache
 	inquiryCache := cache.NewInquiryCache(redisClient)
 
-	// 4. Initialize Digiflazz clients (production & development)
-	digiProd := dfg.NewClient(cfg.Digiflazz.Username, cfg.Digiflazz.KeyProduction)
-	digiDev := dfg.NewClient(cfg.Digiflazz.Username, cfg.Digiflazz.KeyDevelopment)
+	// 4. Initialize Digiflazz clients (DISABLED - soft-deleted)
+	// digiProd := dfg.NewClient(cfg.Digiflazz.Username, cfg.Digiflazz.KeyProduction)
+	// digiDev := dfg.NewClient(cfg.Digiflazz.Username, cfg.Digiflazz.KeyDevelopment)
+	var digiProd, digiDev *dfg.Client // nil - Digiflazz disabled
 
 	// 5. Initialize repositories
 	clientRepo := repository.NewClientRepository(db)
@@ -180,7 +181,8 @@ func main() {
 	productMasterSvc := service.NewProductMasterService(productMasterRepo)
 	productMgmtSvc := service.NewProductManagementService(productRepo, skuRepo, productMasterSvc)
 	callbackSvc := service.NewCallbackService(clientRepo, cbRepo, trxRepo)
-	syncSvc := service.NewSyncService(digiProd, productRepo, skuRepo)
+	// syncSvc disabled - Digiflazz sync no longer needed
+	_ = service.NewSyncService // keep import alive
 	trxSvc := service.NewTransactionService(trxRepo, productRepo, skuRepo, cbRepo, digiProd, digiDev, productSvc, callbackSvc, inquiryCache)
 
 	// Wire up callback service to transaction service for immediate retry on webhook
@@ -212,10 +214,10 @@ func main() {
 		providerRouter.RegisterProvider(models.ProviderBRI, briAdapter)
 		log.Info().Msg("BRI provider registered for BRIZZI")
 	}
-	// Digiflazz is always available as backup
-	digiAdapter := service.NewDigiflazzProviderClient(digiProd, digiDev)
-	providerRouter.RegisterProvider(models.ProviderDigiflazz, digiAdapter)
-	log.Info().Msg("Digiflazz provider registered (backup)")
+	// Digiflazz disabled - soft-deleted from providers
+	// digiAdapter := service.NewDigiflazzProviderClient(digiProd, digiDev)
+	// providerRouter.RegisterProvider(models.ProviderDigiflazz, digiAdapter)
+	// log.Info().Msg("Digiflazz provider registered (backup)")
 
 	// Wire provider router to transaction service for multi-provider support
 	trxSvc.SetProviderRouter(providerRouter)
@@ -301,10 +303,12 @@ func main() {
 	defer cancel()
 
 	// 11. Start workers
-	go worker.NewSyncWorker(syncSvc, cfg.Worker.SyncInterval).Start(ctx)
+	// Digiflazz sync worker disabled - no longer syncing from Digiflazz
+	// go worker.NewSyncWorker(syncSvc, cfg.Worker.SyncInterval).Start(ctx)
 	go worker.NewRetryWorker(trxRepo, callbackSvc, cfg.Worker.RetryInterval).Start(ctx)
 	go worker.NewCallbackWorker(callbackSvc, cfg.Worker.CallbackInterval).Start(ctx)
-	go worker.NewDigiflazzCallbackWorker(cbRepo, trxRepo, trxSvc, callbackSvc, cfg.Worker.DigiflazzCallbackInterval).Start(ctx)
+	// Digiflazz callback worker disabled
+	// go worker.NewDigiflazzCallbackWorker(cbRepo, trxRepo, trxSvc, callbackSvc, cfg.Worker.DigiflazzCallbackInterval).Start(ctx)
 	go worker.NewStatusCheckWorker(
 		trxRepo, skuRepo, callbackSvc, digiProd, digiDev, providerRouter,
 		cfg.Worker.StatusCheckInterval,

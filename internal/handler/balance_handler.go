@@ -17,8 +17,12 @@ func NewBalanceHandler(digiflazz *digiflazz.Client) *BalanceHandler {
     return &BalanceHandler{digiflazz: digiflazz}
 }
 
-// GetBalance returns Digiflazz deposit balance.
+// GetBalance returns provider deposit balance.
 func (h *BalanceHandler) GetBalance(c *gin.Context) {
+    if h.digiflazz == nil {
+        utils.Error(c, 503, "SERVICE_UNAVAILABLE", "Balance provider not configured")
+        return
+    }
     balance, err := h.digiflazz.GetBalance(c.Request.Context())
     if err != nil {
         utils.Error(c, 500, "INTERNAL_ERROR", "Failed to get balance")

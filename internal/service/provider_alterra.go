@@ -14,10 +14,11 @@ import (
 
 // AlterraProviderClient implements PPOBProviderClient for Alterra
 type AlterraProviderClient struct {
-	prodClient *alterra.Client
-	devClient  *alterra.Client
-	healthy    bool
-	healthMu   sync.RWMutex
+	prodClient    *alterra.Client
+	devClient     *alterra.Client
+	healthy       bool
+	healthMu      sync.RWMutex
+	lastUnhealthy time.Time
 }
 
 // NewAlterraProviderClient creates a new Alterra provider client
@@ -198,11 +199,19 @@ func (c *AlterraProviderClient) GetPriceList(ctx context.Context, category strin
 	return result, nil
 }
 
-// IsHealthy returns whether the provider is healthy
+// IsHealthy returns whether the provider is healthy.
+// Auto-recovers after 60 seconds of being unhealthy.
 func (c *AlterraProviderClient) IsHealthy() bool {
 	c.healthMu.RLock()
-	defer c.healthMu.RUnlock()
-	return c.healthy
+	healthy := c.healthy
+	lastUnhealthy := c.lastUnhealthy
+	c.healthMu.RUnlock()
+
+	if !healthy && !lastUnhealthy.IsZero() && time.Since(lastUnhealthy) > 60*time.Second {
+		c.markHealthy()
+		return true
+	}
+	return healthy
 }
 
 // markHealthy marks the provider as healthy
@@ -217,6 +226,7 @@ func (c *AlterraProviderClient) markUnhealthy() {
 	c.healthMu.Lock()
 	defer c.healthMu.Unlock()
 	c.healthy = false
+	c.lastUnhealthy = time.Now()
 }
 
 // convertResponse converts Alterra response to unified format

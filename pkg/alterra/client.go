@@ -171,6 +171,13 @@ func (c *Client) doRequest(ctx context.Context, method, path string, body any, r
 
 	// Check for HTTP errors
 	if resp.StatusCode >= 400 {
+		// For 4xx errors, try to parse as transaction response first
+		// (Alterra dummy biller uses HTTP status codes for business errors)
+		if resp.StatusCode < 500 {
+			if err := json.Unmarshal(respBody, result); err == nil {
+				return nil // Parsed successfully as business response
+			}
+		}
 		var errResp ErrorResponse
 		if err := json.Unmarshal(respBody, &errResp); err == nil && errResp.Error.Message != "" {
 			return fmt.Errorf("api error: %s (code: %s)", errResp.Error.Message, errResp.Error.Code)

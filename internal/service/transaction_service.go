@@ -1143,7 +1143,7 @@ func (s *TransactionService) executeInquiryWithProviders(
 			log.Warn().Str("provider", string(opt.ProviderCode)).Msg("Provider adapter not found for inquiry")
 			continue
 		}
-		if !adapter.IsHealthy() {
+		if !adapter.IsHealthy() && req.Provider == "" {
 			log.Warn().Str("provider", string(opt.ProviderCode)).Msg("Provider not healthy, skipping inquiry")
 			continue
 		}

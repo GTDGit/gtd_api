@@ -103,6 +103,12 @@ class AlterraUATScriptTests(unittest.TestCase):
 
         self.assertNotIn("/transaction/0", sheet.cell(1, 11).value or "")
 
+    def test_format_json_text_accepts_dict_payloads(self):
+        formatted = MODULE.format_json_text({"response_code": "10", "status": "Pending"})
+
+        self.assertIn('"response_code": "10"', formatted)
+        self.assertIn('"status": "Pending"', formatted)
+
 
 if __name__ == "__main__":
     unittest.main()

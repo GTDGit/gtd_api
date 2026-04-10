@@ -32,13 +32,16 @@ HEADERS = {
     "Authorization": f"Bearer {API_KEY}",
     "X-Client-Id": CLIENT_ID,
     "Content-Type": "application/json",
+    "Accept": "application/json",
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/135.0.0.0 Safari/537.36"
+    ),
 }
 
 XLSX_PATH = os.path.join(
     os.path.dirname(__file__), "..", "docs", "ppob", "alterra", "[GTD] Scenario UAT.xlsx"
-)
-OUTPUT_PATH = os.path.join(
-    os.path.dirname(__file__), "..", "docs", "ppob", "alterra", "[GTD] Scenario UAT - Filled.xlsx"
 )
 
 SCREENSHOT_TEXT = "Aplikasi sedang dalam perubahan dari Native menjadi Webview"
@@ -108,6 +111,15 @@ def current_test_date():
 
 
 TEST_DATE = current_test_date()
+RUN_STAMP = datetime.now().strftime("%Y%m%d-%H%M%S")
+OUTPUT_PATH = os.path.join(
+    os.path.dirname(__file__),
+    "..",
+    "docs",
+    "ppob",
+    "alterra",
+    f"[GTD] Scenario UAT - Filled {RUN_STAMP}.xlsx",
+)
 
 
 def next_ref(prefix):
@@ -162,8 +174,8 @@ def query_inquiry_cache(trx_id):
 
     script = f"""
 cd {shlex.quote(REMOTE_BACKEND_DIR)}
-REDIS_PASSWORD="$(grep '^REDIS_PASSWORD=' .env | head -1 | cut -d= -f2-)"
-docker exec gtd-redis redis-cli --raw -a "$REDIS_PASSWORD" GET "inquiry:trx:{trx_id}"
+REDIS_PASSWORD="$(grep '^REDIS_PASSWORD=' .env | head -1 | cut -d= -f2- | tr -d '\\r')"
+docker exec gtd-redis redis-cli --raw --no-auth-warning -a "$REDIS_PASSWORD" GET "inquiry:trx:{trx_id}"
 """
     out, _, _ = remote_exec(script, timeout=20)
     if not out or out == "(nil)":
@@ -224,8 +236,10 @@ def wait_for_terminal(trx_id, max_wait=60, poll_interval=5):
 
 
 def parse_json(text):
-    if not text:
+    if text in (None, ""):
         return None
+    if isinstance(text, (dict, list)):
+        return text
     try:
         return json.loads(text)
     except Exception:
@@ -233,11 +247,13 @@ def parse_json(text):
 
 
 def format_json_text(text):
-    if not text:
+    if text in (None, ""):
         return ""
+    if isinstance(text, (dict, list)):
+        return json.dumps(text, indent=2)
     obj = parse_json(text)
     if obj is None:
-        return text
+        return str(text)
     return json.dumps(obj, indent=2)
 
 

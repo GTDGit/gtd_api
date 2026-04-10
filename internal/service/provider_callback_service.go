@@ -17,6 +17,20 @@ import (
 	"github.com/GTDGit/gtd_api/pkg/kiosbank"
 )
 
+func extractProviderResponseCode(raw models.NullableRawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return ""
+	}
+
+	rc, _ := payload["response_code"].(string)
+	return rc
+}
+
 // ProviderCallbackService handles callbacks from PPOB providers
 type ProviderCallbackService struct {
 	providerRepo *repository.PPOBProviderRepository
@@ -227,6 +241,16 @@ func (s *ProviderCallbackService) ProcessAlterraCallback(ctx context.Context, pa
 		status = &s
 	}
 
+	shouldRefreshTrace := len(trx.ProviderResponse) == 0
+	if currentRC := extractProviderResponseCode(trx.ProviderResponse); !shouldRefreshTrace {
+		shouldRefreshTrace = currentRC == "" || currentRC == alterra.RCPending
+	}
+	if shouldRefreshTrace {
+		trx.ProviderResponse = models.NullableRawMessage(rawPayload)
+		httpStatus := 200
+		trx.ProviderHTTPStatus = &httpStatus
+	}
+
 	// Store callback
 	callback := &models.PPOBProviderCallback{
 		ProviderID:    providerID,
@@ -241,6 +265,11 @@ func (s *ProviderCallbackService) ProcessAlterraCallback(ctx context.Context, pa
 
 	// Check terminal state
 	if trx.Status == models.StatusSuccess || trx.Status == models.StatusFailed {
+		if shouldRefreshTrace {
+			if err := s.trxRepo.Update(trx); err != nil {
+				log.Error().Err(err).Str("transaction_id", trx.TransactionID).Msg("Failed to refresh terminal Alterra trace from callback")
+			}
+		}
 		log.Debug().Str("transaction_id", trx.TransactionID).Str("status", string(trx.Status)).
 			Msg("Alterra callback received for terminal transaction, ignoring")
 		callback.IsProcessed = true

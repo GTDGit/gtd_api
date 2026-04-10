@@ -15,6 +15,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -101,9 +102,37 @@ func (c *Client) sign(data []byte) (string, error) {
 	return base64.StdEncoding.EncodeToString(signature), nil
 }
 
+func buildRequestURL(baseURL, path string) string {
+	base := strings.TrimRight(baseURL, "/")
+	if strings.HasSuffix(base, "/api") && strings.HasPrefix(path, "/api/") {
+		base = strings.TrimSuffix(base, "/api")
+	}
+	return base + path
+}
+
+func cloneRawJSON(body []byte) json.RawMessage {
+	if len(body) == 0 {
+		return nil
+	}
+	raw := make([]byte, len(body))
+	copy(raw, body)
+	return json.RawMessage(raw)
+}
+
+func attachRawResponse(result any, status int, body []byte) {
+	switch v := result.(type) {
+	case *TransactionResponse:
+		v.RawResponse = cloneRawJSON(body)
+		v.HTTPStatus = status
+	case *TransactionDetailResponse:
+		v.RawResponse = cloneRawJSON(body)
+		v.HTTPStatus = status
+	}
+}
+
 // doRequest performs a request with RSA-SHA256 authentication
 func (c *Client) doRequest(ctx context.Context, method, path string, body any, result any) error {
-	url := c.config.BaseURL + path
+	url := buildRequestURL(c.config.BaseURL, path)
 
 	var bodyBytes []byte
 	var err error
@@ -175,11 +204,18 @@ func (c *Client) doRequest(ctx context.Context, method, path string, body any, r
 		// (Alterra dummy biller uses HTTP status codes for business errors)
 		if resp.StatusCode < 500 {
 			if err := json.Unmarshal(respBody, result); err == nil {
+				attachRawResponse(result, resp.StatusCode, respBody)
 				return nil // Parsed successfully as business response
 			}
 		}
 		var errResp ErrorResponse
 		if err := json.Unmarshal(respBody, &errResp); err == nil && errResp.Error.Message != "" {
+			switch v := result.(type) {
+			case *TransactionResponse:
+				v.Error = &errResp.Error
+				attachRawResponse(v, resp.StatusCode, respBody)
+				return nil
+			}
 			return fmt.Errorf("api error: %s (code: %s)", errResp.Error.Message, errResp.Error.Code)
 		}
 		return fmt.Errorf("http error: %d", resp.StatusCode)
@@ -188,6 +224,7 @@ func (c *Client) doRequest(ctx context.Context, method, path string, body any, r
 	if err := json.Unmarshal(respBody, result); err != nil {
 		return fmt.Errorf("failed to decode response: %w", err)
 	}
+	attachRawResponse(result, resp.StatusCode, respBody)
 
 	return nil
 }

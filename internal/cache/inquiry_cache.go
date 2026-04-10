@@ -24,11 +24,17 @@ type InquiryData struct {
 
 	// Multi-provider fields: track which provider handled the inquiry
 	// so payment uses the same provider
-	ProviderCode    string `json:"providerCode,omitempty"`
-	ProviderSKUCode string `json:"providerSkuCode,omitempty"`
-	ProviderID      int    `json:"providerId,omitempty"`
-	ProviderSKUID   int    `json:"providerSkuId,omitempty"`
-	ProviderRefNo   string `json:"providerRefNo,omitempty"` // Provider reference (e.g., Alterra reference_no for payment)
+	ProviderCode          string          `json:"providerCode,omitempty"`
+	ProviderSKUCode       string          `json:"providerSkuCode,omitempty"`
+	ProviderID            int             `json:"providerId,omitempty"`
+	ProviderSKUID         int             `json:"providerSkuId,omitempty"`
+	ProviderRefNo         string          `json:"providerRefNo,omitempty"` // Provider reference (e.g., Alterra reference_no for payment)
+	ProviderResponse      json.RawMessage `json:"providerResponse,omitempty"`
+	ProviderHTTPStatus    int             `json:"providerHttpStatus,omitempty"`
+	ProviderTransactionID string          `json:"providerTransactionId,omitempty"`
+	Status                string          `json:"status,omitempty"`
+	FailedCode            string          `json:"failedCode,omitempty"`
+	FailedReason          string          `json:"failedReason,omitempty"`
 }
 
 // InquiryCache provides inquiry caching operations.
@@ -65,6 +71,16 @@ func (c *InquiryCache) keyCacheKey(clientID int, customerNo, skuCode, referenceI
 // Secondary key: inquiry:cache:{clientId}:{customerNo}:{skuCode}:{refId}
 // TTL: Until end of day (23:59:59 WIB)
 func (c *InquiryCache) Set(ctx context.Context, data *InquiryData) error {
+	return c.set(ctx, data, true)
+}
+
+// SetPrimaryOnly stores inquiry data only by transaction ID.
+// Useful for failed inquiries that should not be reused by the duplicate-inquiry cache key.
+func (c *InquiryCache) SetPrimaryOnly(ctx context.Context, data *InquiryData) error {
+	return c.set(ctx, data, false)
+}
+
+func (c *InquiryCache) set(ctx context.Context, data *InquiryData, storeCacheKey bool) error {
 	data.CachedAt = time.Now()
 
 	// Calculate TTL until end of day
@@ -80,6 +96,10 @@ func (c *InquiryCache) Set(ctx context.Context, data *InquiryData) error {
 	primaryKey := c.keyByTransactionID(data.TransactionID)
 	if err := c.redis.Set(ctx, primaryKey, string(jsonData), ttl); err != nil {
 		return fmt.Errorf("failed to set primary key: %w", err)
+	}
+
+	if !storeCacheKey {
+		return nil
 	}
 
 	// Store secondary key (cache key) - points to transactionID

@@ -43,6 +43,7 @@ type ProviderResponse struct {
 	Pending       bool            `json:"pending"`
 	RefID         string          `json:"refId"`
 	ProviderRefID string          `json:"providerRefId"`
+	HTTPStatus    int             `json:"httpStatus,omitempty"`
 	Status        string          `json:"status"`
 	RC            string          `json:"rc"`
 	Message       string          `json:"message"`

@@ -43,13 +43,13 @@ type ErrorDetail struct {
 
 // Product represents a product in the catalog
 type Product struct {
-	ProductID   int    `json:"product_id"`
-	Code        string `json:"code"`
-	Label       string `json:"label"`
-	ProductType string `json:"product_type"`
-	Operator    string `json:"operator"`
-	Nominal     int    `json:"nominal"`
-	Price       int    `json:"price"`
+	ProductID   int      `json:"product_id"`
+	Code        string   `json:"code"`
+	Label       string   `json:"label"`
+	ProductType string   `json:"product_type"`
+	Operator    string   `json:"operator"`
+	Nominal     int      `json:"nominal"`
+	Price       int      `json:"price"`
 	Enable      FlexBool `json:"enable"`
 }
 
@@ -95,13 +95,13 @@ type PaymentRequest struct {
 
 // TransactionProduct represents product details in transaction response
 type TransactionProduct struct {
-	ProductID   int    `json:"product_id"`
-	ProductCode string `json:"product_code"`
-	Type        string `json:"type"`
-	Label       string `json:"label"`
-	Operator    string `json:"operator"`
-	Nominal     int    `json:"nominal"`
-	Price       int    `json:"price"`
+	ProductID   int      `json:"product_id"`
+	ProductCode string   `json:"product_code"`
+	Type        string   `json:"type"`
+	Label       string   `json:"label"`
+	Operator    string   `json:"operator"`
+	Nominal     int      `json:"nominal"`
+	Price       int      `json:"price"`
 	Enabled     FlexBool `json:"enabled"`
 }
 
@@ -137,6 +137,8 @@ type TransactionResponse struct {
 	Product       TransactionProduct `json:"product"`
 	Data          *TransactionData   `json:"data"`
 	Error         *ErrorDetail       `json:"error"`
+	RawResponse   json.RawMessage    `json:"-"`
+	HTTPStatus    int                `json:"-"`
 }
 
 // TransactionDetailResponse represents transaction detail response
@@ -155,6 +157,8 @@ type TransactionDetailResponse struct {
 	Admin         int                `json:"admin,omitempty"`
 	Product       TransactionProduct `json:"product"`
 	Data          *TransactionData   `json:"data"`
+	RawResponse   json.RawMessage    `json:"-"`
+	HTTPStatus    int                `json:"-"`
 }
 
 // CallbackPayload represents callback from Alterra

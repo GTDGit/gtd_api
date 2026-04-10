@@ -43,7 +43,7 @@ type TransactionService struct {
 	callbackSvc    *CallbackService
 	sandboxMapper  *SandboxMapper
 	inquiryCache   *cache.InquiryCache
-	providerRouter *ProviderRouter          // Multi-provider router (optional)
+	providerRouter *ProviderRouter         // Multi-provider router (optional)
 	notifier       sse.TransactionNotifier // SSE notifier (optional)
 }
 
@@ -234,8 +234,8 @@ func (s *TransactionService) tryAllSKUs(ctx context.Context, trx *models.Transac
 		trx.DigiRefID = &digiRefID
 		trx.SkuID = &sku.ID
 		if err := s.trxRepo.Update(trx); err != nil {
-		log.Error().Err(err).Str("transaction_id", trx.TransactionID).Str("status", string(trx.Status)).Msg("CRITICAL: failed to update transaction in DB")
-	}
+			log.Error().Err(err).Str("transaction_id", trx.TransactionID).Str("status", string(trx.Status)).Msg("CRITICAL: failed to update transaction in DB")
+		}
 
 		// Call Digiflazz with test data in sandbox mode, real data otherwise
 		digi := s.getDigiflazzClient(isSandbox)
@@ -501,6 +501,9 @@ func (s *TransactionService) processPayment(ctx context.Context, req *CreateTran
 	if inquiryData.ClientID != client.ID {
 		return nil, utils.ErrTransactionNotFound
 	}
+	if inquiryData.Status != "" && inquiryData.Status != string(models.StatusSuccess) {
+		return nil, utils.ErrInvalidTransactionType
+	}
 	// Validate SKU code belongs to same product
 	product, err := s.productRepo.GetBySKUCode(req.SkuCode)
 	if err != nil || product == nil || product.ID != inquiryData.ProductID {
@@ -589,8 +592,8 @@ func (s *TransactionService) processPayment(ctx context.Context, req *CreateTran
 		payment.ProcessedAt = &now
 		payment.DigiRefID = &refID
 		if err := s.trxRepo.Update(payment); err != nil {
-		log.Error().Err(err).Str("transaction_id", payment.TransactionID).Str("status", string(payment.Status)).Msg("CRITICAL: failed to update payment in DB")
-	}
+			log.Error().Err(err).Str("transaction_id", payment.TransactionID).Str("status", string(payment.Status)).Msg("CRITICAL: failed to update payment in DB")
+		}
 
 		if err := s.inquiryCache.Delete(ctx, inquiryData); err != nil {
 			log.Warn().Err(err).Str("transactionId", inquiryData.TransactionID).Msg("failed to delete inquiry cache")
@@ -737,8 +740,8 @@ func (s *TransactionService) tryAllSKUsWithOffset(ctx context.Context, trx *mode
 		trx.DigiRefID = &digiRefID
 		trx.SkuID = &sku.ID
 		if err := s.trxRepo.Update(trx); err != nil {
-		log.Error().Err(err).Str("transaction_id", trx.TransactionID).Str("status", string(trx.Status)).Msg("CRITICAL: failed to update transaction in DB")
-	}
+			log.Error().Err(err).Str("transaction_id", trx.TransactionID).Str("status", string(trx.Status)).Msg("CRITICAL: failed to update transaction in DB")
+		}
 
 		digi := s.getDigiflazzClient(isSandbox)
 		resp, err := digi.Topup(ctx, digiSKU, digiCustomerNo, digiRefID, isSandbox)
@@ -871,9 +874,20 @@ func (s *TransactionService) logProviderAttempt(trxID int, refID string, request
 // cachedInquiryToTransaction converts cached inquiry data to transaction model.
 func (s *TransactionService) cachedInquiryToTransaction(data *cache.InquiryData, clientID, productID int) *models.Transaction {
 	status := models.StatusSuccess
+	if data.Status != "" {
+		status = models.TransactionStatus(data.Status)
+	}
 	amount := data.Amount
 	customerName := data.CustomerName
 	expiredAt := data.ExpiredAt
+	var failedCode *string
+	if data.FailedCode != "" {
+		failedCode = &data.FailedCode
+	}
+	var failedReason *string
+	if data.FailedReason != "" {
+		failedReason = &data.FailedReason
+	}
 
 	return &models.Transaction{
 		TransactionID: data.TransactionID,
@@ -888,7 +902,17 @@ func (s *TransactionService) cachedInquiryToTransaction(data *cache.InquiryData,
 		Admin:         data.Admin,
 		CustomerName:  &customerName,
 		Description:   models.NullableRawMessage(data.Description),
-		ExpiredAt:     &expiredAt,
+		FailedCode:    failedCode,
+		FailedReason:  failedReason,
+		ProviderRefID: func() *string {
+			if data.ProviderTransactionID == "" {
+				return nil
+			}
+			ref := data.ProviderTransactionID
+			return &ref
+		}(),
+		ProviderResponse: models.NullableRawMessage(data.ProviderResponse),
+		ExpiredAt:        &expiredAt,
 	}
 }
 
@@ -901,6 +925,28 @@ func safeMarshalRaw(v json.RawMessage) json.RawMessage {
 	cp := make([]byte, len(v))
 	copy(cp, v)
 	return json.RawMessage(cp)
+}
+
+func applyProviderTrace(trx *models.Transaction, resp *ProviderResponse) {
+	if trx == nil || resp == nil {
+		return
+	}
+
+	if len(resp.RawResponse) > 0 {
+		raw := models.NullableRawMessage(resp.RawResponse)
+		if len(trx.ProviderInitialResponse) == 0 {
+			trx.ProviderInitialResponse = raw
+		}
+		trx.ProviderResponse = raw
+	}
+
+	if resp.HTTPStatus > 0 {
+		httpStatus := resp.HTTPStatus
+		if trx.ProviderInitialHTTPStatus == nil {
+			trx.ProviderInitialHTTPStatus = &httpStatus
+		}
+		trx.ProviderHTTPStatus = &httpStatus
+	}
 }
 
 // RetryWithNextSKU retries a transaction with the next available SKU.
@@ -1031,9 +1077,7 @@ func (s *TransactionService) executeWithProviderRouter(ctx context.Context, trx 
 	}
 
 	// Store raw response
-	if len(result.Response.RawResponse) > 0 {
-		trx.ProviderResponse = models.NullableRawMessage(result.Response.RawResponse)
-	}
+	applyProviderTrace(trx, result.Response)
 
 	// Handle response based on status
 	if result.Response.Success {
@@ -1196,22 +1240,26 @@ func (s *TransactionService) executeInquiryWithProviders(
 
 			// Cache inquiry with provider info
 			inquiryData := &cache.InquiryData{
-				TransactionID:   trxID,
-				ReferenceID:     req.ReferenceID,
-				ClientID:        client.ID,
-				ProductID:       product.ID,
-				CustomerNo:      req.CustomerNo,
-				SKUCode:         req.SkuCode,
-				Amount:          resp.Amount,
-				Admin:           resp.Admin,
-				CustomerName:    resp.CustomerName,
-				Description:     resp.Description,
-				ExpiredAt:       eod,
-				ProviderCode:    string(opt.ProviderCode),
-				ProviderSKUCode: opt.ProviderSKUCode,
-				ProviderID:      opt.ProviderID,
-				ProviderSKUID:   opt.ProviderSKUID,
-				ProviderRefNo:   providerRefNo,
+				TransactionID:         trxID,
+				ReferenceID:           req.ReferenceID,
+				ClientID:              client.ID,
+				ProductID:             product.ID,
+				CustomerNo:            req.CustomerNo,
+				SKUCode:               req.SkuCode,
+				Amount:                resp.Amount,
+				Admin:                 resp.Admin,
+				CustomerName:          resp.CustomerName,
+				Description:           resp.Description,
+				ExpiredAt:             eod,
+				ProviderCode:          string(opt.ProviderCode),
+				ProviderSKUCode:       opt.ProviderSKUCode,
+				ProviderID:            opt.ProviderID,
+				ProviderSKUID:         opt.ProviderSKUID,
+				ProviderRefNo:         providerRefNo,
+				ProviderResponse:      safeMarshalRaw(resp.RawResponse),
+				ProviderHTTPStatus:    resp.HTTPStatus,
+				ProviderTransactionID: resp.ProviderRefID,
+				Status:                string(models.StatusSuccess),
 			}
 
 			if err := s.inquiryCache.Set(ctx, inquiryData); err != nil {
@@ -1235,29 +1283,38 @@ func (s *TransactionService) executeInquiryWithProviders(
 			Str("message", resp.Message).
 			Msg("Inquiry failed with provider (biller error)")
 
-		// Store failed inquiry as provider_response for logging
 		failedReason := resp.Message
 		if failedReason == "" {
 			failedReason = fmt.Sprintf("Inquiry failed: RC %s", resp.RC)
 		}
-		failedTrx := &models.Transaction{
-			TransactionID: trxID,
-			ReferenceID:   req.ReferenceID,
-			ClientID:      client.ID,
-			ProductID:     product.ID,
-			SkuCode:       req.SkuCode,
-			CustomerNo:    req.CustomerNo,
-			Type:          models.TrxTypeInquiry,
-			Status:        models.StatusFailed,
-			FailedReason:  &failedReason,
-			FailedCode:    &resp.RC,
-			Description:   models.NullableRawMessage(resp.Description),
+		inquiryData := &cache.InquiryData{
+			TransactionID:         trxID,
+			ReferenceID:           req.ReferenceID,
+			ClientID:              client.ID,
+			ProductID:             product.ID,
+			SKUCode:               req.SkuCode,
+			CustomerNo:            req.CustomerNo,
+			Amount:                resp.Amount,
+			Admin:                 resp.Admin,
+			CustomerName:          resp.CustomerName,
+			Description:           resp.Description,
+			ExpiredAt:             eod,
+			ProviderCode:          string(opt.ProviderCode),
+			ProviderSKUCode:       opt.ProviderSKUCode,
+			ProviderID:            opt.ProviderID,
+			ProviderSKUID:         opt.ProviderSKUID,
+			ProviderResponse:      safeMarshalRaw(resp.RawResponse),
+			ProviderHTTPStatus:    resp.HTTPStatus,
+			ProviderTransactionID: resp.ProviderRefID,
+			Status:                string(models.StatusFailed),
+			FailedReason:          failedReason,
+			FailedCode:            resp.RC,
 		}
-		if resp.RawResponse != nil {
-			failedTrx.ProviderResponse = models.NullableRawMessage(resp.RawResponse)
+		if err := s.inquiryCache.SetPrimaryOnly(ctx, inquiryData); err != nil {
+			log.Warn().Err(err).Str("transaction_id", trxID).Msg("failed to cache failed inquiry")
 		}
 
-		return failedTrx, nil
+		return s.cachedInquiryToTransaction(inquiryData, client.ID, product.ID), nil
 	}
 
 	// All providers failed (network errors), fall back to legacy Digiflazz
@@ -1394,9 +1451,7 @@ func (s *TransactionService) executePaymentWithProvider(
 	if resp.ProviderRefID != "" {
 		payment.ProviderRefID = &resp.ProviderRefID
 	}
-	if len(resp.RawResponse) > 0 {
-		payment.ProviderResponse = models.NullableRawMessage(resp.RawResponse)
-	}
+	applyProviderTrace(payment, resp)
 
 	if resp.Success {
 		now := time.Now()
@@ -1410,8 +1465,8 @@ func (s *TransactionService) executePaymentWithProvider(
 		}
 		payment.ProcessedAt = &now
 		if err := s.trxRepo.Update(payment); err != nil {
-		log.Error().Err(err).Str("transaction_id", payment.TransactionID).Str("status", string(payment.Status)).Msg("CRITICAL: failed to update payment in DB")
-	}
+			log.Error().Err(err).Str("transaction_id", payment.TransactionID).Str("status", string(payment.Status)).Msg("CRITICAL: failed to update payment in DB")
+		}
 
 		// Delete inquiry from cache (already paid)
 		if err := s.inquiryCache.Delete(ctx, inquiryData); err != nil {

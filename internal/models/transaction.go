@@ -106,9 +106,12 @@ type Transaction struct {
 	SellPrice *int `db:"sell_price" json:"price,omitempty"`
 
 	// Multi-provider fields
-	ProviderID       *int               `db:"provider_id" json:"-"`
-	ProviderSKUID    *int               `db:"provider_sku_id" json:"-"`
-	ProviderCode     *string            `db:"provider_code" json:"providerCode,omitempty"` // Populated from JOIN with ppob_providers
-	ProviderRefID    *string            `db:"provider_ref_id" json:"-"`
-	ProviderResponse NullableRawMessage `db:"provider_response" json:"-"`
+	ProviderID                *int               `db:"provider_id" json:"-"`
+	ProviderSKUID             *int               `db:"provider_sku_id" json:"-"`
+	ProviderCode              *string            `db:"provider_code" json:"providerCode,omitempty"` // Populated from JOIN with ppob_providers
+	ProviderRefID             *string            `db:"provider_ref_id" json:"-"`
+	ProviderInitialResponse   NullableRawMessage `db:"provider_initial_response" json:"-"`
+	ProviderResponse          NullableRawMessage `db:"provider_response" json:"-"`
+	ProviderInitialHTTPStatus *int               `db:"provider_initial_http_status" json:"-"`
+	ProviderHTTPStatus        *int               `db:"provider_http_status" json:"-"`
 }

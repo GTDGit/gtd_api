@@ -155,6 +155,13 @@ func (w *StatusCheckWorker) checkMultiProviderTransaction(ctx context.Context, t
 	}
 
 	now := time.Now()
+	if len(result.RawResponse) > 0 {
+		trx.ProviderResponse = models.NullableRawMessage(result.RawResponse)
+	}
+	if result.HTTPStatus > 0 {
+		httpStatus := result.HTTPStatus
+		trx.ProviderHTTPStatus = &httpStatus
+	}
 
 	switch {
 	case result.Success:
@@ -179,6 +186,10 @@ func (w *StatusCheckWorker) checkMultiProviderTransaction(ctx context.Context, t
 			Msg("Transaction updated to Success from multi-provider status check")
 
 	case result.Pending:
+		if err := w.trxRepo.Update(trx); err != nil {
+			log.Error().Err(err).Str("transaction_id", trx.TransactionID).Msg("Failed to refresh pending transaction trace")
+			return
+		}
 		// Still pending, will check again on next run
 		log.Debug().
 			Str("transaction_id", trx.TransactionID).

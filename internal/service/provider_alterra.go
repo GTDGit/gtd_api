@@ -167,6 +167,8 @@ func (c *AlterraProviderClient) CheckStatus(ctx context.Context, refID string) (
 		Admin:         resp.Admin,
 		Product:       resp.Product,
 		Data:          resp.Data,
+		RawResponse:   resp.RawResponse,
+		HTTPStatus:    resp.HTTPStatus,
 	}
 
 	return c.convertResponse(trxResp, refID, responseTime), nil
@@ -231,7 +233,10 @@ func (c *AlterraProviderClient) markUnhealthy() {
 
 // convertResponse converts Alterra response to unified format
 func (c *AlterraProviderClient) convertResponse(resp *alterra.TransactionResponse, refID string, responseTime time.Duration) *ProviderResponse {
-	rawResp, _ := json.Marshal(resp)
+	rawResp := resp.RawResponse
+	if len(rawResp) == 0 {
+		rawResp, _ = json.Marshal(resp)
+	}
 
 	// Get reference_no from inquiry (top-level or data)
 	referenceNo := resp.ReferenceNo
@@ -284,11 +289,17 @@ func (c *AlterraProviderClient) convertResponse(resp *alterra.TransactionRespons
 		message = resp.Error.Message
 	}
 
+	providerRefID := ""
+	if resp.TransactionID > 0 {
+		providerRefID = strconv.Itoa(resp.TransactionID)
+	}
+
 	return &ProviderResponse{
 		Success:       alterra.IsSuccess(resp.ResponseCode),
 		Pending:       alterra.IsPending(resp.ResponseCode),
 		RefID:         refID,
-		ProviderRefID: strconv.Itoa(resp.TransactionID),
+		ProviderRefID: providerRefID,
+		HTTPStatus:    resp.HTTPStatus,
 		Status:        resp.Status,
 		RC:            resp.ResponseCode,
 		Message:       message,

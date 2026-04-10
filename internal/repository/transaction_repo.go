@@ -39,7 +39,8 @@ func (r *TransactionRepository) Create(trx *models.Transaction) error {
             customer_no, customer_name, type, status, serial_number, amount, admin,
             period, description, failed_reason, retry_count, next_retry_at, expired_at,
             inquiry_id, digi_ref_id, buy_price, sell_price,
-            provider_id, provider_sku_id, provider_ref_id, provider_response,
+            provider_id, provider_sku_id, provider_ref_id, provider_initial_response,
+            provider_response, provider_initial_http_status, provider_http_status,
             created_at, processed_at
         ) VALUES (
             $1,$2,$3,$4,$5,$6,
@@ -47,7 +48,8 @@ func (r *TransactionRepository) Create(trx *models.Transaction) error {
             $14,$15,$16,$17,$18,$19,
             $20,$21,$22,$23,
             $24,$25,$26,$27,
-            NOW(),$28
+            $28,$29,$30,
+            NOW(),$31
         ) RETURNING id`
 
 	return r.db.QueryRow(q,
@@ -55,8 +57,8 @@ func (r *TransactionRepository) Create(trx *models.Transaction) error {
 		trx.CustomerNo, trx.CustomerName, trx.Type, trx.Status, trx.SerialNumber, trx.Amount, trx.Admin,
 		trx.Period, nullableJSON(trx.Description), trx.FailedReason, trx.RetryCount, trx.NextRetryAt, trx.ExpiredAt,
 		trx.InquiryID, trx.DigiRefID, trx.BuyPrice, trx.SellPrice,
-		trx.ProviderID, trx.ProviderSKUID, trx.ProviderRefID, nullableJSON(trx.ProviderResponse),
-		trx.ProcessedAt,
+		trx.ProviderID, trx.ProviderSKUID, trx.ProviderRefID, nullableJSON(trx.ProviderInitialResponse),
+		nullableJSON(trx.ProviderResponse), trx.ProviderInitialHTTPStatus, trx.ProviderHTTPStatus, trx.ProcessedAt,
 	).Scan(&trx.ID)
 }
 
@@ -86,7 +88,10 @@ func (r *TransactionRepository) Update(trx *models.Transaction) error {
             provider_id = $21,
             provider_sku_id = $22,
             provider_ref_id = $23,
-            provider_response = $24,
+            provider_initial_response = $24,
+            provider_response = $25,
+            provider_initial_http_status = $26,
+            provider_http_status = $27,
             updated_at = NOW()
         WHERE transaction_id = $1`
 
@@ -120,7 +125,10 @@ func (r *TransactionRepository) Update(trx *models.Transaction) error {
 		trx.ProviderID,
 		trx.ProviderSKUID,
 		trx.ProviderRefID,
+		nullableJSON(trx.ProviderInitialResponse),
 		nullableJSON(trx.ProviderResponse),
+		trx.ProviderInitialHTTPStatus,
+		trx.ProviderHTTPStatus,
 	)
 	return err
 }

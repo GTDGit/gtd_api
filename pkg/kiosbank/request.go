@@ -26,11 +26,11 @@ type PaymentRequest struct {
 	CustomerID  string `json:"customerID"`
 	ReferenceID string `json:"referenceID"`
 	Tagihan     string `json:"tagihan"`              // 12 digits
-	Admin       string `json:"admin"`                 // 12 digits
-	Total       string `json:"total"`                 // 12 digits
-	NoHandphone string `json:"noHanphone,omitempty"`  // BPJS: nomor HP peserta
-	Nama        string `json:"nama,omitempty"`        // K-Vision Paket: nama paket
-	Kode        string `json:"kode,omitempty"`        // K-Vision Paket: kode paket
+	Admin       string `json:"admin"`                // 12 digits
+	Total       string `json:"total"`                // 12 digits
+	NoHandphone string `json:"noHanphone,omitempty"` // BPJS: nomor HP peserta
+	Nama        string `json:"nama,omitempty"`       // K-Vision Paket: nama paket
+	Kode        string `json:"kode,omitempty"`       // K-Vision Paket: kode paket
 }
 
 // SinglePaymentRequest is the request for Single Payment (prepaid)
@@ -47,19 +47,23 @@ type SinglePaymentRequest struct {
 
 // CheckStatusRequest is the request for Check Status
 type CheckStatusRequest struct {
-	SessionID     string `json:"sessionID"`
-	MerchantID    string `json:"merchantID"`
-	ProductID     string `json:"productID"`
-	CustomerID    string `json:"customerID"`
-	ReferenceID   string `json:"referenceID"`
-	Tagihan       string `json:"tagihan"`
-	Admin         string `json:"admin"`
-	Total         string `json:"total"`
-	TglTransaksi  string `json:"tglTransaksi"` // YYYY-MM-DD, required
+	SessionID    string `json:"sessionID"`
+	MerchantID   string `json:"merchantID"`
+	ProductID    string `json:"productID"`
+	CustomerID   string `json:"customerID"`
+	ReferenceID  string `json:"referenceID"`
+	Tagihan      string `json:"tagihan"`
+	Admin        string `json:"admin"`
+	Total        string `json:"total"`
+	NoHandphone  string `json:"noHanphone,omitempty"`
+	Nama         string `json:"nama,omitempty"`
+	Kode         string `json:"kode,omitempty"`
+	TglTransaksi string `json:"tglTransaksi"` // YYYY-MM-DD, required
 }
 
 // PriceListRequest is the request for price list
 type PriceListRequest struct {
 	SessionID  string `json:"sessionID"`
 	MerchantID string `json:"merchantID"`
+	PrefixID   string `json:"prefixID,omitempty"`
 }

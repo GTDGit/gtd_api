@@ -147,13 +147,14 @@ func (c *BRIProviderClient) GetPriceList(_ context.Context, category string) ([]
 
 	products := make([]ProviderProduct, 0, len(c.denominations))
 	for _, amount := range c.denominations {
+		admin := 0
 		products = append(products, ProviderProduct{
 			SKUCode:     strconv.Itoa(amount),
 			ProductName: fmt.Sprintf("BRIZZI Top Up %d", amount),
 			Category:    "e-money",
 			Brand:       "BRIZZI",
 			Price:       amount,
-			Admin:       0,
+			Admin:       &admin,
 			IsActive:    true,
 		})
 	}

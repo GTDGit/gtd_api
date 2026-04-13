@@ -32,10 +32,10 @@ type InquiryData struct {
 // InquiryResponse is the response from Inquiry
 type InquiryResponse struct {
 	BaseResponse
-	CustomerID  string      `json:"customerID"`
-	ProductID   string      `json:"productID"`
-	ReferenceID string      `json:"referenceID"`
-	Data        InquiryData `json:"data"`
+	CustomerID  string          `json:"customerID"`
+	ProductID   string          `json:"productID"`
+	ReferenceID string          `json:"referenceID"`
+	Data        json.RawMessage `json:"data"`
 }
 
 // PaymentData contains payment result data
@@ -56,10 +56,10 @@ type PaymentData struct {
 // PaymentResponse is the response from Payment
 type PaymentResponse struct {
 	BaseResponse
-	CustomerID  string      `json:"customerID"`
-	ProductID   string      `json:"productID"`
-	ReferenceID string      `json:"referenceID"`
-	Data        PaymentData `json:"data"`
+	CustomerID  string          `json:"customerID"`
+	ProductID   string          `json:"productID"`
+	ReferenceID string          `json:"referenceID"`
+	Data        json.RawMessage `json:"data"`
 }
 
 // SinglePaymentData contains single payment result data
@@ -74,19 +74,19 @@ type SinglePaymentData struct {
 // SinglePaymentResponse is the response from Single Payment
 type SinglePaymentResponse struct {
 	BaseResponse
-	CustomerID  string            `json:"customerID"`
-	ProductID   string            `json:"productID"`
-	ReferenceID string            `json:"referenceID"`
-	Data        SinglePaymentData `json:"data"`
+	CustomerID  string          `json:"customerID"`
+	ProductID   string          `json:"productID"`
+	ReferenceID string          `json:"referenceID"`
+	Data        json.RawMessage `json:"data"`
 }
 
 // CheckStatusResponse is the response from Check Status
 type CheckStatusResponse struct {
 	BaseResponse
-	CustomerID  string      `json:"customerID"`
-	ProductID   string      `json:"productID"`
-	ReferenceID string      `json:"referenceID"`
-	Data        PaymentData `json:"data"`
+	CustomerID  string          `json:"customerID"`
+	ProductID   string          `json:"productID"`
+	ReferenceID string          `json:"referenceID"`
+	Data        json.RawMessage `json:"data"`
 }
 
 // toPaymentResponse converts CheckStatusResponse to PaymentResponse for reuse

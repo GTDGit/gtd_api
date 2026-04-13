@@ -93,12 +93,13 @@ func (s *TransactionService) getDigiflazzClient(isSandbox bool) *digiflazz.Clien
 
 // CreateTransactionRequest input
 type CreateTransactionRequest struct {
-	ReferenceID   string `json:"referenceId" binding:"required"`
-	SkuCode       string `json:"skuCode" binding:"required"`
-	CustomerNo    string `json:"customerNo" binding:"required"`
-	Type          string `json:"type" binding:"required,oneof=prepaid inquiry payment"`
-	TransactionID string `json:"transactionId"` // Required for payment
-	Provider      string `json:"provider"`      // Optional: force specific provider (kiosbank, alterra, digiflazz)
+	ReferenceID   string         `json:"referenceId" binding:"required"`
+	SkuCode       string         `json:"skuCode" binding:"required"`
+	CustomerNo    string         `json:"customerNo" binding:"required"`
+	Type          string         `json:"type" binding:"required,oneof=prepaid inquiry payment"`
+	TransactionID string         `json:"transactionId"` // Required for payment
+	Provider      string         `json:"provider"`      // Optional: force specific provider (kiosbank, alterra, digiflazz)
+	Data          map[string]any `json:"data,omitempty"`
 }
 
 // CreateTransaction routes processing based on req.Type.
@@ -553,7 +554,7 @@ func (s *TransactionService) processPayment(ctx context.Context, req *CreateTran
 			Str("inquiry_trx_id", inquiryData.TransactionID).
 			Str("payment_trx_id", payTrxID).
 			Msg("Routing payment to same provider as inquiry")
-		return s.executePaymentWithProvider(ctx, payment, inquiryData)
+		return s.executePaymentWithProvider(ctx, payment, inquiryData, req)
 	}
 
 	// Legacy Digiflazz payment flow
@@ -871,6 +872,33 @@ func (s *TransactionService) logProviderAttempt(trxID int, refID string, request
 	}
 }
 
+func buildProviderLogRequest(opt *models.ProviderOption, req *ProviderRequest) map[string]any {
+	logRequest := map[string]any{
+		"ref_id": req.RefID,
+		"type":   req.Type,
+	}
+	if req.CustomerNo != "" {
+		logRequest["customer_no"] = req.CustomerNo
+	}
+	if req.SKUCode != "" {
+		logRequest["sku_code"] = req.SKUCode
+	}
+	if req.Amount > 0 {
+		logRequest["amount"] = req.Amount
+	}
+	if len(req.Extra) > 0 {
+		logRequest["extra"] = cloneAnyMap(req.Extra)
+	}
+	if opt != nil {
+		logRequest["provider"] = string(opt.ProviderCode)
+		if opt.ProviderSKUCode != "" {
+			logRequest["provider_sku_code"] = opt.ProviderSKUCode
+		}
+		logRequest["admin"] = opt.Admin
+	}
+	return logRequest
+}
+
 // cachedInquiryToTransaction converts cached inquiry data to transaction model.
 func (s *TransactionService) cachedInquiryToTransaction(data *cache.InquiryData, clientID, productID int) *models.Transaction {
 	status := models.StatusSuccess
@@ -1064,6 +1092,11 @@ func (s *TransactionService) executeWithProviderRouter(ctx context.Context, trx 
 		trx.ProviderSKUID = &providerSKUID
 		providerCode := string(result.ProviderUsed.ProviderCode)
 		trx.ProviderCode = &providerCode
+		trx.Admin = result.ProviderUsed.Admin
+		if req.Amount > 0 && trx.Amount == nil {
+			amount := req.Amount
+			trx.Amount = &amount
+		}
 	}
 
 	if result.Response == nil {
@@ -1078,6 +1111,7 @@ func (s *TransactionService) executeWithProviderRouter(ctx context.Context, trx 
 
 	// Store raw response
 	applyProviderTrace(trx, result.Response)
+	s.logProviderAttempt(trx.ID, req.RefID, buildProviderLogRequest(result.ProviderUsed, req), result.Response, nil)
 
 	// Handle response based on status
 	if result.Response.Success {
@@ -1210,6 +1244,10 @@ func (s *TransactionService) executeInquiryWithProviders(
 			CustomerNo: req.CustomerNo,
 			Type:       ProviderTrxInquiry,
 			IsSandbox:  false,
+			Extra:      cloneAnyMap(req.Data),
+		}
+		if opt.ProviderCode == models.ProviderKiosbank {
+			provReq.Extra = normalizeKiosbankRequestData(provReq.Extra)
 		}
 
 		log.Info().
@@ -1234,8 +1272,15 @@ func (s *TransactionService) executeInquiryWithProviders(
 						providerRefNo = rn
 					} else if rn, ok := descMap["refNumber"].(string); ok && rn != "" {
 						providerRefNo = rn
+					} else if rn, ok := descMap["noReferensi"].(string); ok && rn != "" {
+						providerRefNo = rn
 					}
 				}
+			}
+
+			expiredAt := eod
+			if opt.ProviderCode == models.ProviderKiosbank {
+				expiredAt = time.Now().Add(10 * time.Minute)
 			}
 
 			// Cache inquiry with provider info
@@ -1250,7 +1295,7 @@ func (s *TransactionService) executeInquiryWithProviders(
 				Admin:                 resp.Admin,
 				CustomerName:          resp.CustomerName,
 				Description:           resp.Description,
-				ExpiredAt:             eod,
+				ExpiredAt:             expiredAt,
 				ProviderCode:          string(opt.ProviderCode),
 				ProviderSKUCode:       opt.ProviderSKUCode,
 				ProviderID:            opt.ProviderID,
@@ -1259,6 +1304,7 @@ func (s *TransactionService) executeInquiryWithProviders(
 				ProviderResponse:      safeMarshalRaw(resp.RawResponse),
 				ProviderHTTPStatus:    resp.HTTPStatus,
 				ProviderTransactionID: resp.ProviderRefID,
+				ProviderExtra:         cloneAnyMap(provReq.Extra),
 				Status:                string(models.StatusSuccess),
 			}
 
@@ -1306,6 +1352,7 @@ func (s *TransactionService) executeInquiryWithProviders(
 			ProviderResponse:      safeMarshalRaw(resp.RawResponse),
 			ProviderHTTPStatus:    resp.HTTPStatus,
 			ProviderTransactionID: resp.ProviderRefID,
+			ProviderExtra:         cloneAnyMap(provReq.Extra),
 			Status:                string(models.StatusFailed),
 			FailedReason:          failedReason,
 			FailedCode:            resp.RC,
@@ -1391,6 +1438,7 @@ func (s *TransactionService) executePaymentWithProvider(
 	ctx context.Context,
 	payment *models.Transaction,
 	inquiryData *cache.InquiryData,
+	req *CreateTransactionRequest,
 ) (*models.Transaction, error) {
 	adapter := s.providerRouter.GetAdapter(inquiryData.ProviderCode)
 	if adapter == nil {
@@ -1398,15 +1446,25 @@ func (s *TransactionService) executePaymentWithProvider(
 		return nil, fmt.Errorf("provider adapter not found: %s", inquiryData.ProviderCode)
 	}
 
-	extra := map[string]any{
-		"admin": inquiryData.Admin,
+	extra := cloneAnyMap(inquiryData.ProviderExtra)
+	if len(req.Data) > 0 {
+		mergeAnyMap(extra, req.Data)
 	}
 	if inquiryData.ProviderRefNo != "" {
 		extra["reference_no"] = inquiryData.ProviderRefNo
 	}
+	extra["admin"] = inquiryData.Admin
+	if inquiryData.ProviderCode == string(models.ProviderKiosbank) {
+		extra = normalizeKiosbankRequestData(extra)
+	}
+
+	refID := inquiryData.TransactionID
+	if inquiryData.ProviderCode == string(models.ProviderKiosbank) && inquiryData.ProviderTransactionID != "" {
+		refID = inquiryData.ProviderTransactionID
+	}
 
 	provReq := &ProviderRequest{
-		RefID:      inquiryData.TransactionID, // Use inquiry transaction ID as ref for payment
+		RefID:      refID,
 		SKUCode:    inquiryData.ProviderSKUCode,
 		CustomerNo: inquiryData.CustomerNo,
 		Amount:     inquiryData.Amount,
@@ -1422,6 +1480,13 @@ func (s *TransactionService) executePaymentWithProvider(
 	payment.ProviderSKUID = &providerSKUID
 	providerCode := inquiryData.ProviderCode
 	payment.ProviderCode = &providerCode
+	payment.Admin = inquiryData.Admin
+	if inquiryData.Amount > 0 {
+		payment.Amount = &inquiryData.Amount
+	}
+	if inquiryData.ProviderCode == string(models.ProviderKiosbank) && provReq.RefID != "" {
+		payment.ProviderRefID = &provReq.RefID
+	}
 
 	log.Info().
 		Str("provider", inquiryData.ProviderCode).
@@ -1433,14 +1498,12 @@ func (s *TransactionService) executePaymentWithProvider(
 	resp, err := adapter.Payment(ctx, provReq)
 
 	// Log attempt
-	s.logProviderAttempt(payment.ID, provReq.RefID, map[string]any{
-		"provider":    inquiryData.ProviderCode,
-		"sku_code":    inquiryData.ProviderSKUCode,
-		"customer_no": inquiryData.CustomerNo,
-		"ref_id":      provReq.RefID,
-		"amount":      inquiryData.Amount,
-		"admin":       inquiryData.Admin,
-	}, resp, err)
+	s.logProviderAttempt(payment.ID, provReq.RefID, buildProviderLogRequest(&models.ProviderOption{
+		ProviderCode:    models.ProviderCode(inquiryData.ProviderCode),
+		ProviderSKUCode: inquiryData.ProviderSKUCode,
+		Price:           inquiryData.Amount,
+		Admin:           inquiryData.Admin,
+	}, provReq), resp, err)
 
 	if err != nil {
 		log.Error().Err(err).Str("provider", inquiryData.ProviderCode).Msg("Payment network error")

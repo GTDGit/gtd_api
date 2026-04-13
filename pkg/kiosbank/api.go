@@ -2,6 +2,7 @@ package kiosbank
 
 import (
 	"context"
+	"fmt"
 )
 
 // SignOn performs authentication and returns session ID
@@ -98,7 +99,7 @@ func (c *Client) SinglePayment(ctx context.Context, productID, customerID, refer
 
 // CheckStatus checks transaction status
 // tglTransaksi must be YYYY-MM-DD format (date of original payment)
-func (c *Client) CheckStatus(ctx context.Context, productID, customerID, referenceID string, tagihan, admin, total int, tglTransaksi string) (*CheckStatusResponse, error) {
+func (c *Client) CheckStatus(ctx context.Context, productID, customerID, referenceID string, tagihan, admin, total int, tglTransaksi, noHandphone, nama, kode string) (*CheckStatusResponse, error) {
 	sessionID, err := c.ensureSession(ctx)
 	if err != nil {
 		return nil, err
@@ -113,6 +114,9 @@ func (c *Client) CheckStatus(ctx context.Context, productID, customerID, referen
 		Tagihan:      formatAmount(tagihan),
 		Admin:        formatAmount(admin),
 		Total:        formatAmount(total),
+		NoHandphone:  noHandphone,
+		Nama:         nama,
+		Kode:         kode,
 		TglTransaksi: tglTransaksi,
 	}
 
@@ -130,16 +134,34 @@ func (c *Client) GetPriceListPulsa(ctx context.Context) (*PriceListResponse, err
 		return nil, err
 	}
 
-	req := PriceListRequest{
-		SessionID:  sessionID,
-		MerchantID: c.config.MerchantID,
+	prefixes := []string{"11", "21", "31", "41", "51", "81"}
+	merged := make([]PriceListItem, 0)
+	seen := make(map[string]struct{})
+
+	for _, prefixID := range prefixes {
+		req := PriceListRequest{
+			SessionID:  sessionID,
+			MerchantID: c.config.MerchantID,
+			PrefixID:   prefixID,
+		}
+
+		var resp PriceListResponse
+		if err := c.doRequest(ctx, "/Services/getPulsa-Prabayar", req, &resp); err != nil {
+			return nil, fmt.Errorf("prefix %s: %w", prefixID, err)
+		}
+		for _, item := range resp.Record {
+			if _, ok := seen[item.Code]; ok {
+				continue
+			}
+			seen[item.Code] = struct{}{}
+			merged = append(merged, item)
+		}
 	}
 
-	var resp PriceListResponse
-	if err := c.doRequest(ctx, "/Services/getPulsa-Prabayar", req, &resp); err != nil {
-		return nil, err
-	}
-	return &resp, nil
+	return &PriceListResponse{
+		BaseResponse: BaseResponse{RC: RCSuccess},
+		Record:       merged,
+	}, nil
 }
 
 // GetPriceList gets general price list

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -129,8 +130,18 @@ func (s *ProviderCallbackService) ProcessKiosbankCallback(ctx context.Context, p
 	}
 	_ = s.providerRepo.CreateProviderCallback(callback)
 
+	trx.ProviderResponse = models.NullableRawMessage(rawPayload)
+	httpStatus := http.StatusOK
+	trx.ProviderHTTPStatus = &httpStatus
+	if trx.ProviderRefID == nil || *trx.ProviderRefID == "" {
+		trx.ProviderRefID = &refID
+	}
+
 	// Check if transaction is already in terminal state
 	if trx.Status == models.StatusSuccess || trx.Status == models.StatusFailed {
+		if err := s.trxRepo.Update(trx); err != nil {
+			log.Error().Err(err).Str("transaction_id", trx.TransactionID).Msg("Failed to refresh terminal Kiosbank trace from callback")
+		}
 		log.Debug().Str("transaction_id", trx.TransactionID).Str("status", string(trx.Status)).
 			Msg("Kiosbank callback received for terminal transaction, ignoring")
 		callback.IsProcessed = true
@@ -163,9 +174,11 @@ func (s *ProviderCallbackService) ProcessKiosbankCallback(ctx context.Context, p
 		go s.callbackSvc.SendCallback(trx, "transaction.success")
 	} else if kiosbank.IsFatal(rc) {
 		trx.Status = models.StatusFailed
-		if msg, ok := payload["description"].(string); ok {
-			trx.FailedReason = &msg
+		msg := kiosbank.GetRCDescription(rc)
+		if desc, ok := payload["description"].(string); ok && desc != "" {
+			msg = desc
 		}
+		trx.FailedReason = &msg
 		trx.FailedCode = &rc
 		trx.ProcessedAt = &now
 		if err := s.trxRepo.Update(trx); err != nil {
@@ -175,6 +188,10 @@ func (s *ProviderCallbackService) ProcessKiosbankCallback(ctx context.Context, p
 			s.notifier.NotifyTransactionStatusChanged(trx)
 		}
 		go s.callbackSvc.SendCallback(trx, "transaction.failed")
+	} else {
+		if err := s.trxRepo.Update(trx); err != nil {
+			log.Error().Err(err).Str("transaction_id", trx.TransactionID).Msg("Failed to refresh pending Kiosbank trace from callback")
+		}
 	}
 	// If pending, just wait for next callback
 

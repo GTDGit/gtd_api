@@ -67,7 +67,19 @@ type WorkerConfig struct {
 
 // KiosbankConfig contains credentials for Kiosbank PPOB provider
 type KiosbankConfig struct {
-	BaseURL    string
+	BaseURL          string
+	MerchantID       string
+	CounterID        string
+	AccountID        string
+	Mitra            string
+	Username         string
+	Password         string
+	DevelopmentURL   string
+	DevelopmentCreds KiosbankCredentialConfig
+}
+
+// KiosbankCredentialConfig contains environment-specific Kiosbank credentials.
+type KiosbankCredentialConfig struct {
 	MerchantID string
 	CounterID  string
 	AccountID  string
@@ -170,13 +182,22 @@ func Load() (*Config, error) {
 
 	// Kiosbank PPOB Provider
 	cfg.Kiosbank = KiosbankConfig{
-		BaseURL:    getEnv("KIOSBANK_BASE_URL", "https://www.kiosbank.id"),
-		MerchantID: getEnv("KIOSBANK_MERCHANT_ID", ""),
-		CounterID:  getEnv("KIOSBANK_COUNTER_ID", ""),
-		AccountID:  getEnv("KIOSBANK_ACCOUNT_ID", ""),
-		Mitra:      getEnv("KIOSBANK_MITRA", ""),
-		Username:   getEnv("KIOSBANK_USERNAME", ""),
-		Password:   getEnv("KIOSBANK_PASSWORD", ""),
+		BaseURL:        getEnv("KIOSBANK_BASE_URL", "https://transaksi.kiosbank.com:17109"),
+		MerchantID:     getEnv("KIOSBANK_MERCHANT_ID", ""),
+		CounterID:      getEnv("KIOSBANK_COUNTER_ID", ""),
+		AccountID:      getEnv("KIOSBANK_ACCOUNT_ID", ""),
+		Mitra:          getEnv("KIOSBANK_MITRA", ""),
+		Username:       getEnv("KIOSBANK_USERNAME", ""),
+		Password:       getEnv("KIOSBANK_PASSWORD", ""),
+		DevelopmentURL: getEnv("KIOSBANK_DEV_BASE_URL", "https://development.kiosbank.com:4432"),
+		DevelopmentCreds: KiosbankCredentialConfig{
+			MerchantID: getEnv("KIOSBANK_DEV_MERCHANT_ID", getEnv("KIOSBANK_MERCHANT_ID", "")),
+			CounterID:  getEnv("KIOSBANK_DEV_COUNTER_ID", getEnv("KIOSBANK_COUNTER_ID", "")),
+			AccountID:  getEnv("KIOSBANK_DEV_ACCOUNT_ID", getEnv("KIOSBANK_ACCOUNT_ID", "")),
+			Mitra:      getEnv("KIOSBANK_DEV_MITRA", getEnv("KIOSBANK_MITRA", "")),
+			Username:   getEnv("KIOSBANK_DEV_USERNAME", getEnv("KIOSBANK_USERNAME", "")),
+			Password:   getEnv("KIOSBANK_DEV_PASSWORD", getEnv("KIOSBANK_PASSWORD", "")),
+		},
 	}
 
 	// Alterra PPOB Provider

@@ -283,17 +283,5 @@ func formatAmount(amount int) string {
 
 // formatReferenceID formats reference ID to 12 digits with zero padding
 func formatReferenceID(refID string) string {
-	// Remove any non-digit characters and pad/truncate to 12
-	var digits strings.Builder
-	for _, r := range refID {
-		if r >= '0' && r <= '9' {
-			digits.WriteRune(r)
-		}
-	}
-	s := digits.String()
-	if len(s) > 12 {
-		return s[:12]
-	}
-	// Pad with zeros on the left
-	return strings.Repeat("0", 12-len(s)) + s
+	return NormalizeReferenceID(refID)
 }

@@ -32,6 +32,7 @@ type InquiryData struct {
 	ProviderResponse      json.RawMessage `json:"providerResponse,omitempty"`
 	ProviderHTTPStatus    int             `json:"providerHttpStatus,omitempty"`
 	ProviderTransactionID string          `json:"providerTransactionId,omitempty"`
+	ProviderExtra         map[string]any  `json:"providerExtra,omitempty"`
 	Status                string          `json:"status,omitempty"`
 	FailedCode            string          `json:"failedCode,omitempty"`
 	FailedReason          string          `json:"failedReason,omitempty"`
@@ -49,11 +50,21 @@ func NewInquiryCache(redis *RedisClient) *InquiryCache {
 	}
 }
 
-// calculateTTL calculates TTL until end of day in WIB timezone.
-func (c *InquiryCache) calculateTTL() time.Duration {
+// calculateTTL calculates TTL from the inquiry expiry, falling back to end of day WIB.
+func (c *InquiryCache) calculateTTL(data *InquiryData) time.Duration {
+	if !data.ExpiredAt.IsZero() {
+		if ttl := time.Until(data.ExpiredAt); ttl > 0 {
+			return ttl
+		}
+		return time.Second
+	}
+
 	now := time.Now().In(time.FixedZone("WIB", 7*3600)) // UTC+7
 	eod := time.Date(now.Year(), now.Month(), now.Day(), 23, 59, 59, 0, time.FixedZone("WIB", 7*3600))
-	return time.Until(eod)
+	if ttl := time.Until(eod); ttl > 0 {
+		return ttl
+	}
+	return time.Second
 }
 
 // keyByTransactionID returns the primary Redis key for inquiry by transaction ID.
@@ -84,7 +95,7 @@ func (c *InquiryCache) set(ctx context.Context, data *InquiryData, storeCacheKey
 	data.CachedAt = time.Now()
 
 	// Calculate TTL until end of day
-	ttl := c.calculateTTL()
+	ttl := c.calculateTTL(data)
 
 	// Serialize data
 	jsonData, err := json.Marshal(data)

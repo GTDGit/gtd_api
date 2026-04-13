@@ -88,7 +88,7 @@ type ProviderProduct struct {
 	Category    string `json:"category"`
 	Brand       string `json:"brand"`
 	Price       int    `json:"price"`
-	Admin       int    `json:"admin"`
+	Admin       *int   `json:"admin,omitempty"`
 	IsActive    bool   `json:"isActive"`
 	Stock       *int   `json:"stock,omitempty"`
 }

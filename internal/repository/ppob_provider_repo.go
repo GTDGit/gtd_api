@@ -117,12 +117,12 @@ func (r *PPOBProviderRepository) UpdateProviderSKU(sku *models.PPOBProviderSKU) 
 	return err
 }
 
-// UpdateProviderSKUPrice updates price and sync timestamp.
-func (r *PPOBProviderRepository) UpdateProviderSKUPrice(id int, price, admin int, isAvailable bool) error {
+// UpdateProviderSKUPrice updates price, optionally admin, and sync timestamp.
+func (r *PPOBProviderRepository) UpdateProviderSKUPrice(id int, price int, admin *int, isAvailable bool) error {
 	const q = `
 		UPDATE ppob_provider_skus SET 
 			price = $2, 
-			admin = $3, 
+			admin = COALESCE($3, admin), 
 			is_available = $4, 
 			last_sync_at = NOW(),
 			sync_error = NULL,

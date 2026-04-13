@@ -133,13 +133,14 @@ func (c *DigiflazzProviderClient) GetPriceList(ctx context.Context, category str
 		if category != "" && p.Category != category {
 			continue
 		}
+		admin := p.Admin
 		products = append(products, ProviderProduct{
 			SKUCode:     p.BuyerSkuCode,
 			ProductName: p.ProductName,
 			Category:    p.Category,
 			Brand:       p.Brand,
 			Price:       p.Price,
-			Admin:       p.Admin,
+			Admin:       &admin,
 			IsActive:    p.SellerProductStatus && p.BuyerProductStatus,
 		})
 	}

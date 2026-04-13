@@ -29,8 +29,8 @@ import (
 	"github.com/GTDGit/gtd_api/internal/utils"
 	"github.com/GTDGit/gtd_api/internal/worker"
 	"github.com/GTDGit/gtd_api/pkg/alterra"
-	"github.com/GTDGit/gtd_api/pkg/bri"
 	"github.com/GTDGit/gtd_api/pkg/bnc"
+	"github.com/GTDGit/gtd_api/pkg/bri"
 	dfg "github.com/GTDGit/gtd_api/pkg/digiflazz"
 	"github.com/GTDGit/gtd_api/pkg/kiosbank"
 )
@@ -97,18 +97,7 @@ func main() {
 	paymentRepo := repository.NewPaymentRepository(db)
 
 	// 5a. Initialize PPOB provider clients
-	var kioskbankClient *kiosbank.Client
-	if cfg.Kiosbank.Username != "" {
-		kioskbankClient = kiosbank.NewClient(kiosbank.Config{
-			BaseURL:    cfg.Kiosbank.BaseURL,
-			MerchantID: cfg.Kiosbank.MerchantID,
-			CounterID:  cfg.Kiosbank.CounterID,
-			AccountID:  cfg.Kiosbank.AccountID,
-			Mitra:      cfg.Kiosbank.Mitra,
-			Username:   cfg.Kiosbank.Username,
-			Password:   cfg.Kiosbank.Password,
-		})
-	}
+	kioskbankProdClient, kioskbankDevClient := buildKiosbankClients(cfg.Kiosbank)
 
 	var alterraClient *alterra.Client
 	if cfg.Alterra.ClientID != "" && (cfg.Alterra.PrivateKeyPath != "" || cfg.Alterra.PrivateKeyPEM != "") {
@@ -199,8 +188,8 @@ func main() {
 
 	// Initialize Provider Router for multi-provider PPOB
 	providerRouter := service.NewProviderRouter(ppobProviderRepo)
-	if kioskbankClient != nil {
-		kiosbankAdapter := service.NewKiosbankProviderClient(kioskbankClient, kioskbankClient, trxRepo, ppobProviderRepo) // Same client for prod/dev
+	if kioskbankProdClient != nil {
+		kiosbankAdapter := service.NewKiosbankProviderClient(kioskbankProdClient, kioskbankDevClient, trxRepo, cbRepo, ppobProviderRepo)
 		providerRouter.RegisterProvider(models.ProviderKiosbank, kiosbankAdapter)
 		log.Info().Msg("Kiosbank provider registered")
 	}
@@ -480,6 +469,51 @@ func setupRoutes(router *gin.Engine, handlers *Handlers, authMiddleware *middlew
 		// PPOB Provider Health
 		admin.GET("/ppob/health", handlers.PPOBProvider.GetAllProviderHealthToday)
 		admin.GET("/ppob/providers/:id/health", handlers.PPOBProvider.GetProviderHealth)
+	}
+}
+
+func buildKiosbankClients(cfg config.KiosbankConfig) (*kiosbank.Client, *kiosbank.Client) {
+	if cfg.Username == "" {
+		return nil, nil
+	}
+
+	prodClient := kiosbank.NewClient(kiosbankClientConfig(cfg, false))
+	devClient := kiosbank.NewClient(kiosbankClientConfig(cfg, true))
+
+	return prodClient, devClient
+}
+
+func kiosbankClientConfig(cfg config.KiosbankConfig, development bool) kiosbank.Config {
+	if !development {
+		return kiosbank.Config{
+			BaseURL:    cfg.BaseURL,
+			MerchantID: cfg.MerchantID,
+			CounterID:  cfg.CounterID,
+			AccountID:  cfg.AccountID,
+			Mitra:      cfg.Mitra,
+			Username:   cfg.Username,
+			Password:   cfg.Password,
+		}
+	}
+
+	devCreds := cfg.DevelopmentCreds
+	if devCreds.Username == "" {
+		devCreds.Username = cfg.Username
+		devCreds.Password = cfg.Password
+		devCreds.MerchantID = cfg.MerchantID
+		devCreds.CounterID = cfg.CounterID
+		devCreds.AccountID = cfg.AccountID
+		devCreds.Mitra = cfg.Mitra
+	}
+
+	return kiosbank.Config{
+		BaseURL:    cfg.DevelopmentURL,
+		MerchantID: devCreds.MerchantID,
+		CounterID:  devCreds.CounterID,
+		AccountID:  devCreds.AccountID,
+		Mitra:      devCreds.Mitra,
+		Username:   devCreds.Username,
+		Password:   devCreds.Password,
 	}
 }
 

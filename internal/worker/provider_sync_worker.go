@@ -130,7 +130,7 @@ func (w *ProviderSyncWorker) syncProvider(ctx context.Context, provider models.P
 		product, found := priceMap[sku.ProviderSKUCode]
 		if !found {
 			// Product not found in provider's list - mark unavailable
-			if err := w.providerRepo.UpdateProviderSKUPrice(sku.ID, sku.Price, sku.Admin, false); err != nil {
+			if err := w.providerRepo.UpdateProviderSKUPrice(sku.ID, sku.Price, syncedAdmin(sku.Admin, nil), false); err != nil {
 				errors++
 				log.Error().
 					Err(err).
@@ -144,7 +144,7 @@ func (w *ProviderSyncWorker) syncProvider(ctx context.Context, provider models.P
 
 		// Update price and availability
 		isAvailable := product.IsActive
-		if err := w.providerRepo.UpdateProviderSKUPrice(sku.ID, product.Price, product.Admin, isAvailable); err != nil {
+		if err := w.providerRepo.UpdateProviderSKUPrice(sku.ID, product.Price, syncedAdmin(sku.Admin, product.Admin), isAvailable); err != nil {
 			errors++
 			log.Error().
 				Err(err).
@@ -178,4 +178,12 @@ func (w *ProviderSyncWorker) SyncSingleProvider(ctx context.Context, providerCod
 
 	w.syncProvider(ctx, *provider, client)
 	return nil
+}
+
+func syncedAdmin(existing int, updated *int) *int {
+	if updated != nil {
+		return updated
+	}
+	admin := existing
+	return &admin
 }

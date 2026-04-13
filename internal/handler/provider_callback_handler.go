@@ -92,7 +92,7 @@ func (h *ProviderCallbackHandler) HandleKiosbankCallback(c *gin.Context) {
 		// Still return 200 to acknowledge receipt
 	}
 
-	c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	c.JSON(http.StatusOK, gin.H{"status": "received"})
 }
 
 // HandleAlterraCallback handles callback from Alterra

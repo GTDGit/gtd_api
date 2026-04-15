@@ -134,6 +134,8 @@ type TransactionResponse struct {
 	Amount        int                `json:"amount"`
 	Admin         int                `json:"admin,omitempty"`
 	ReferenceNo   string             `json:"reference_no,omitempty"` // Inquiry reference for subsequent purchase
+	Code          string             `json:"code,omitempty"`         // Some Alterra business errors use top-level code
+	Message       string             `json:"message,omitempty"`      // Some Alterra business errors use top-level message
 	Product       TransactionProduct `json:"product"`
 	Data          *TransactionData   `json:"data"`
 	Error         *ErrorDetail       `json:"error"`
@@ -155,6 +157,8 @@ type TransactionDetailResponse struct {
 	ResponseCode  string             `json:"response_code"`
 	Amount        int                `json:"amount"`
 	Admin         int                `json:"admin,omitempty"`
+	Code          string             `json:"code,omitempty"`
+	Message       string             `json:"message,omitempty"`
 	Product       TransactionProduct `json:"product"`
 	Data          *TransactionData   `json:"data"`
 	RawResponse   json.RawMessage    `json:"-"`

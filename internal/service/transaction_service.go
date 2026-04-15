@@ -18,7 +18,9 @@ import (
 	"github.com/GTDGit/gtd_api/internal/repository"
 	"github.com/GTDGit/gtd_api/internal/sse"
 	"github.com/GTDGit/gtd_api/internal/utils"
+	"github.com/GTDGit/gtd_api/pkg/alterra"
 	"github.com/GTDGit/gtd_api/pkg/digiflazz"
+	"github.com/GTDGit/gtd_api/pkg/kiosbank"
 )
 
 // isDuplicateKeyError checks if the error is a PostgreSQL unique constraint violation.
@@ -432,6 +434,74 @@ func (s *TransactionService) handleAllSKUsFailed(trx *models.Transaction) (*mode
 
 	go s.callbackSvc.SendCallback(trx, "transaction.failed")
 	return trx, nil
+}
+
+func extractProviderErrorCode(message string) string {
+	start := -1
+	for i := 0; i < len(message); i++ {
+		ch := message[i]
+		if ch >= '0' && ch <= '9' {
+			if start == -1 {
+				start = i
+			}
+			continue
+		}
+		if start != -1 {
+			token := message[start:i]
+			if len(token) >= 2 && len(token) <= 3 {
+				return token
+			}
+			start = -1
+		}
+	}
+	if start != -1 {
+		token := message[start:]
+		if len(token) >= 2 && len(token) <= 3 {
+			return token
+		}
+	}
+	return ""
+}
+
+func providerResponseFromError(providerCode string, err error) *ProviderResponse {
+	if err == nil {
+		return nil
+	}
+
+	message := strings.TrimSpace(err.Error())
+	rc := extractProviderErrorCode(message)
+
+	switch providerCode {
+	case string(models.ProviderAlterra):
+		if rc != "" {
+			if desc := alterra.GetRCDescription(rc); desc != "Unknown error" {
+				message = desc
+			} else if strings.HasPrefix(message, "http error:") {
+				message = fmt.Sprintf("HTTP error %s", rc)
+			}
+		}
+	case string(models.ProviderKiosbank):
+		if rc == "" {
+			return &ProviderResponse{
+				Pending: true,
+				Status:  string(models.StatusPending),
+				Message: "No response from Kiosbank",
+			}
+		}
+		if desc := kiosbank.GetRCDescription(rc); desc != "Unknown error" {
+			message = desc
+		}
+	}
+
+	if message == "" {
+		message = "Provider transaction failed"
+	}
+
+	return &ProviderResponse{
+		Status:  string(models.StatusFailed),
+		RC:      rc,
+		Message: message,
+	}
 }
 
 // processInquiry handles postpaid inquiry using Redis cache.
@@ -1410,6 +1480,7 @@ func (s *TransactionService) handleProviderPending(trx *models.Transaction, resp
 func (s *TransactionService) handleProviderFailed(trx *models.Transaction, resp *ProviderResponse) (*models.Transaction, error) {
 	now := time.Now()
 	trx.Status = models.StatusFailed
+	trx.NextRetryAt = nil
 	failedMessage := ""
 	if resp != nil {
 		failedMessage = strings.TrimSpace(resp.Message)
@@ -1824,8 +1895,19 @@ func (s *TransactionService) executePaymentWithProvider(
 	s.logProviderAttempt(payment.ID, paymentProviderOption, provReq.RefID, buildProviderLogRequest(paymentProviderOption, provReq), resp, err)
 
 	if err != nil {
-		log.Error().Err(err).Str("provider", inquiryData.ProviderCode).Msg("Payment network error")
-		return s.handleAllSKUsFailed(payment)
+		log.Error().Err(err).Str("provider", inquiryData.ProviderCode).Msg("Payment provider error")
+		errResp := providerResponseFromError(inquiryData.ProviderCode, err)
+		if errResp != nil && errResp.Pending {
+			payment.Status = models.StatusProcessing
+			if err := s.trxRepo.Update(payment); err != nil {
+				log.Error().Err(err).Str("transaction_id", payment.TransactionID).Str("status", string(payment.Status)).Msg("CRITICAL: failed to update payment in DB")
+			}
+			if s.notifier != nil {
+				s.notifier.NotifyTransactionStatusChanged(payment)
+			}
+			return payment, nil
+		}
+		return s.handleProviderFailed(payment, errResp)
 	}
 
 	// Store provider reference ID

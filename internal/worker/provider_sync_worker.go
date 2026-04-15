@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -125,10 +126,16 @@ func (w *ProviderSyncWorker) syncProvider(ctx context.Context, provider models.P
 	updated := 0
 	unavailable := 0
 	errors := 0
+	preserved := 0
 
 	for _, sku := range skus {
 		product, found := priceMap[sku.ProviderSKUCode]
 		if !found {
+			if shouldPreserveProviderSKUAvailability(sku) {
+				preserved++
+				_ = w.providerRepo.UpdateProviderSKUSyncError(sku.ID, "provider SKU not present in live price list; preserved for UAT alias")
+				continue
+			}
 			// Product not found in provider's list - mark unavailable
 			if err := w.providerRepo.UpdateProviderSKUPrice(sku.ID, sku.Price, syncedAdmin(sku.Admin, nil), false); err != nil {
 				errors++
@@ -159,6 +166,7 @@ func (w *ProviderSyncWorker) syncProvider(ctx context.Context, provider models.P
 		Str("provider", string(provider.Code)).
 		Int("updated", updated).
 		Int("unavailable", unavailable).
+		Int("preserved", preserved).
 		Int("errors", errors).
 		Dur("duration", time.Since(start)).
 		Msg("Provider sync completed")
@@ -186,4 +194,8 @@ func syncedAdmin(existing int, updated *int) *int {
 	}
 	admin := existing
 	return &admin
+}
+
+func shouldPreserveProviderSKUAvailability(sku models.PPOBProviderSKU) bool {
+	return strings.HasPrefix(strings.TrimSpace(sku.SkuCode), "99")
 }

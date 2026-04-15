@@ -112,13 +112,9 @@ func (c *AlterraProviderClient) Payment(ctx context.Context, req *ProviderReques
 		return nil, err
 	}
 
-	// Build data with reference_no from inquiry (required by Alterra for postpaid payment)
-	paymentData := sanitizeAlterraExtra(req.Extra)
-	if req.Extra != nil {
-		if refNo, ok := req.Extra["reference_no"].(string); ok && refNo != "" {
-			paymentData["reference_no"] = refNo
-		}
-	}
+	// Alterra purchase/payment docs require only reference_no from inquiry.
+	// Avoid forwarding inquiry-only helper fields like payment_period into purchase.
+	paymentData := buildAlterraPaymentData(req.Extra)
 	data, _ := json.Marshal(paymentData)
 
 	resp, err := client.Payment(ctx, req.CustomerNo, productID, req.RefID, data)
@@ -321,6 +317,9 @@ func alterraResponseCode(resp *alterra.TransactionResponse) string {
 	if resp.Error != nil && resp.Error.Code != "" {
 		return resp.Error.Code
 	}
+	if resp.Code != "" {
+		return resp.Code
+	}
 	if resp.HTTPStatus > 0 {
 		return strconv.Itoa(resp.HTTPStatus)
 	}
@@ -333,6 +332,9 @@ func alterraResponseMessage(resp *alterra.TransactionResponse, rc string) string
 	}
 	if resp.Error != nil && resp.Error.Message != "" {
 		return resp.Error.Message
+	}
+	if resp.Message != "" {
+		return resp.Message
 	}
 	if desc := alterra.GetRCDescription(rc); desc != "Unknown error" {
 		return desc
@@ -358,4 +360,16 @@ func sanitizeAlterraExtra(extra map[string]any) map[string]any {
 		}
 	}
 	return sanitized
+}
+
+func buildAlterraPaymentData(extra map[string]any) map[string]any {
+	paymentData := make(map[string]any)
+	if len(extra) == 0 {
+		return paymentData
+	}
+
+	if refNo, ok := extra["reference_no"].(string); ok && refNo != "" {
+		paymentData["reference_no"] = refNo
+	}
+	return paymentData
 }

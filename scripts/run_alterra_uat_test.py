@@ -34,11 +34,13 @@ class AlterraUATScriptTests(unittest.TestCase):
                 "payment",
                 order_id="TRX-123",
                 reference_no="REF-999",
+                extra_data={"payment_period": "02"},
             )
         )
 
         self.assertEqual(payload["order_id"], "TRX-123")
         self.assertEqual(payload["data"]["reference_no"], "REF-999")
+        self.assertNotIn("payment_period", payload["data"])
 
     def test_scenario_override_applies_vendor_number_for_mobile_restriction(self):
         override = MODULE.scenario_override(

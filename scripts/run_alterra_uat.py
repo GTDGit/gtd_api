@@ -449,7 +449,9 @@ def make_alterra_request(customer_no, product_id, trx_type, order_id=None, refer
         )
 
     if trx_type in ("prepaid", "purchase_with_reference", "payment"):
-        data = dict(extra_data or {})
+        data = {}
+        if trx_type == "prepaid":
+            data = dict(extra_data or {})
         if trx_type in ("purchase_with_reference", "payment") and reference_no:
             data["reference_no"] = reference_no
         return json.dumps(

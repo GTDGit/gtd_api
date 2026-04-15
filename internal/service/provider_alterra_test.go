@@ -41,6 +41,19 @@ func TestAlterraResponseCodeFallsBackToErrorCode(t *testing.T) {
 	}
 }
 
+func TestAlterraResponseCodeFallsBackToTopLevelCode(t *testing.T) {
+	t.Parallel()
+
+	resp := &alterra.TransactionResponse{
+		Code:       "403:product_closed",
+		HTTPStatus: http.StatusBadRequest,
+	}
+
+	if got := alterraResponseCode(resp); got != "403:product_closed" {
+		t.Fatalf("alterraResponseCode() = %q, want %q", got, "403:product_closed")
+	}
+}
+
 func TestAlterraResponseMessageFallsBackToRCDescription(t *testing.T) {
 	t.Parallel()
 
@@ -50,6 +63,19 @@ func TestAlterraResponseMessageFallsBackToRCDescription(t *testing.T) {
 
 	if got := alterraResponseMessage(resp, alterraResponseCode(resp)); got != "General Error" {
 		t.Fatalf("alterraResponseMessage() = %q, want %q", got, "General Error")
+	}
+}
+
+func TestAlterraResponseMessageFallsBackToTopLevelMessage(t *testing.T) {
+	t.Parallel()
+
+	resp := &alterra.TransactionResponse{
+		Code:    "403:product_closed",
+		Message: "Product closed",
+	}
+
+	if got := alterraResponseMessage(resp, alterraResponseCode(resp)); got != "Product closed" {
+		t.Fatalf("alterraResponseMessage() = %q, want %q", got, "Product closed")
 	}
 }
 
@@ -71,5 +97,24 @@ func TestSanitizeAlterraExtraStripsInternalPricingFields(t *testing.T) {
 
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("sanitizeAlterraExtra() = %#v, want %#v", got, want)
+	}
+}
+
+func TestBuildAlterraPaymentDataOnlyKeepsReferenceNo(t *testing.T) {
+	t.Parallel()
+
+	input := map[string]any{
+		"reference_no":   "REF-123",
+		"payment_period": "02",
+		"admin":          2500,
+	}
+
+	got := buildAlterraPaymentData(input)
+	want := map[string]any{
+		"reference_no": "REF-123",
+	}
+
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("buildAlterraPaymentData() = %#v, want %#v", got, want)
 	}
 }

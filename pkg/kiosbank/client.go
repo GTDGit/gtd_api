@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/md5"
 	"crypto/rand"
+	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -21,14 +22,15 @@ import (
 
 // Config holds Kiosbank API configuration
 type Config struct {
-	BaseURL      string
-	MerchantID   string
-	MerchantName string
-	CounterID    string
-	AccountID    string
-	Mitra        string
-	Username     string
-	Password     string
+	BaseURL            string
+	MerchantID         string
+	MerchantName       string
+	CounterID          string
+	AccountID          string
+	Mitra              string
+	Username           string
+	Password           string
+	InsecureSkipVerify bool
 }
 
 // TransportError represents an uncertain provider transport result after the
@@ -71,10 +73,24 @@ type Client struct {
 
 // NewClient creates a new Kiosbank client
 func NewClient(config Config) *Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	if config.InsecureSkipVerify {
+		if transport.TLSClientConfig == nil {
+			transport.TLSClientConfig = &tls.Config{}
+		}
+		transport.TLSClientConfig.InsecureSkipVerify = true
+		log.Warn().
+			Str("base_url", config.BaseURL).
+			Msg("Kiosbank TLS verification disabled for this client")
+	}
+
 	return &Client{
-		httpClient: &http.Client{Timeout: 60 * time.Second},
-		config:     config,
-		debug:      os.Getenv("ENV") == "development",
+		httpClient: &http.Client{
+			Timeout:   60 * time.Second,
+			Transport: transport,
+		},
+		config: config,
+		debug:  os.Getenv("ENV") == "development",
 	}
 }
 

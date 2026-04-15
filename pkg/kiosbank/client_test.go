@@ -371,4 +371,72 @@ func TestGetPriceListUsesLiveDocsGeneralEndpoint(t *testing.T) {
 			t.Fatalf("expected numeric price to normalize to string, got %+v", item)
 		}
 	}
+
+	expectedPulsePrefixes := []string{"AAE.AAAA", "AAE.AAAB", "AAE.AAAC", "AAE.AAAD", "AAE.AAAE", "AAE.AAAF", "AAE.AAAG", "AAE.AAAH"}
+	for _, prefix := range expectedPulsePrefixes {
+		found := false
+		for _, configured := range generalPriceListPrefixes {
+			if configured.PrefixID == prefix && configured.Category == "PULSA" {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("expected general price list prefixes to include %s for PULSA", prefix)
+		}
+	}
+}
+
+func TestClientSupportsInsecureSkipVerifyForBrokenTLS(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") == "" {
+			w.Header().Set("WWW-Authenticate", `Digest realm="test", nonce="nonce", opaque="opaque", qop="auth"`)
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/auth/Sign-On":
+			_, _ = w.Write([]byte(`{"SessionID":"TLS-SESSION"}`))
+		case "/Services/getPulsa-Prabayar":
+			_, _ = w.Write([]byte(`{"rc":"00","record":[]}`))
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	secureClient := NewClient(Config{
+		BaseURL:      server.URL,
+		MerchantID:   "MERCHANT",
+		MerchantName: "Merchant Name",
+		CounterID:    "1",
+		AccountID:    "ACC",
+		Mitra:        "DJI",
+		Username:     "user",
+		Password:     "pass",
+	})
+
+	if _, err := secureClient.GetPriceListPulsa(context.Background()); err == nil {
+		t.Fatal("expected TLS verification error without insecure skip verify")
+	}
+
+	insecureClient := NewClient(Config{
+		BaseURL:            server.URL,
+		MerchantID:         "MERCHANT",
+		MerchantName:       "Merchant Name",
+		CounterID:          "1",
+		AccountID:          "ACC",
+		Mitra:              "DJI",
+		Username:           "user",
+		Password:           "pass",
+		InsecureSkipVerify: true,
+	})
+
+	if _, err := insecureClient.GetPriceListPulsa(context.Background()); err != nil {
+		t.Fatalf("GetPriceListPulsa() with insecure TLS error = %v", err)
+	}
 }

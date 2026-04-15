@@ -67,18 +67,20 @@ type WorkerConfig struct {
 
 // KiosbankConfig contains credentials for Kiosbank PPOB provider
 type KiosbankConfig struct {
-	BaseURL           string
-	MerchantID        string
-	MerchantName      string
-	CounterID         string
-	AccountID         string
-	Mitra             string
-	Username          string
-	Password          string
-	DevelopmentURL    string
-	StatusCheckMinAge time.Duration
-	StatusCheckMaxAge time.Duration
-	DevelopmentCreds  KiosbankCredentialConfig
+	BaseURL                       string
+	MerchantID                    string
+	MerchantName                  string
+	CounterID                     string
+	AccountID                     string
+	Mitra                         string
+	Username                      string
+	Password                      string
+	InsecureSkipVerify            bool
+	DevelopmentURL                string
+	DevelopmentInsecureSkipVerify bool
+	StatusCheckMinAge             time.Duration
+	StatusCheckMaxAge             time.Duration
+	DevelopmentCreds              KiosbankCredentialConfig
 }
 
 // KiosbankCredentialConfig contains environment-specific Kiosbank credentials.
@@ -186,18 +188,22 @@ func Load() (*Config, error) {
 	}
 
 	// Kiosbank PPOB Provider
+	kiosbankBaseURL := getEnv("KIOSBANK_BASE_URL", "https://transaksi.kiosbank.com:17109")
+	kiosbankDevBaseURL := getEnv("KIOSBANK_DEV_BASE_URL", "https://development.kiosbank.com:4432")
 	cfg.Kiosbank = KiosbankConfig{
-		BaseURL:           getEnv("KIOSBANK_BASE_URL", "https://transaksi.kiosbank.com:17109"),
-		MerchantID:        getEnv("KIOSBANK_MERCHANT_ID", ""),
-		MerchantName:      getEnv("KIOSBANK_MERCHANT_NAME", ""),
-		CounterID:         getEnv("KIOSBANK_COUNTER_ID", ""),
-		AccountID:         getEnv("KIOSBANK_ACCOUNT_ID", ""),
-		Mitra:             getEnv("KIOSBANK_MITRA", ""),
-		Username:          getEnv("KIOSBANK_USERNAME", ""),
-		Password:          getEnv("KIOSBANK_PASSWORD", ""),
-		DevelopmentURL:    getEnv("KIOSBANK_DEV_BASE_URL", "https://development.kiosbank.com:4432"),
-		StatusCheckMinAge: 5 * time.Minute,
-		StatusCheckMaxAge: 72 * time.Hour,
+		BaseURL:                       kiosbankBaseURL,
+		MerchantID:                    getEnv("KIOSBANK_MERCHANT_ID", ""),
+		MerchantName:                  getEnv("KIOSBANK_MERCHANT_NAME", ""),
+		CounterID:                     getEnv("KIOSBANK_COUNTER_ID", ""),
+		AccountID:                     getEnv("KIOSBANK_ACCOUNT_ID", ""),
+		Mitra:                         getEnv("KIOSBANK_MITRA", ""),
+		Username:                      getEnv("KIOSBANK_USERNAME", ""),
+		Password:                      getEnv("KIOSBANK_PASSWORD", ""),
+		InsecureSkipVerify:            getEnvBool("KIOSBANK_INSECURE_SKIP_VERIFY", defaultKiosbankInsecureSkipVerify(kiosbankBaseURL)),
+		DevelopmentURL:                kiosbankDevBaseURL,
+		DevelopmentInsecureSkipVerify: getEnvBool("KIOSBANK_DEV_INSECURE_SKIP_VERIFY", defaultKiosbankInsecureSkipVerify(kiosbankDevBaseURL)),
+		StatusCheckMinAge:             5 * time.Minute,
+		StatusCheckMaxAge:             72 * time.Hour,
 		DevelopmentCreds: KiosbankCredentialConfig{
 			MerchantID:   getEnv("KIOSBANK_DEV_MERCHANT_ID", getEnv("KIOSBANK_MERCHANT_ID", "")),
 			MerchantName: getEnv("KIOSBANK_DEV_MERCHANT_NAME", getEnv("KIOSBANK_MERCHANT_NAME", "")),
@@ -336,6 +342,22 @@ func getEnvInt(key string, def int) int {
 	return i
 }
 
+// getEnvBool parses a boolean environment variable.
+func getEnvBool(key string, def bool) bool {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return def
+	}
+	switch strings.ToLower(v) {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return def
+	}
+}
+
 // getEnvIntList parses a comma-separated integer environment variable.
 func getEnvIntList(key string, def []int) []int {
 	v := strings.TrimSpace(os.Getenv(key))
@@ -374,4 +396,8 @@ func parseDurationEnv(key, def string) (time.Duration, error) {
 		return 0, fmt.Errorf("duration must be >= 0")
 	}
 	return d, nil
+}
+
+func defaultKiosbankInsecureSkipVerify(baseURL string) bool {
+	return strings.Contains(strings.ToLower(baseURL), "development.kiosbank.com")
 }

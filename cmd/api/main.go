@@ -480,10 +480,10 @@ func buildKiosbankClients(cfg config.KiosbankConfig) (*kiosbank.Client, *kiosban
 		return nil, nil
 	}
 	if cfg.MerchantName == "" {
-		log.Warn().Msg("KIOSBANK_MERCHANT_NAME is empty; sign-on request will not match live docs")
+		log.Warn().Msg("KIOSBANK_MERCHANT_NAME is empty; falling back to KIOSBANK_MERCHANT_ID for sign-on")
 	}
 	if cfg.DevelopmentURL != "" && cfg.DevelopmentCreds.MerchantName == "" {
-		log.Warn().Msg("KIOSBANK_DEV_MERCHANT_NAME is empty; development sign-on request will not match live docs")
+		log.Warn().Msg("KIOSBANK_DEV_MERCHANT_NAME is empty; falling back to development merchant ID for sign-on")
 	}
 
 	prodClient := kiosbank.NewClient(kiosbankClientConfig(cfg, false))
@@ -494,15 +494,20 @@ func buildKiosbankClients(cfg config.KiosbankConfig) (*kiosbank.Client, *kiosban
 
 func kiosbankClientConfig(cfg config.KiosbankConfig, development bool) kiosbank.Config {
 	if !development {
+		merchantName := cfg.MerchantName
+		if merchantName == "" {
+			merchantName = cfg.MerchantID
+		}
 		return kiosbank.Config{
-			BaseURL:      cfg.BaseURL,
-			MerchantID:   cfg.MerchantID,
-			MerchantName: cfg.MerchantName,
-			CounterID:    cfg.CounterID,
-			AccountID:    cfg.AccountID,
-			Mitra:        cfg.Mitra,
-			Username:     cfg.Username,
-			Password:     cfg.Password,
+			BaseURL:            cfg.BaseURL,
+			MerchantID:         cfg.MerchantID,
+			MerchantName:       merchantName,
+			CounterID:          cfg.CounterID,
+			AccountID:          cfg.AccountID,
+			Mitra:              cfg.Mitra,
+			Username:           cfg.Username,
+			Password:           cfg.Password,
+			InsecureSkipVerify: cfg.InsecureSkipVerify,
 		}
 	}
 
@@ -516,16 +521,20 @@ func kiosbankClientConfig(cfg config.KiosbankConfig, development bool) kiosbank.
 		devCreds.AccountID = cfg.AccountID
 		devCreds.Mitra = cfg.Mitra
 	}
+	if devCreds.MerchantName == "" {
+		devCreds.MerchantName = devCreds.MerchantID
+	}
 
 	return kiosbank.Config{
-		BaseURL:      cfg.DevelopmentURL,
-		MerchantID:   devCreds.MerchantID,
-		MerchantName: devCreds.MerchantName,
-		CounterID:    devCreds.CounterID,
-		AccountID:    devCreds.AccountID,
-		Mitra:        devCreds.Mitra,
-		Username:     devCreds.Username,
-		Password:     devCreds.Password,
+		BaseURL:            cfg.DevelopmentURL,
+		MerchantID:         devCreds.MerchantID,
+		MerchantName:       devCreds.MerchantName,
+		CounterID:          devCreds.CounterID,
+		AccountID:          devCreds.AccountID,
+		Mitra:              devCreds.Mitra,
+		Username:           devCreds.Username,
+		Password:           devCreds.Password,
+		InsecureSkipVerify: cfg.DevelopmentInsecureSkipVerify,
 	}
 }
 

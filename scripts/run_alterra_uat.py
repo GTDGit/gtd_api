@@ -146,6 +146,39 @@ def remote_exec(script, timeout=20):
     return result.stdout.strip(), result.stderr.strip(), result.returncode
 
 
+SKU_CACHE = {}
+
+
+def resolve_gtd_sku(product_id):
+    product_id = str(product_id).strip()
+    if not product_id:
+        return ""
+    if product_id in SKU_CACHE:
+        return SKU_CACHE[product_id]
+
+    sql = (
+        "SELECT p.sku_code "
+        "FROM ppob_provider_skus pps "
+        "JOIN products p ON p.id = pps.product_id "
+        "JOIN ppob_providers pp ON pp.id = pps.provider_id "
+        f"WHERE pp.code='alterra' AND pps.provider_sku_code='{product_id}' "
+        "ORDER BY p.sku_code "
+        "LIMIT 1;"
+    )
+    script = (
+        f"cd {shlex.quote(REMOTE_BACKEND_DIR)} && "
+        f"docker exec gtd-postgres psql -U gtd_user -d gtd -t -A -c {shlex.quote(sql)}"
+    )
+    out, _, rc = remote_exec(script, timeout=20)
+    if rc == 0 and out:
+        SKU_CACHE[product_id] = out.strip()
+        return SKU_CACHE[product_id]
+
+    fallback = PRODUCT_MAP.get(product_id, "")
+    SKU_CACHE[product_id] = fallback
+    return fallback
+
+
 def query_transaction_trace(trx_id):
     if not trx_id:
         return {}
@@ -669,7 +702,7 @@ def execute_scenario(scenario):
     if not product_id or not customer_no:
         return {"error": f"Missing product_id={product_id} or customer_no={customer_no}"}
 
-    sku_code = PRODUCT_MAP.get(product_id)
+    sku_code = resolve_gtd_sku(product_id)
     if not sku_code:
         return {"error": f"No SKU mapping for product_id={product_id}"}
 

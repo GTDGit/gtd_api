@@ -74,7 +74,11 @@ func (h *TransactionHandler) GetTransaction(c *gin.Context) {
 
 	trx, err := h.trxService.GetTransaction(transactionID, clientID)
 	if err != nil {
-		utils.Error(c, 404, "TRANSACTION_NOT_FOUND", "Transaction not found")
+		if err == utils.ErrTransactionNotFound {
+			utils.Error(c, 404, "TRANSACTION_NOT_FOUND", "Transaction not found")
+			return
+		}
+		utils.Error(c, 500, "INTERNAL_ERROR", "Internal server error")
 		return
 	}
 

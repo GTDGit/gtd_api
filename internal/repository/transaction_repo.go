@@ -23,6 +23,11 @@ func NewTransactionRepository(db *sqlx.DB) *TransactionRepository {
 	return &TransactionRepository{db: db}
 }
 
+const transactionSelectWithProvider = `
+	SELECT t.*, pp.code AS provider_code
+	FROM transactions t
+	LEFT JOIN ppob_providers pp ON t.provider_id = pp.id`
+
 // nullableJSON converts empty NullableRawMessage to nil for proper NULL handling in PostgreSQL.
 func nullableJSON(v models.NullableRawMessage) interface{} {
 	if len(v) == 0 {
@@ -135,7 +140,7 @@ func (r *TransactionRepository) Update(trx *models.Transaction) error {
 
 // GetByTransactionID returns transaction by transaction_id.
 func (r *TransactionRepository) GetByTransactionID(transactionID string) (*models.Transaction, error) {
-	const q = `SELECT * FROM transactions WHERE transaction_id = $1 LIMIT 1`
+	const q = transactionSelectWithProvider + ` WHERE t.transaction_id = $1 LIMIT 1`
 	stmt, err := r.db.Preparex(q)
 	if err != nil {
 		return nil, err
@@ -153,7 +158,7 @@ func (r *TransactionRepository) GetByTransactionID(transactionID string) (*model
 
 // GetByProviderRefID returns transaction by provider_ref_id.
 func (r *TransactionRepository) GetByProviderRefID(providerRefID string) (*models.Transaction, error) {
-	const q = `SELECT * FROM transactions WHERE provider_ref_id = $1 LIMIT 1`
+	const q = transactionSelectWithProvider + ` WHERE t.provider_ref_id = $1 LIMIT 1`
 	stmt, err := r.db.Preparex(q)
 	if err != nil {
 		return nil, err
@@ -171,7 +176,7 @@ func (r *TransactionRepository) GetByProviderRefID(providerRefID string) (*model
 
 // GetByReferenceID returns transaction by client_id and reference_id.
 func (r *TransactionRepository) GetByReferenceID(clientID int, referenceID string) (*models.Transaction, error) {
-	const q = `SELECT * FROM transactions WHERE client_id = $1 AND reference_id = $2 LIMIT 1`
+	const q = transactionSelectWithProvider + ` WHERE t.client_id = $1 AND t.reference_id = $2 LIMIT 1`
 	stmt, err := r.db.Preparex(q)
 	if err != nil {
 		return nil, err
@@ -189,7 +194,7 @@ func (r *TransactionRepository) GetByReferenceID(clientID int, referenceID strin
 
 // GetByDigiRefID returns transaction by digi_ref_id.
 func (r *TransactionRepository) GetByDigiRefID(digiRefID string) (*models.Transaction, error) {
-	const q = `SELECT * FROM transactions WHERE digi_ref_id = $1 LIMIT 1`
+	const q = transactionSelectWithProvider + ` WHERE t.digi_ref_id = $1 LIMIT 1`
 	stmt, err := r.db.Preparex(q)
 	if err != nil {
 		return nil, err
@@ -308,8 +313,7 @@ func (r *TransactionRepository) GenerateTransactionID() (string, error) {
 // GetInquiryForPayment returns the inquiry transaction eligible for linking to a payment.
 // Validations: type='inquiry', status='Success', expired_at > NOW(), and not already used by a payment.
 func (r *TransactionRepository) GetInquiryForPayment(transactionID string) (*models.Transaction, error) {
-	const q = `
-        SELECT * FROM transactions t
+	const q = transactionSelectWithProvider + `
         WHERE t.transaction_id = $1
           AND t.type = 'inquiry'
           AND t.status = 'Success'

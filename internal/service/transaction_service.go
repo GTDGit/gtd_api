@@ -3,7 +3,9 @@ package service
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -640,13 +642,31 @@ func (s *TransactionService) processPayment(ctx context.Context, req *CreateTran
 // GetTransaction retrieves a transaction visible to the given client.
 func (s *TransactionService) GetTransaction(transactionID string, clientID int) (*models.Transaction, error) {
 	trx, err := s.trxRepo.GetByTransactionID(transactionID)
-	if err != nil || trx == nil {
+	if err == nil && trx != nil {
+		if trx.ClientID != clientID {
+			return nil, utils.ErrTransactionNotFound
+		}
+		return trx, nil
+	}
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
+	if s.inquiryCache == nil {
 		return nil, utils.ErrTransactionNotFound
 	}
-	if trx.ClientID != clientID {
-		return nil, utils.ErrTransactionNotFound
+
+	cached, cacheErr := s.inquiryCache.GetByTransactionID(context.Background(), transactionID)
+	if cacheErr == nil && cached != nil {
+		if cached.ClientID != clientID {
+			return nil, utils.ErrTransactionNotFound
+		}
+		return s.cachedInquiryToTransaction(cached, cached.ClientID, cached.ProductID), nil
 	}
-	return trx, nil
+	if cacheErr != nil && cacheErr != redis.Nil {
+		return nil, cacheErr
+	}
+
+	return nil, utils.ErrTransactionNotFound
 }
 
 // RetryTransaction retries a pending/processing transaction.
@@ -1049,15 +1069,39 @@ func (s *TransactionService) cachedInquiryToTransaction(data *cache.InquiryData,
 		status = models.TransactionStatus(data.Status)
 	}
 	amount := data.Amount
-	customerName := data.CustomerName
 	expiredAt := data.ExpiredAt
+	createdAt := data.CachedAt
+	if createdAt.IsZero() {
+		createdAt = time.Now()
+	}
 	var failedCode *string
 	if data.FailedCode != "" {
 		failedCode = &data.FailedCode
 	}
 	var failedReason *string
-	if data.FailedReason != "" {
-		failedReason = &data.FailedReason
+	if reason := strings.TrimSpace(data.FailedReason); reason != "" {
+		failedReason = &reason
+	}
+	var customerName *string
+	if name := strings.TrimSpace(data.CustomerName); name != "" {
+		customerName = &name
+	}
+	var providerCode *string
+	if code := strings.TrimSpace(data.ProviderCode); code != "" {
+		providerCode = &code
+	}
+	var providerID *int
+	if data.ProviderID > 0 {
+		providerID = &data.ProviderID
+	}
+	var providerSKUID *int
+	if data.ProviderSKUID > 0 {
+		providerSKUID = &data.ProviderSKUID
+	}
+	var processedAt *time.Time
+	if status == models.StatusSuccess || status == models.StatusFailed {
+		processed := createdAt
+		processedAt = &processed
 	}
 
 	return &models.Transaction{
@@ -1071,10 +1115,13 @@ func (s *TransactionService) cachedInquiryToTransaction(data *cache.InquiryData,
 		Status:        status,
 		Amount:        &amount,
 		Admin:         data.Admin,
-		CustomerName:  &customerName,
+		CustomerName:  customerName,
 		Description:   models.NullableRawMessage(data.Description),
 		FailedCode:    failedCode,
 		FailedReason:  failedReason,
+		ProviderID:    providerID,
+		ProviderSKUID: providerSKUID,
+		ProviderCode:  providerCode,
 		ProviderRefID: func() *string {
 			if data.ProviderTransactionID == "" {
 				return nil
@@ -1084,6 +1131,8 @@ func (s *TransactionService) cachedInquiryToTransaction(data *cache.InquiryData,
 		}(),
 		ProviderResponse: models.NullableRawMessage(data.ProviderResponse),
 		ExpiredAt:        &expiredAt,
+		CreatedAt:        createdAt,
+		ProcessedAt:      processedAt,
 	}
 }
 
@@ -1595,7 +1644,7 @@ func (s *TransactionService) executeInquiryWithProviders(
 			Str("message", resp.Message).
 			Msg("Inquiry failed with provider (biller error)")
 
-		failedReason := resp.Message
+		failedReason := strings.TrimSpace(resp.Message)
 		if failedReason == "" {
 			failedReason = fmt.Sprintf("Inquiry failed: RC %s", resp.RC)
 		}

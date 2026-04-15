@@ -22,6 +22,23 @@ ON CONFLICT (sku_code) DO UPDATE SET
     is_active = true,
     updated_at = NOW();
 
+DELETE FROM ppob_provider_skus
+WHERE provider_id = (SELECT id FROM ppob_providers WHERE code = 'alterra')
+  AND (
+      provider_sku_code IN ('11', '27', '112', '446', '447', '686', '687')
+      OR product_id IN (
+          SELECT id FROM products WHERE sku_code IN (
+              '9900011',
+              '9900027',
+              '9900112',
+              '9900446',
+              '9900447',
+              '9900686',
+              '9900687'
+          )
+      )
+  );
+
 INSERT INTO ppob_provider_skus (
     provider_id,
     product_id,
@@ -56,7 +73,8 @@ FROM (
         ('9900687', '687', 'BPJS Ketenagakerjaan - Iuran 12 bln', 0, 1000, 0)
 ) AS v(sku_code, provider_sku_code, provider_product_name, price, admin, commission)
 JOIN products p ON p.sku_code = v.sku_code
-ON CONFLICT (provider_id, provider_sku_code) DO UPDATE SET
+ON CONFLICT (provider_id, product_id) DO UPDATE SET
+    provider_sku_code = EXCLUDED.provider_sku_code,
     product_id = EXCLUDED.product_id,
     provider_product_name = EXCLUDED.provider_product_name,
     price = EXCLUDED.price,

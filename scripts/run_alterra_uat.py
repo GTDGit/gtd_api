@@ -121,6 +121,12 @@ OUTPUT_PATH = os.path.join(
     f"[GTD] Scenario UAT - Filled {RUN_STAMP}.xlsx",
 )
 
+SCENARIO_OVERRIDES = {
+    ("Mobile_Prepaid", "10"): {
+        "customer_no": "0878891149161214",
+    },
+}
+
 
 def next_ref(prefix):
     global REF_COUNTER
@@ -378,21 +384,39 @@ def result_status_matches(expected_result, actual_status):
     return False
 
 
-def make_alterra_request(customer_no, product_id, trx_type, order_id=None, reference_no=None):
+def scenario_override(scenario):
+    override = dict(SCENARIO_OVERRIDES.get((scenario["sheet"], scenario["number"]), {}))
+
+    if scenario["sheet"] == "BPJS_Kesehatan":
+        payment_period = "01"
+        if scenario["number"] == "2":
+            payment_period = "02"
+        elif scenario["number"] == "9":
+            payment_period = "00"
+        override.setdefault("data", {})
+        override["data"]["payment_period"] = payment_period
+
+    return override
+
+
+def make_alterra_request(customer_no, product_id, trx_type, order_id=None, reference_no=None, extra_data=None):
     pid = int(product_id) if product_id and str(product_id).isdigit() else product_id
 
     if trx_type == "inquiry":
+        data = {"product_id": pid}
+        if extra_data:
+            data.update(extra_data)
         return json.dumps(
             {
                 "customer_id": customer_no,
                 "inquiry_type": "Customer_information",
-                "data": {"product_id": pid},
+                "data": data,
             },
             indent=2,
         )
 
     if trx_type in ("prepaid", "purchase_with_reference", "payment"):
-        data = {}
+        data = dict(extra_data or {})
         if trx_type in ("purchase_with_reference", "payment") and reference_no:
             data["reference_no"] = reference_no
         return json.dumps(
@@ -414,7 +438,7 @@ def make_alterra_request(customer_no, product_id, trx_type, order_id=None, refer
     return ""
 
 
-def execute_prepaid(ref_id, sku_code, customer_no):
+def execute_prepaid(ref_id, sku_code, customer_no, extra_data=None):
     body = {
         "referenceId": ref_id,
         "skuCode": sku_code,
@@ -422,12 +446,16 @@ def execute_prepaid(ref_id, sku_code, customer_no):
         "type": "prepaid",
         "provider": "alterra",
     }
+    if extra_data:
+        body["data"] = extra_data
 
     code, resp, raw = api_call("POST", "/v1/ppob/transaction", body)
     result = {
         "purchase_http_code": code,
         "purchase_response": resp,
         "purchase_raw": raw,
+        "request_data": extra_data or {},
+        "customer_no": customer_no,
     }
 
     trx_id = resp.get("data", {}).get("transactionId") if resp else None
@@ -462,7 +490,7 @@ def execute_prepaid(ref_id, sku_code, customer_no):
     return result
 
 
-def execute_inquiry(ref_id, sku_code, customer_no):
+def execute_inquiry(ref_id, sku_code, customer_no, extra_data=None):
     body = {
         "referenceId": ref_id,
         "skuCode": sku_code,
@@ -470,12 +498,16 @@ def execute_inquiry(ref_id, sku_code, customer_no):
         "type": "inquiry",
         "provider": "alterra",
     }
+    if extra_data:
+        body["data"] = extra_data
 
     code, resp, raw = api_call("POST", "/v1/ppob/transaction", body)
     result = {
         "inquiry_http_code": code,
         "inquiry_response": resp,
         "inquiry_raw": raw,
+        "request_data": extra_data or {},
+        "customer_no": customer_no,
     }
 
     trx_id = resp.get("data", {}).get("transactionId") if resp else None
@@ -494,7 +526,7 @@ def execute_inquiry(ref_id, sku_code, customer_no):
     return result
 
 
-def execute_payment(inquiry_trx_id, ref_id, sku_code, customer_no):
+def execute_payment(inquiry_trx_id, ref_id, sku_code, customer_no, extra_data=None):
     body = {
         "referenceId": ref_id,
         "skuCode": sku_code,
@@ -503,6 +535,8 @@ def execute_payment(inquiry_trx_id, ref_id, sku_code, customer_no):
         "transactionId": inquiry_trx_id,
         "provider": "alterra",
     }
+    if extra_data:
+        body["data"] = extra_data
 
     code, resp, raw = api_call("POST", "/v1/ppob/transaction", body)
     result = {
@@ -510,6 +544,8 @@ def execute_payment(inquiry_trx_id, ref_id, sku_code, customer_no):
         "payment_response": resp,
         "payment_raw": raw,
         "alterra_order_id": inquiry_trx_id,
+        "request_data": extra_data or {},
+        "customer_no": customer_no,
     }
 
     trx_id = resp.get("data", {}).get("transactionId") if resp else None
@@ -626,8 +662,10 @@ def parse_scenarios(ws, sheet_name):
 
 
 def execute_scenario(scenario):
-    product_id = scenario["product_id"]
-    customer_no = scenario["customer_no"]
+    override = scenario_override(scenario)
+    product_id = override.get("product_id", scenario["product_id"])
+    customer_no = override.get("customer_no", scenario["customer_no"])
+    extra_data = override.get("data") or {}
     if not product_id or not customer_no:
         return {"error": f"Missing product_id={product_id} or customer_no={customer_no}"}
 
@@ -651,7 +689,7 @@ def execute_scenario(scenario):
     )
 
     if has_inquiry:
-        inquiry = execute_inquiry(ref_id, sku_code, customer_no)
+        inquiry = execute_inquiry(ref_id, sku_code, customer_no, extra_data=extra_data)
         results["inquiry"] = inquiry
         inquiry_trx_id = inquiry.get("transactionId")
         print(
@@ -669,7 +707,13 @@ def execute_scenario(scenario):
                     f"final={purchase.get('final_status')}"
                 )
             else:
-                payment = execute_payment(inquiry_trx_id, ref_id, sku_code, customer_no)
+                payment = execute_payment(
+                    inquiry_trx_id,
+                    ref_id,
+                    sku_code,
+                    customer_no,
+                    extra_data=extra_data,
+                )
                 results["payment"] = payment
                 print(
                     f"    Payment: GTD HTTP {payment.get('payment_http_code')} "
@@ -679,7 +723,7 @@ def execute_scenario(scenario):
             print("    Inquiry not successful, skipping purchase/payment")
 
     elif "purchase" in first_action:
-        purchase = execute_prepaid(ref_id, sku_code, customer_no)
+        purchase = execute_prepaid(ref_id, sku_code, customer_no, extra_data=extra_data)
         results["purchase"] = purchase
         print(
             f"    Purchase: GTD HTTP {purchase.get('purchase_http_code')} "
@@ -776,10 +820,20 @@ def safe_set_cell(ws, row, col, value):
 
 def fill_scenario_rows(ws, scenario, results, matches, issues):
     reference_no = ""
+    request_data = {}
+    customer_no = scenario["customer_no"]
     if "inquiry" in results:
+        request_data = results["inquiry"].get("request_data") or {}
+        customer_no = results["inquiry"].get("customer_no") or customer_no
         reference_no = extract_reference_no(results["inquiry"].get("provider_response"))
         if not reference_no:
             reference_no = results["inquiry"].get("provider_ref_no", "")
+    elif "purchase" in results:
+        request_data = results["purchase"].get("request_data") or {}
+        customer_no = results["purchase"].get("customer_no") or customer_no
+    elif "payment" in results:
+        request_data = results["payment"].get("request_data") or {}
+        customer_no = results["payment"].get("customer_no") or customer_no
 
     for step in scenario["steps"]:
         row = step["row"]
@@ -791,7 +845,17 @@ def fill_scenario_rows(ws, scenario, results, matches, issues):
 
         if "inquiry" in action and "inquiry" in results:
             inquiry = results["inquiry"]
-            safe_set_cell(ws, row, 11, make_alterra_request(scenario["customer_no"], scenario["product_id"], "inquiry"))
+            safe_set_cell(
+                ws,
+                row,
+                11,
+                make_alterra_request(
+                    customer_no,
+                    scenario["product_id"],
+                    "inquiry",
+                    extra_data=request_data,
+                ),
+            )
             safe_set_cell(ws, row, 12, format_json_text(inquiry.get("provider_response")))
 
         elif ("purchase" in action or "transaction" in action) and "callback" not in action and "get detail" not in action:
@@ -811,11 +875,12 @@ def fill_scenario_rows(ws, scenario, results, matches, issues):
                     row,
                     11,
                     make_alterra_request(
-                        scenario["customer_no"],
+                        customer_no,
                         scenario["product_id"],
                         trx_type,
                         actual_order_id,
                         reference_no,
+                        request_data,
                     ),
                 )
                 safe_set_cell(ws, row, 12, format_json_text(initial_response))

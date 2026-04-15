@@ -57,7 +57,7 @@ func (c *AlterraProviderClient) Topup(ctx context.Context, req *ProviderRequest)
 	// Get extra data if provided
 	var data json.RawMessage
 	if req.Extra != nil {
-		data, _ = json.Marshal(req.Extra)
+		data, _ = json.Marshal(sanitizeAlterraExtra(req.Extra))
 	}
 
 	resp, err := client.Purchase(ctx, req.CustomerNo, productID, req.RefID, data)
@@ -86,7 +86,7 @@ func (c *AlterraProviderClient) Inquiry(ctx context.Context, req *ProviderReques
 	// Get extra data if provided
 	var data json.RawMessage
 	if req.Extra != nil {
-		data, _ = json.Marshal(req.Extra)
+		data, _ = json.Marshal(sanitizeAlterraExtra(req.Extra))
 	}
 
 	resp, err := client.Inquiry(ctx, req.CustomerNo, productID, req.RefID, data)
@@ -113,7 +113,7 @@ func (c *AlterraProviderClient) Payment(ctx context.Context, req *ProviderReques
 	}
 
 	// Build data with reference_no from inquiry (required by Alterra for postpaid payment)
-	paymentData := map[string]any{}
+	paymentData := sanitizeAlterraExtra(req.Extra)
 	if req.Extra != nil {
 		if refNo, ok := req.Extra["reference_no"].(string); ok && refNo != "" {
 			paymentData["reference_no"] = refNo
@@ -341,4 +341,21 @@ func alterraResponseMessage(resp *alterra.TransactionResponse, rc string) string
 		return resp.Status
 	}
 	return "Alterra transaction failed"
+}
+
+func sanitizeAlterraExtra(extra map[string]any) map[string]any {
+	if len(extra) == 0 {
+		return map[string]any{}
+	}
+
+	sanitized := make(map[string]any, len(extra))
+	for key, value := range extra {
+		switch key {
+		case "admin", "commission":
+			continue
+		default:
+			sanitized[key] = value
+		}
+	}
+	return sanitized
 }

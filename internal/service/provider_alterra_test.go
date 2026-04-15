@@ -2,6 +2,7 @@ package service
 
 import (
 	"net/http"
+	"reflect"
 	"testing"
 
 	"github.com/GTDGit/gtd_api/pkg/alterra"
@@ -49,5 +50,26 @@ func TestAlterraResponseMessageFallsBackToRCDescription(t *testing.T) {
 
 	if got := alterraResponseMessage(resp, alterraResponseCode(resp)); got != "General Error" {
 		t.Fatalf("alterraResponseMessage() = %q, want %q", got, "General Error")
+	}
+}
+
+func TestSanitizeAlterraExtraStripsInternalPricingFields(t *testing.T) {
+	t.Parallel()
+
+	input := map[string]any{
+		"reference_no":   "REF-123",
+		"payment_period": "02",
+		"admin":          2500,
+		"commission":     500,
+	}
+
+	got := sanitizeAlterraExtra(input)
+	want := map[string]any{
+		"reference_no":   "REF-123",
+		"payment_period": "02",
+	}
+
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("sanitizeAlterraExtra() = %#v, want %#v", got, want)
 	}
 }

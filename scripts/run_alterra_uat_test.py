@@ -13,6 +13,19 @@ SPEC.loader.exec_module(MODULE)
 
 
 class AlterraUATScriptTests(unittest.TestCase):
+    def test_bpjs_inquiry_request_includes_payment_period(self):
+        payload = json.loads(
+            MODULE.make_alterra_request(
+                "0000001430071801",
+                "34",
+                "inquiry",
+                extra_data={"payment_period": "02"},
+            )
+        )
+
+        self.assertEqual(payload["data"]["product_id"], 34)
+        self.assertEqual(payload["data"]["payment_period"], "02")
+
     def test_make_alterra_request_payment_includes_reference_no(self):
         payload = json.loads(
             MODULE.make_alterra_request(
@@ -26,6 +39,26 @@ class AlterraUATScriptTests(unittest.TestCase):
 
         self.assertEqual(payload["order_id"], "TRX-123")
         self.assertEqual(payload["data"]["reference_no"], "REF-999")
+
+    def test_scenario_override_applies_vendor_number_for_mobile_restriction(self):
+        override = MODULE.scenario_override(
+            {
+                "sheet": "Mobile_Prepaid",
+                "number": "10",
+            }
+        )
+
+        self.assertEqual(override["customer_no"], "0878891149161214")
+
+    def test_scenario_override_applies_bpjs_payment_period(self):
+        override = MODULE.scenario_override(
+            {
+                "sheet": "BPJS_Kesehatan",
+                "number": "2",
+            }
+        )
+
+        self.assertEqual(override["data"]["payment_period"], "02")
 
     def test_validate_step_uses_alterra_http_and_rc(self):
         step = {

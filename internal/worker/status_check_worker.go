@@ -16,15 +16,18 @@ import (
 // For multi-provider transactions, it uses ProviderRouter to check the correct provider.
 // For legacy Digiflazz transactions, it continues using direct Digiflazz calls.
 type StatusCheckWorker struct {
-	trxRepo        *repository.TransactionRepository
-	skuRepo        *repository.SKURepository
-	callbackSvc    *service.CallbackService
-	digiProd       *digiflazz.Client
-	digiDev        *digiflazz.Client
-	providerRouter *service.ProviderRouter
-	interval       time.Duration
-	staleAfter     time.Duration // How long to wait before re-checking (e.g., 10 seconds)
-	maxAge         time.Duration // Max age before marking as failed (e.g., 5 minutes)
+	trxRepo         *repository.TransactionRepository
+	skuRepo         *repository.SKURepository
+	callbackSvc     *service.CallbackService
+	digiProd        *digiflazz.Client
+	digiDev         *digiflazz.Client
+	providerRouter  *service.ProviderRouter
+	providerRetrier service.ProviderFallbackRetrier
+	interval        time.Duration
+	staleAfter      time.Duration // How long to wait before re-checking (e.g., 10 seconds)
+	maxAge          time.Duration // Generic max age before marking as failed
+	kiosbankMinAge  time.Duration
+	kiosbankMaxAge  time.Duration
 }
 
 // NewStatusCheckWorker constructs a StatusCheckWorker.
@@ -35,20 +38,26 @@ func NewStatusCheckWorker(
 	digiProd *digiflazz.Client,
 	digiDev *digiflazz.Client,
 	providerRouter *service.ProviderRouter,
+	providerRetrier service.ProviderFallbackRetrier,
 	interval time.Duration,
 	staleAfter time.Duration,
 	maxAge time.Duration,
+	kiosbankMinAge time.Duration,
+	kiosbankMaxAge time.Duration,
 ) *StatusCheckWorker {
 	return &StatusCheckWorker{
-		trxRepo:        trxRepo,
-		skuRepo:        skuRepo,
-		callbackSvc:    callbackSvc,
-		digiProd:       digiProd,
-		digiDev:        digiDev,
-		providerRouter: providerRouter,
-		interval:       interval,
-		staleAfter:     staleAfter,
-		maxAge:         maxAge,
+		trxRepo:         trxRepo,
+		skuRepo:         skuRepo,
+		callbackSvc:     callbackSvc,
+		digiProd:        digiProd,
+		digiDev:         digiDev,
+		providerRouter:  providerRouter,
+		providerRetrier: providerRetrier,
+		interval:        interval,
+		staleAfter:      staleAfter,
+		maxAge:          maxAge,
+		kiosbankMinAge:  kiosbankMinAge,
+		kiosbankMaxAge:  kiosbankMaxAge,
 	}
 }
 
@@ -58,6 +67,8 @@ func (w *StatusCheckWorker) Start(ctx context.Context) {
 		Dur("interval", w.interval).
 		Dur("stale_after", w.staleAfter).
 		Dur("max_age", w.maxAge).
+		Dur("kiosbank_min_age", w.kiosbankMinAge).
+		Dur("kiosbank_max_age", w.kiosbankMaxAge).
 		Msg("Starting status check worker")
 
 	ticker := time.NewTicker(w.interval)
@@ -98,11 +109,23 @@ func (w *StatusCheckWorker) run(ctx context.Context) {
 }
 
 func (w *StatusCheckWorker) checkTransaction(ctx context.Context, trx *models.Transaction) {
+	age := time.Since(trx.CreatedAt)
+	if minAge := w.minAgeFor(trx); minAge > 0 && age < minAge {
+		log.Debug().
+			Str("transaction_id", trx.TransactionID).
+			Str("provider_code", providerCode(trx)).
+			Dur("age", age).
+			Dur("required_age", minAge).
+			Msg("Skipping status check because transaction has not reached provider min age")
+		return
+	}
+
 	// Check if too old - mark as failed
-	if time.Since(trx.CreatedAt) > w.maxAge {
+	if maxAge := w.maxAgeFor(trx); maxAge > 0 && age > maxAge {
 		log.Warn().
 			Str("transaction_id", trx.TransactionID).
-			Dur("age", time.Since(trx.CreatedAt)).
+			Str("provider_code", providerCode(trx)).
+			Dur("age", age).
 			Msg("Transaction too old, marking as failed")
 		w.markFailed(trx, "Transaction timeout - no response from provider")
 		return
@@ -116,6 +139,29 @@ func (w *StatusCheckWorker) checkTransaction(ctx context.Context, trx *models.Tr
 
 	// Legacy Digiflazz transaction
 	w.checkDigiflazzTransaction(ctx, trx)
+}
+
+func providerCode(trx *models.Transaction) string {
+	if trx == nil || trx.ProviderCode == nil {
+		return ""
+	}
+	return *trx.ProviderCode
+}
+
+func (w *StatusCheckWorker) minAgeFor(trx *models.Transaction) time.Duration {
+	if providerCode(trx) == string(models.ProviderKiosbank) {
+		return w.kiosbankMinAge
+	}
+	return 0
+}
+
+func (w *StatusCheckWorker) maxAgeFor(trx *models.Transaction) time.Duration {
+	if providerCode(trx) == string(models.ProviderKiosbank) {
+		if w.kiosbankMaxAge > 0 {
+			return w.kiosbankMaxAge
+		}
+	}
+	return w.maxAge
 }
 
 func (w *StatusCheckWorker) checkMultiProviderTransaction(ctx context.Context, trx *models.Transaction) {
@@ -200,6 +246,23 @@ func (w *StatusCheckWorker) checkMultiProviderTransaction(ctx context.Context, t
 		// Failed
 		msg := result.Message
 		rc := result.RC
+		if w.providerRetrier != nil && trx.Type == models.TrxTypePrepaid {
+			retried, handled, err := w.providerRetrier.RetryWithNextProvider(ctx, trx, rc, msg)
+			if err != nil {
+				log.Error().Err(err).Str("transaction_id", trx.TransactionID).Msg("Failed to retry transaction with next provider")
+				return
+			}
+			if handled {
+				if retried != nil && retried.Status == models.StatusFailed {
+					log.Info().
+						Str("transaction_id", retried.TransactionID).
+						Str("provider_code", providerCode(retried)).
+						Str("rc", valueOrEmpty(retried.FailedCode)).
+						Msg("Transaction finalized after prepaid provider fallback")
+				}
+				return
+			}
+		}
 		trx.Status = models.StatusFailed
 		trx.FailedReason = &msg
 		trx.FailedCode = &rc
@@ -217,6 +280,13 @@ func (w *StatusCheckWorker) checkMultiProviderTransaction(ctx context.Context, t
 			Str("rc", rc).
 			Msg("Transaction updated to Failed from multi-provider status check")
 	}
+}
+
+func valueOrEmpty(v *string) string {
+	if v == nil {
+		return ""
+	}
+	return *v
 }
 
 func (w *StatusCheckWorker) checkDigiflazzTransaction(ctx context.Context, trx *models.Transaction) {

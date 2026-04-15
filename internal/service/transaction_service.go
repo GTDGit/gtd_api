@@ -185,7 +185,7 @@ func (s *TransactionService) processPrepaid(ctx context.Context, req *CreateTran
 			providers, provErr = s.providerRouter.GetProviderOptions(product.ID)
 		}
 		if provErr == nil && len(providers) > 0 {
-			return s.executeWithProviderRouter(ctx, trx, ProviderTrxPrepaid, req.Provider)
+			return s.executeWithProviderRouter(ctx, trx, ProviderTrxPrepaid, req.Provider, nil)
 		}
 		// No providers configured, fallback to legacy Digiflazz flow
 		log.Debug().Int("product_id", product.ID).Msg("No multi-provider SKUs, using legacy Digiflazz flow")
@@ -672,7 +672,7 @@ func (s *TransactionService) RetryTransaction(ctx context.Context, trx *models.T
 
 	// Use provider router for multi-provider transactions (non-sandbox, prepaid)
 	if s.providerRouter != nil && !trx.IsSandbox && trx.Type == "prepaid" {
-		return s.executeWithProviderRouter(ctx, trx, ProviderTrxPrepaid, "")
+		return s.executeWithProviderRouter(ctx, trx, ProviderTrxPrepaid, "", nil)
 	}
 
 	// Legacy Digiflazz-only path (sandbox or no provider router)
@@ -809,7 +809,7 @@ func (s *TransactionService) tryAllSKUsWithOffset(ctx context.Context, trx *mode
 func (s *TransactionService) logAttempt(trxID int, skuID int, digiRefID string, request any, resp *digiflazz.TransactionResponse, err error) {
 	reqJSON, _ := json.Marshal(request)
 	var respJSON []byte
-	var rcPtr, statusPtr *string
+	var rcPtr, statusPtr, messagePtr *string
 	var responseAt *time.Time
 	if resp != nil {
 		respJSON, _ = json.Marshal(resp)
@@ -821,17 +821,29 @@ func (s *TransactionService) logAttempt(trxID int, skuID int, digiRefID string, 
 			st := resp.Status
 			statusPtr = &st
 		}
+		if resp.Message != "" {
+			msg := resp.Message
+			messagePtr = &msg
+		}
 		now := time.Now()
 		responseAt = &now
+	} else if err != nil {
+		msg := err.Error()
+		messagePtr = &msg
+	}
+	var skuIDPtr *int
+	if skuID > 0 {
+		skuIDPtr = &skuID
 	}
 	logEntry := &models.TransactionLog{
 		TransactionID: trxID,
-		SkuID:         skuID,
+		SkuID:         skuIDPtr,
 		DigiRefID:     digiRefID,
 		Request:       json.RawMessage(reqJSON),
 		Response:      json.RawMessage(respJSON),
 		RC:            rcPtr,
 		Status:        statusPtr,
+		Message:       messagePtr,
 		ResponseAt:    responseAt,
 	}
 	if err := s.callbackRepo.CreateTransactionLog(logEntry); err != nil {
@@ -840,11 +852,12 @@ func (s *TransactionService) logAttempt(trxID int, skuID int, digiRefID string, 
 }
 
 // logProviderAttempt logs a provider transaction attempt to the transaction_logs table.
-func (s *TransactionService) logProviderAttempt(trxID int, refID string, request any, resp *ProviderResponse, err error) {
+func (s *TransactionService) logProviderAttempt(trxID int, opt *models.ProviderOption, refID string, request any, resp *ProviderResponse, err error) {
 	reqJSON, _ := json.Marshal(request)
 	var respJSON []byte
-	var rcPtr, statusPtr *string
+	var rcPtr, statusPtr, messagePtr *string
 	var responseAt *time.Time
+	var responseTimeMs *int
 	if resp != nil {
 		respJSON, _ = json.Marshal(resp)
 		if resp.RC != "" {
@@ -855,20 +868,105 @@ func (s *TransactionService) logProviderAttempt(trxID int, refID string, request
 			st := resp.Status
 			statusPtr = &st
 		}
+		if resp.Message != "" {
+			msg := resp.Message
+			messagePtr = &msg
+		}
+		if resp.ResponseTime > 0 {
+			ms := int(resp.ResponseTime.Milliseconds())
+			responseTimeMs = &ms
+		}
 		now := time.Now()
 		responseAt = &now
+	} else if err != nil {
+		msg := err.Error()
+		messagePtr = &msg
 	}
 	logEntry := &models.TransactionLog{
-		TransactionID: trxID,
-		DigiRefID:     refID,
-		Request:       json.RawMessage(reqJSON),
-		Response:      json.RawMessage(respJSON),
-		RC:            rcPtr,
-		Status:        statusPtr,
-		ResponseAt:    responseAt,
+		TransactionID:  trxID,
+		DigiRefID:      refID,
+		Request:        json.RawMessage(reqJSON),
+		Response:       json.RawMessage(respJSON),
+		RC:             rcPtr,
+		Status:         statusPtr,
+		Message:        messagePtr,
+		ResponseAt:     responseAt,
+		ResponseTimeMs: responseTimeMs,
+	}
+	if opt != nil {
+		providerID := opt.ProviderID
+		providerSKUID := opt.ProviderSKUID
+		logEntry.ProviderID = &providerID
+		logEntry.ProviderSKUID = &providerSKUID
 	}
 	if err := s.callbackRepo.CreateTransactionLog(logEntry); err != nil {
 		log.Error().Err(err).Msg("failed to create transaction log")
+	}
+}
+
+func (s *TransactionService) logProviderAttempts(trxID int, result *ExecuteResult) {
+	if result == nil {
+		return
+	}
+
+	for _, attempt := range result.Attempts {
+		var request any
+		if attempt.Provider != nil {
+			request = buildProviderLogRequest(attempt.Provider, &attempt.Request)
+		} else {
+			request = buildProviderLogRequest(nil, &attempt.Request)
+		}
+
+		reqJSON, _ := json.Marshal(request)
+		var respJSON []byte
+		var rcPtr, statusPtr, messagePtr *string
+		var responseAt *time.Time
+		var responseTimeMs *int
+		if attempt.Response != nil {
+			respJSON, _ = json.Marshal(attempt.Response)
+			if attempt.Response.RC != "" {
+				rc := attempt.Response.RC
+				rcPtr = &rc
+			}
+			if attempt.Response.Status != "" {
+				status := attempt.Response.Status
+				statusPtr = &status
+			}
+			if attempt.Response.Message != "" {
+				msg := attempt.Response.Message
+				messagePtr = &msg
+			}
+			if attempt.Response.ResponseTime > 0 {
+				ms := int(attempt.Response.ResponseTime.Milliseconds())
+				responseTimeMs = &ms
+			}
+			now := time.Now()
+			responseAt = &now
+		} else if attempt.Error != "" {
+			msg := attempt.Error
+			messagePtr = &msg
+		}
+
+		logEntry := &models.TransactionLog{
+			TransactionID:  trxID,
+			DigiRefID:      attempt.Request.RefID,
+			Request:        json.RawMessage(reqJSON),
+			Response:       json.RawMessage(respJSON),
+			RC:             rcPtr,
+			Status:         statusPtr,
+			Message:        messagePtr,
+			ResponseAt:     responseAt,
+			ResponseTimeMs: responseTimeMs,
+		}
+		if attempt.Provider != nil {
+			providerID := attempt.Provider.ProviderID
+			providerSKUID := attempt.Provider.ProviderSKUID
+			logEntry.ProviderID = &providerID
+			logEntry.ProviderSKUID = &providerSKUID
+		}
+		if err := s.callbackRepo.CreateTransactionLog(logEntry); err != nil {
+			log.Error().Err(err).Msg("failed to create transaction log")
+		}
 	}
 }
 
@@ -896,7 +994,52 @@ func buildProviderLogRequest(opt *models.ProviderOption, req *ProviderRequest) m
 		}
 		logRequest["admin"] = opt.Admin
 	}
+	if logRequest["provider"] == string(models.ProviderKiosbank) {
+		if wireRequest := buildKiosbankWireRequest(req, opt); len(wireRequest) > 0 {
+			logRequest["wire_request"] = wireRequest
+		}
+	}
 	return logRequest
+}
+
+func buildKiosbankWireRequest(req *ProviderRequest, opt *models.ProviderOption) map[string]any {
+	if req == nil {
+		return nil
+	}
+
+	wireRequest := map[string]any{
+		"referenceID": req.RefID,
+		"customerID":  req.CustomerNo,
+		"productID":   req.SKUCode,
+	}
+
+	extra := normalizeKiosbankRequestData(cloneAnyMap(req.Extra))
+	admin, ok := intValueOK(extra["admin"])
+	if !ok && opt != nil {
+		admin = opt.Admin
+	}
+
+	switch req.Type {
+	case ProviderTrxInquiry:
+		if periode := stringFromKeys(extra, "periode"); periode != "" {
+			wireRequest["periode"] = periode
+		}
+	case ProviderTrxPrepaid, ProviderTrxPayment:
+		wireRequest["tagihan"] = req.Amount
+		wireRequest["admin"] = admin
+		wireRequest["total"] = req.Amount + admin
+		if noHandphone := stringFromKeys(extra, "noHandphone", "noHanphone"); noHandphone != "" {
+			wireRequest["noHanphone"] = noHandphone
+		}
+		if nama := stringFromKeys(extra, "nama"); nama != "" {
+			wireRequest["nama"] = nama
+		}
+		if kode := stringFromKeys(extra, "kode"); kode != "" {
+			wireRequest["kode"] = kode
+		}
+	}
+
+	return wireRequest
 }
 
 // cachedInquiryToTransaction converts cached inquiry data to transaction model.
@@ -1010,8 +1153,8 @@ func (s *TransactionService) RetryWithNextSKU(ctx context.Context, trx *models.T
 	// Build set of already-tried SKU IDs
 	triedSKUs := make(map[int]bool)
 	for _, l := range logs {
-		if l.SkuID > 0 {
-			triedSKUs[l.SkuID] = true
+		if l.SkuID != nil && *l.SkuID > 0 {
+			triedSKUs[*l.SkuID] = true
 		}
 	}
 
@@ -1062,42 +1205,81 @@ func (s *TransactionService) RetryWithNextSKU(ctx context.Context, trx *models.T
 	return result, false, nil // Success or Pending
 }
 
-// executeWithProviderRouter executes a transaction using the multi-provider router
-func (s *TransactionService) executeWithProviderRouter(ctx context.Context, trx *models.Transaction, trxType ProviderTransactionType, forceProvider string) (*models.Transaction, error) {
+// RetryWithNextProvider retries a prepaid multi-provider transaction with the next untried provider.
+// It returns handled=true when this method has fully handled the failure path, either by retrying
+// another provider or finalizing the transaction as failed.
+func (s *TransactionService) RetryWithNextProvider(ctx context.Context, trx *models.Transaction, failedRC string, failedMessage string) (*models.Transaction, bool, error) {
+	if trx == nil || trx.Type != models.TrxTypePrepaid || trx.IsSandbox || s.providerRouter == nil {
+		return trx, false, nil
+	}
+
+	excluded, err := s.getTriedProviderSKUs(trx.ID)
+	if err != nil {
+		return trx, false, err
+	}
+
+	options, err := s.providerRouter.GetProviderOptions(trx.ProductID)
+	if err != nil {
+		return trx, false, err
+	}
+
+	hasRemaining := false
+	for _, opt := range options {
+		if !excluded[opt.ProviderSKUID] {
+			hasRemaining = true
+			break
+		}
+	}
+
+	if !hasRemaining {
+		resp := exhaustedProviderResponse(failedRC, failedMessage)
+		result, err := s.handleProviderFailed(trx, resp)
+		return result, true, err
+	}
+
+	trx.Status = models.StatusProcessing
+	trx.FailedCode = nil
+	trx.FailedReason = nil
+	trx.ProcessedAt = nil
+
+	result, err := s.executeWithProviderRouter(ctx, trx, ProviderTrxPrepaid, "", excluded)
+	return result, true, err
+}
+
+// executeWithProviderRouter executes a transaction using the multi-provider router.
+func (s *TransactionService) executeWithProviderRouter(ctx context.Context, trx *models.Transaction, trxType ProviderTransactionType, forceProvider string, excludedProviderSKUs map[int]bool) (*models.Transaction, error) {
 	if s.providerRouter == nil {
 		return nil, fmt.Errorf("provider router not configured")
 	}
 
 	// Build provider request
 	req := &ProviderRequest{
-		RefID:         trx.TransactionID,
-		CustomerNo:    trx.CustomerNo,
-		Type:          trxType,
-		IsSandbox:     trx.IsSandbox,
-		ForceProvider: models.ProviderCode(forceProvider),
+		RefID:                  trx.TransactionID,
+		CustomerNo:             trx.CustomerNo,
+		Type:                   trxType,
+		IsSandbox:              trx.IsSandbox,
+		ForceProvider:          models.ProviderCode(forceProvider),
+		ExcludedProviderSKUIDs: excludedProviderSKUs,
 	}
 
 	// Execute with provider router
 	result, err := s.providerRouter.Execute(ctx, trx.ProductID, req)
+	s.logProviderAttempts(trx.ID, result)
 	if err != nil {
 		log.Error().Err(err).Str("transaction_id", trx.TransactionID).Msg("Provider router execution failed")
+		if resp := exhaustedProviderResponseFromResult(result); resp != nil {
+			applyAttemptProvider(trx, latestAttemptOption(result))
+			applyProviderTrace(trx, resp)
+			if resp.ProviderRefID != "" {
+				trx.ProviderRefID = &resp.ProviderRefID
+			}
+			return s.handleProviderFailed(trx, resp)
+		}
 		return s.handleAllSKUsFailed(trx)
 	}
 
 	// Store provider info
-	if result.ProviderUsed != nil {
-		providerID := result.ProviderUsed.ProviderID
-		trx.ProviderID = &providerID
-		providerSKUID := result.ProviderUsed.ProviderSKUID
-		trx.ProviderSKUID = &providerSKUID
-		providerCode := string(result.ProviderUsed.ProviderCode)
-		trx.ProviderCode = &providerCode
-		trx.Admin = result.ProviderUsed.Admin
-		if req.Amount > 0 && trx.Amount == nil {
-			amount := req.Amount
-			trx.Amount = &amount
-		}
-	}
+	applyAttemptProvider(trx, result.ProviderUsed)
 
 	if result.Response == nil {
 		log.Error().Str("transaction_id", trx.TransactionID).Msg("Provider returned nil response")
@@ -1111,7 +1293,6 @@ func (s *TransactionService) executeWithProviderRouter(ctx context.Context, trx 
 
 	// Store raw response
 	applyProviderTrace(trx, result.Response)
-	s.logProviderAttempt(trx.ID, req.RefID, buildProviderLogRequest(result.ProviderUsed, req), result.Response, nil)
 
 	// Handle response based on status
 	if result.Response.Success {
@@ -1180,10 +1361,17 @@ func (s *TransactionService) handleProviderPending(trx *models.Transaction, resp
 func (s *TransactionService) handleProviderFailed(trx *models.Transaction, resp *ProviderResponse) (*models.Transaction, error) {
 	now := time.Now()
 	trx.Status = models.StatusFailed
-	if resp.Message != "" {
-		trx.FailedReason = &resp.Message
+	failedMessage := ""
+	if resp != nil {
+		failedMessage = strings.TrimSpace(resp.Message)
+		if failedMessage == "" && resp.RC != "" {
+			failedMessage = "Provider transaction failed"
+		}
 	}
-	if resp.RC != "" {
+	if failedMessage != "" {
+		trx.FailedReason = &failedMessage
+	}
+	if resp != nil && resp.RC != "" {
 		trx.FailedCode = &resp.RC
 	}
 	trx.ProcessedAt = &now
@@ -1196,6 +1384,84 @@ func (s *TransactionService) handleProviderFailed(trx *models.Transaction, resp 
 
 	go s.callbackSvc.SendCallback(trx, "transaction.failed")
 	return trx, nil
+}
+
+func (s *TransactionService) getTriedProviderSKUs(trxID int) (map[int]bool, error) {
+	logs, err := s.callbackRepo.GetLogsByTransactionID(trxID)
+	if err != nil {
+		return nil, err
+	}
+
+	tried := make(map[int]bool)
+	for _, l := range logs {
+		if l.ProviderSKUID != nil && *l.ProviderSKUID > 0 {
+			tried[*l.ProviderSKUID] = true
+		}
+	}
+	return tried, nil
+}
+
+func exhaustedProviderResponse(failedRC, failedMessage string) *ProviderResponse {
+	message := failedMessage
+	if message == "" {
+		message = "All available providers failed"
+	}
+	return &ProviderResponse{
+		Status:  string(models.StatusFailed),
+		RC:      failedRC,
+		Message: message,
+	}
+}
+
+func exhaustedProviderResponseFromResult(result *ExecuteResult) *ProviderResponse {
+	if result == nil {
+		return nil
+	}
+	if result.Response != nil {
+		return result.Response
+	}
+	for i := len(result.Attempts) - 1; i >= 0; i-- {
+		attempt := result.Attempts[i]
+		if attempt.Response != nil {
+			return attempt.Response
+		}
+		if attempt.Error != "" {
+			return exhaustedProviderResponse("", "No response from provider")
+		}
+	}
+	return nil
+}
+
+func latestAttemptOption(result *ExecuteResult) *models.ProviderOption {
+	if result == nil {
+		return nil
+	}
+	if result.ProviderUsed != nil {
+		return result.ProviderUsed
+	}
+	for i := len(result.Attempts) - 1; i >= 0; i-- {
+		if result.Attempts[i].Provider != nil {
+			return result.Attempts[i].Provider
+		}
+	}
+	return nil
+}
+
+func applyAttemptProvider(trx *models.Transaction, opt *models.ProviderOption) {
+	if trx == nil || opt == nil {
+		return
+	}
+	providerID := opt.ProviderID
+	trx.ProviderID = &providerID
+	providerSKUID := opt.ProviderSKUID
+	trx.ProviderSKUID = &providerSKUID
+	providerCode := string(opt.ProviderCode)
+	trx.ProviderCode = &providerCode
+	trx.Admin = opt.Admin
+	if opt.Price > 0 && trx.Amount == nil {
+		amount := opt.Price
+		trx.Amount = &amount
+	}
 }
 
 // executeInquiryWithProviders tries inquiry across multiple providers in price order.
@@ -1498,12 +1764,15 @@ func (s *TransactionService) executePaymentWithProvider(
 	resp, err := adapter.Payment(ctx, provReq)
 
 	// Log attempt
-	s.logProviderAttempt(payment.ID, provReq.RefID, buildProviderLogRequest(&models.ProviderOption{
+	paymentProviderOption := &models.ProviderOption{
+		ProviderID:      inquiryData.ProviderID,
 		ProviderCode:    models.ProviderCode(inquiryData.ProviderCode),
+		ProviderSKUID:   inquiryData.ProviderSKUID,
 		ProviderSKUCode: inquiryData.ProviderSKUCode,
 		Price:           inquiryData.Amount,
 		Admin:           inquiryData.Admin,
-	}, provReq), resp, err)
+	}
+	s.logProviderAttempt(payment.ID, paymentProviderOption, provReq.RefID, buildProviderLogRequest(paymentProviderOption, provReq), resp, err)
 
 	if err != nil {
 		log.Error().Err(err).Str("provider", inquiryData.ProviderCode).Msg("Payment network error")

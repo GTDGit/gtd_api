@@ -37,6 +37,11 @@ type TransactionRetrier interface {
 	RetryWithNextSKU(ctx context.Context, trx *models.Transaction, failedRC string, failedMessage string) (*models.Transaction, bool, error)
 }
 
+// ProviderFallbackRetrier retries prepaid transactions across provider mappings.
+type ProviderFallbackRetrier interface {
+	RetryWithNextProvider(ctx context.Context, trx *models.Transaction, failedRC string, failedMessage string) (*models.Transaction, bool, error)
+}
+
 // NewCallbackService constructs a CallbackService with a default HTTP client.
 func NewCallbackService(clientRepo *repository.ClientRepository, callbackRepo *repository.CallbackRepository, trxRepo *repository.TransactionRepository) *CallbackService {
 	return &CallbackService{

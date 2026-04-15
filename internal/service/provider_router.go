@@ -23,13 +23,14 @@ const (
 
 // ProviderRequest represents a unified request to any provider
 type ProviderRequest struct {
-	RefID      string                  `json:"refId"`
-	SKUCode    string                  `json:"skuCode"`
-	CustomerNo string                  `json:"customerNo"`
-	Amount     int                     `json:"amount,omitempty"`
-	Type       ProviderTransactionType `json:"type"`
-	IsSandbox  bool                    `json:"isSandbox"`
-	Extra      map[string]any          `json:"extra,omitempty"` // Provider-specific fields
+	RefID                  string                  `json:"refId"`
+	SKUCode                string                  `json:"skuCode"`
+	CustomerNo             string                  `json:"customerNo"`
+	Amount                 int                     `json:"amount,omitempty"`
+	Type                   ProviderTransactionType `json:"type"`
+	IsSandbox              bool                    `json:"isSandbox"`
+	Extra                  map[string]any          `json:"extra,omitempty"` // Provider-specific fields
+	ExcludedProviderSKUIDs map[int]bool            `json:"-"`
 
 	// ForceProvider forces using a specific provider (for payment after inquiry)
 	ForceProvider models.ProviderCode `json:"forceProvider,omitempty"`
@@ -39,22 +40,24 @@ type ProviderRequest struct {
 
 // ProviderResponse represents a unified response from any provider
 type ProviderResponse struct {
-	Success       bool            `json:"success"`
-	Pending       bool            `json:"pending"`
-	RefID         string          `json:"refId"`
-	ProviderRefID string          `json:"providerRefId"`
-	HTTPStatus    int             `json:"httpStatus,omitempty"`
-	Status        string          `json:"status"`
-	RC            string          `json:"rc"`
-	Message       string          `json:"message"`
-	SerialNumber  string          `json:"serialNumber,omitempty"`
-	CustomerName  string          `json:"customerName,omitempty"`
-	Amount        int             `json:"amount,omitempty"`
-	Admin         int             `json:"admin,omitempty"`
-	Description   json.RawMessage `json:"description,omitempty"`
-	RawResponse   json.RawMessage `json:"rawResponse,omitempty"`
-	NeedsRetry    bool            `json:"needsRetry"` // RC 49 equivalent - needs new ref_id
-	ResponseTime  time.Duration   `json:"responseTime"`
+	Success        bool            `json:"success"`
+	Pending        bool            `json:"pending"`
+	RefID          string          `json:"refId"`
+	ProviderRefID  string          `json:"providerRefId"`
+	HTTPStatus     int             `json:"httpStatus,omitempty"`
+	Phase          string          `json:"phase,omitempty"`
+	Status         string          `json:"status"`
+	RC             string          `json:"rc"`
+	Message        string          `json:"message"`
+	ProviderStatus string          `json:"providerStatus,omitempty"`
+	SerialNumber   string          `json:"serialNumber,omitempty"`
+	CustomerName   string          `json:"customerName,omitempty"`
+	Amount         int             `json:"amount,omitempty"`
+	Admin          int             `json:"admin,omitempty"`
+	Description    json.RawMessage `json:"description,omitempty"`
+	RawResponse    json.RawMessage `json:"rawResponse,omitempty"`
+	NeedsRetry     bool            `json:"needsRetry"` // RC 49 equivalent - needs new ref_id
+	ResponseTime   time.Duration   `json:"responseTime"`
 }
 
 // PPOBProvider interface that all providers must implement
@@ -132,7 +135,16 @@ type ExecuteResult struct {
 	Response       *ProviderResponse       `json:"response"`
 	ProviderUsed   *models.ProviderOption  `json:"providerUsed"`
 	ProvidersTried []models.ProviderOption `json:"providersTried"`
+	Attempts       []ProviderAttempt       `json:"attempts,omitempty"`
 	Error          error                   `json:"error,omitempty"`
+}
+
+// ProviderAttempt captures one concrete provider attempt, including the request shape used.
+type ProviderAttempt struct {
+	Provider *models.ProviderOption `json:"provider,omitempty"`
+	Request  ProviderRequest        `json:"request"`
+	Response *ProviderResponse      `json:"response,omitempty"`
+	Error    string                 `json:"error,omitempty"`
 }
 
 // Execute tries to execute a transaction with providers in order of preference.
@@ -143,6 +155,7 @@ type ExecuteResult struct {
 func (r *ProviderRouter) Execute(ctx context.Context, productID int, req *ProviderRequest) (*ExecuteResult, error) {
 	result := &ExecuteResult{
 		ProvidersTried: make([]models.ProviderOption, 0),
+		Attempts:       make([]ProviderAttempt, 0),
 	}
 
 	// If ForceProvider is set, use only that provider
@@ -171,6 +184,21 @@ func (r *ProviderRouter) Execute(ctx context.Context, productID int, req *Provid
 
 	if len(options) == 0 {
 		return nil, fmt.Errorf("no providers available for product %d", productID)
+	}
+
+	if len(req.ExcludedProviderSKUIDs) > 0 {
+		filtered := make([]models.ProviderOption, 0, len(options))
+		for _, opt := range options {
+			if req.ExcludedProviderSKUIDs[opt.ProviderSKUID] {
+				continue
+			}
+			filtered = append(filtered, opt)
+		}
+		options = filtered
+	}
+
+	if len(options) == 0 {
+		return result, fmt.Errorf("no remaining providers available for product %d", productID)
 	}
 
 	log.Debug().
@@ -227,6 +255,7 @@ func (r *ProviderRouter) Execute(ctx context.Context, productID int, req *Provid
 			Str("ref_id", req.RefID).
 			Msg("Trying provider")
 
+		reqSnapshot := cloneProviderRequest(req)
 		startTime := time.Now()
 		var resp *ProviderResponse
 
@@ -262,6 +291,12 @@ func (r *ProviderRouter) Execute(ctx context.Context, productID int, req *Provid
 
 		// Handle network error - retry same provider with same ref_id is safe
 		if err != nil {
+			result.Attempts = append(result.Attempts, ProviderAttempt{
+				Provider: providerOptionPtr(opt),
+				Request:  reqSnapshot,
+				Error:    err.Error(),
+			})
+			result.ProviderUsed = providerOptionPtr(opt)
 			log.Warn().
 				Err(err).
 				Str("provider", string(opt.ProviderCode)).
@@ -273,6 +308,11 @@ func (r *ProviderRouter) Execute(ctx context.Context, productID int, req *Provid
 
 		// Handle response
 		if resp.Success {
+			result.Attempts = append(result.Attempts, ProviderAttempt{
+				Provider: providerOptionPtr(opt),
+				Request:  reqSnapshot,
+				Response: resp,
+			})
 			log.Info().
 				Str("provider", string(opt.ProviderCode)).
 				Str("ref_id", req.RefID).
@@ -286,6 +326,11 @@ func (r *ProviderRouter) Execute(ctx context.Context, productID int, req *Provid
 		}
 
 		if resp.Pending {
+			result.Attempts = append(result.Attempts, ProviderAttempt{
+				Provider: providerOptionPtr(opt),
+				Request:  reqSnapshot,
+				Response: resp,
+			})
 			log.Info().
 				Str("provider", string(opt.ProviderCode)).
 				Str("ref_id", req.RefID).
@@ -299,6 +344,13 @@ func (r *ProviderRouter) Execute(ctx context.Context, productID int, req *Provid
 		}
 
 		// Transaction failed - try next provider
+		result.Attempts = append(result.Attempts, ProviderAttempt{
+			Provider: providerOptionPtr(opt),
+			Request:  reqSnapshot,
+			Response: resp,
+		})
+		result.Response = resp
+		result.ProviderUsed = providerOptionPtr(opt)
 		log.Warn().
 			Str("provider", string(opt.ProviderCode)).
 			Str("ref_id", req.RefID).
@@ -369,6 +421,7 @@ func (r *ProviderRouter) executeWithProvider(ctx context.Context, productID int,
 
 	result.ProvidersTried = append(result.ProvidersTried, *opt)
 
+	reqSnapshot := cloneProviderRequest(req)
 	startTime := time.Now()
 	var resp *ProviderResponse
 	switch req.Type {
@@ -398,14 +451,45 @@ func (r *ProviderRouter) executeWithProvider(ctx context.Context, productID int,
 	)
 
 	if err != nil {
+		result.Attempts = append(result.Attempts, ProviderAttempt{
+			Provider: providerOptionPtr(*opt),
+			Request:  reqSnapshot,
+			Error:    err.Error(),
+		})
 		return nil, fmt.Errorf("%s failed with provider %s: %w", req.Type, req.ForceProvider, err)
 	}
 
+	result.Attempts = append(result.Attempts, ProviderAttempt{
+		Provider: providerOptionPtr(*opt),
+		Request:  reqSnapshot,
+		Response: resp,
+	})
 	result.Response = resp
 	result.ProviderUsed = opt
 	result.Success = resp.Success
 
 	return result, nil
+}
+
+func cloneProviderRequest(req *ProviderRequest) ProviderRequest {
+	if req == nil {
+		return ProviderRequest{}
+	}
+
+	cloned := *req
+	cloned.Extra = cloneAnyMap(req.Extra)
+	if len(req.ExcludedProviderSKUIDs) > 0 {
+		cloned.ExcludedProviderSKUIDs = make(map[int]bool, len(req.ExcludedProviderSKUIDs))
+		for k, v := range req.ExcludedProviderSKUIDs {
+			cloned.ExcludedProviderSKUIDs[k] = v
+		}
+	}
+	return cloned
+}
+
+func providerOptionPtr(opt models.ProviderOption) *models.ProviderOption {
+	copyOpt := opt
+	return &copyOpt
 }
 
 // GetBestPrice returns the best price for a product from non-backup providers

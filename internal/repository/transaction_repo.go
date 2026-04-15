@@ -50,7 +50,7 @@ func (r *TransactionRepository) Create(trx *models.Transaction) error {
             $24,$25,$26,$27,
             $28,$29,$30,
             NOW(),$31
-        ) RETURNING id`
+        ) RETURNING id, created_at, updated_at`
 
 	return r.db.QueryRow(q,
 		trx.TransactionID, trx.ReferenceID, trx.ClientID, trx.ProductID, trx.SkuID, trx.IsSandbox,
@@ -59,7 +59,7 @@ func (r *TransactionRepository) Create(trx *models.Transaction) error {
 		trx.InquiryID, trx.DigiRefID, trx.BuyPrice, trx.SellPrice,
 		trx.ProviderID, trx.ProviderSKUID, trx.ProviderRefID, nullableJSON(trx.ProviderInitialResponse),
 		nullableJSON(trx.ProviderResponse), trx.ProviderInitialHTTPStatus, trx.ProviderHTTPStatus, trx.ProcessedAt,
-	).Scan(&trx.ID)
+	).Scan(&trx.ID, &trx.CreatedAt, &trx.UpdatedAt)
 }
 
 // Update updates an existing transaction identified by transaction_id.

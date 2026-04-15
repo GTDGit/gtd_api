@@ -213,15 +213,15 @@ func (s *AdminTransactionService) ManualRetry(ctx context.Context, transactionID
 
 // TransactionLogView represents a transaction log entry for admin view.
 type TransactionLogView struct {
-	ID         int              `json:"id"`
-	SkuID      int              `json:"skuId,omitempty"`
-	RefID      string           `json:"refId"`
-	Request    json.RawMessage  `json:"request,omitempty"`
-	Response   json.RawMessage  `json:"response,omitempty"`
-	RC         *string          `json:"rc,omitempty"`
-	Status     *string          `json:"status,omitempty"`
-	CreatedAt  string           `json:"createdAt"`
-	ResponseAt *string          `json:"responseAt,omitempty"`
+	ID         int             `json:"id"`
+	SkuID      *int            `json:"skuId,omitempty"`
+	RefID      string          `json:"refId"`
+	Request    json.RawMessage `json:"request,omitempty"`
+	Response   json.RawMessage `json:"response,omitempty"`
+	RC         *string         `json:"rc,omitempty"`
+	Status     *string         `json:"status,omitempty"`
+	CreatedAt  string          `json:"createdAt"`
+	ResponseAt *string         `json:"responseAt,omitempty"`
 }
 
 // GetTransactionLogs returns audit logs for a specific transaction.

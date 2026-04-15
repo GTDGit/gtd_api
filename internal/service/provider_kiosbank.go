@@ -68,6 +68,9 @@ func (c *KiosbankProviderClient) Topup(ctx context.Context, req *ProviderRequest
 	responseTime := time.Since(startTime)
 	if err != nil {
 		c.markUnhealthy()
+		if kiosbank.IsTransportUncertainError(err) {
+			return pendingTransportResponse(req.RefID, responseTime, err), nil
+		}
 		return nil, err
 	}
 
@@ -131,6 +134,9 @@ func (c *KiosbankProviderClient) Payment(ctx context.Context, req *ProviderReque
 	responseTime := time.Since(startTime)
 	if err != nil {
 		c.markUnhealthy()
+		if kiosbank.IsTransportUncertainError(err) {
+			return pendingTransportResponse(req.RefID, responseTime, err), nil
+		}
 		return nil, err
 	}
 
@@ -184,7 +190,7 @@ func (c *KiosbankProviderClient) CheckStatus(ctx context.Context, refID string) 
 	}
 
 	c.markHealthy()
-	return c.convertPaymentResponse(resp.ToPaymentResponse(), input.ReferenceID, input.Tagihan, input.Admin, responseTime), nil
+	return c.convertAsyncPaymentResponse(resp.ToPaymentResponse(), input.ReferenceID, input.Tagihan, input.Admin, responseTime), nil
 }
 
 // GetPriceList fetches current prices
@@ -216,7 +222,10 @@ func (c *KiosbankProviderClient) GetPriceList(ctx context.Context, category stri
 			continue
 		}
 		price := parseAmount(p.Price)
-		isActive := strings.EqualFold(p.Status, "AKTIF")
+		isActive := true
+		if p.Status != "" {
+			isActive = strings.EqualFold(p.Status, "AKTIF")
+		}
 		products = append(products, ProviderProduct{
 			SKUCode:     p.Code,
 			ProductName: p.Name,
@@ -253,86 +262,113 @@ func (c *KiosbankProviderClient) markUnhealthy() {
 func (c *KiosbankProviderClient) convertInquiryResponse(resp *kiosbank.InquiryResponse, refID string, responseTime time.Duration) *ProviderResponse {
 	rawResp := kiosbankRawEnvelope(resp)
 	parsed := parseKiosbankData(resp.Data)
+	class := kiosbank.ClassifyRC(resp.RC, kiosbank.ResponsePhaseInquiry)
 
 	return &ProviderResponse{
-		Success:       kiosbank.IsSuccess(resp.RC),
-		Pending:       kiosbank.IsPending(resp.RC),
-		RefID:         refID,
-		ProviderRefID: refID,
-		HTTPStatus:    http.StatusOK,
-		Status:        getStatusFromRC(resp.RC),
-		RC:            resp.RC,
-		Message:       kiosbankMessage(resp.RC, resp.Description),
-		CustomerName:  parsed.CustomerName,
-		Amount:        parsed.Amount,
-		Admin:         parsed.Admin,
-		Description:   compactRawJSON(resp.Data),
-		RawResponse:   rawResp,
-		NeedsRetry:    kiosbank.NeedsNewRefID(resp.RC),
-		ResponseTime:  responseTime,
+		Success:        class == kiosbank.ResponseClassSuccess,
+		Pending:        class == kiosbank.ResponseClassPending,
+		RefID:          refID,
+		ProviderRefID:  refID,
+		HTTPStatus:     http.StatusOK,
+		Phase:          string(kiosbank.ResponsePhaseInquiry),
+		Status:         kiosbank.StatusFromClass(class),
+		RC:             resp.RC,
+		Message:        kiosbankMessage(resp.RC, resp.Description),
+		ProviderStatus: parsed.StatusText,
+		CustomerName:   parsed.CustomerName,
+		Amount:         parsed.Amount,
+		Admin:          parsed.Admin,
+		Description:    compactRawJSON(resp.Data),
+		RawResponse:    rawResp,
+		NeedsRetry:     kiosbank.NeedsNewRefID(resp.RC),
+		ResponseTime:   responseTime,
 	}
 }
 
 func (c *KiosbankProviderClient) convertPaymentResponse(resp *kiosbank.PaymentResponse, refID string, requestedAmount, requestedAdmin int, responseTime time.Duration) *ProviderResponse {
 	rawResp := kiosbankRawEnvelope(resp)
 	parsed := parseKiosbankData(resp.Data)
-	if parsed.Amount == 0 {
-		parsed.Amount = requestedAmount
-	}
-	if parsed.Admin == 0 {
-		parsed.Admin = requestedAdmin
-	}
+	applyRequestedKiosbankAmounts(&parsed, requestedAmount, requestedAdmin)
+	class := kiosbank.ClassifyRC(resp.RC, kiosbank.ResponsePhaseInitialPayment)
 
 	return &ProviderResponse{
-		Success:       kiosbank.IsSuccess(resp.RC),
-		Pending:       kiosbank.IsPending(resp.RC),
-		RefID:         refID,
-		ProviderRefID: refID,
-		HTTPStatus:    http.StatusOK,
-		Status:        getStatusFromRC(resp.RC),
-		RC:            resp.RC,
-		Message:       kiosbankMessage(resp.RC, resp.Description),
-		SerialNumber:  parsed.SerialNumber,
-		CustomerName:  parsed.CustomerName,
-		Amount:        parsed.Amount,
-		Admin:         parsed.Admin,
-		Description:   compactRawJSON(resp.Data),
-		RawResponse:   rawResp,
-		NeedsRetry:    kiosbank.NeedsNewRefID(resp.RC),
-		ResponseTime:  responseTime,
+		Success:        class == kiosbank.ResponseClassSuccess,
+		Pending:        class == kiosbank.ResponseClassPending,
+		RefID:          refID,
+		ProviderRefID:  refID,
+		HTTPStatus:     http.StatusOK,
+		Phase:          string(kiosbank.ResponsePhaseInitialPayment),
+		Status:         kiosbank.StatusFromClass(class),
+		RC:             resp.RC,
+		Message:        kiosbankMessage(resp.RC, resp.Description),
+		ProviderStatus: parsed.StatusText,
+		SerialNumber:   parsed.SerialNumber,
+		CustomerName:   parsed.CustomerName,
+		Amount:         parsed.Amount,
+		Admin:          parsed.Admin,
+		Description:    compactRawJSON(resp.Data),
+		RawResponse:    rawResp,
+		NeedsRetry:     kiosbank.NeedsNewRefID(resp.RC),
+		ResponseTime:   responseTime,
 	}
 }
 
 func (c *KiosbankProviderClient) convertSinglePaymentResponse(resp *kiosbank.SinglePaymentResponse, refID string, requestedAmount, requestedAdmin int, responseTime time.Duration) *ProviderResponse {
 	rawResp := kiosbankRawEnvelope(resp)
 	parsed := parseKiosbankData(resp.Data)
-	if parsed.Amount == 0 {
-		parsed.Amount = requestedAmount
-	}
-	if parsed.Admin == 0 {
-		parsed.Admin = requestedAdmin
-	}
+	applyRequestedKiosbankAmounts(&parsed, requestedAmount, requestedAdmin)
 	if parsed.SerialNumber == "" {
 		parsed.SerialNumber = parsed.ReferenceNo
 	}
+	class := kiosbank.ClassifyRC(resp.RC, kiosbank.ResponsePhaseInitialPayment)
 
 	return &ProviderResponse{
-		Success:       kiosbank.IsSuccess(resp.RC),
-		Pending:       kiosbank.IsPending(resp.RC),
-		RefID:         refID,
-		ProviderRefID: refID,
-		HTTPStatus:    http.StatusOK,
-		Status:        getStatusFromRC(resp.RC),
-		RC:            resp.RC,
-		Message:       kiosbankMessage(resp.RC, resp.Description),
-		SerialNumber:  parsed.SerialNumber,
-		CustomerName:  parsed.CustomerName,
-		Amount:        parsed.Amount,
-		Admin:         parsed.Admin,
-		Description:   compactRawJSON(resp.Data),
-		RawResponse:   rawResp,
-		NeedsRetry:    kiosbank.NeedsNewRefID(resp.RC),
-		ResponseTime:  responseTime,
+		Success:        class == kiosbank.ResponseClassSuccess,
+		Pending:        class == kiosbank.ResponseClassPending,
+		RefID:          refID,
+		ProviderRefID:  refID,
+		HTTPStatus:     http.StatusOK,
+		Phase:          string(kiosbank.ResponsePhaseInitialPayment),
+		Status:         kiosbank.StatusFromClass(class),
+		RC:             resp.RC,
+		Message:        kiosbankMessage(resp.RC, resp.Description),
+		ProviderStatus: parsed.StatusText,
+		SerialNumber:   parsed.SerialNumber,
+		CustomerName:   parsed.CustomerName,
+		Amount:         parsed.Amount,
+		Admin:          parsed.Admin,
+		Description:    compactRawJSON(resp.Data),
+		RawResponse:    rawResp,
+		NeedsRetry:     kiosbank.NeedsNewRefID(resp.RC),
+		ResponseTime:   responseTime,
+	}
+}
+
+func (c *KiosbankProviderClient) convertAsyncPaymentResponse(resp *kiosbank.PaymentResponse, refID string, requestedAmount, requestedAdmin int, responseTime time.Duration) *ProviderResponse {
+	rawResp := kiosbankRawEnvelope(resp)
+	parsed := parseKiosbankData(resp.Data)
+	applyRequestedKiosbankAmounts(&parsed, requestedAmount, requestedAdmin)
+	class := kiosbank.ClassifyRC(resp.RC, kiosbank.ResponsePhaseAsync)
+
+	return &ProviderResponse{
+		Success:        class == kiosbank.ResponseClassSuccess,
+		Pending:        class == kiosbank.ResponseClassPending,
+		RefID:          refID,
+		ProviderRefID:  refID,
+		HTTPStatus:     http.StatusOK,
+		Phase:          string(kiosbank.ResponsePhaseAsync),
+		Status:         kiosbank.StatusFromClass(class),
+		RC:             resp.RC,
+		Message:        kiosbankMessage(resp.RC, resp.Description),
+		ProviderStatus: parsed.StatusText,
+		SerialNumber:   parsed.SerialNumber,
+		CustomerName:   parsed.CustomerName,
+		Amount:         parsed.Amount,
+		Admin:          parsed.Admin,
+		Description:    compactRawJSON(resp.Data),
+		RawResponse:    rawResp,
+		NeedsRetry:     kiosbank.NeedsNewRefID(resp.RC),
+		ResponseTime:   responseTime,
 	}
 }
 
@@ -341,6 +377,7 @@ type kiosbankParsedData struct {
 	Amount       int
 	Admin        int
 	Total        int
+	StatusText   string
 	SerialNumber string
 	ReferenceNo  string
 	Data         map[string]any
@@ -356,6 +393,21 @@ type kiosbankCheckStatusInput struct {
 	Kode        string
 }
 
+func applyRequestedKiosbankAmounts(parsed *kiosbankParsedData, requestedAmount, requestedAdmin int) {
+	if parsed == nil {
+		return
+	}
+	if parsed.Admin == 0 {
+		parsed.Admin = requestedAdmin
+	}
+	if requestedAmount > 0 && (parsed.Amount == 0 || (parsed.Total > 0 && parsed.Total == parsed.Admin && parsed.Amount == parsed.Admin)) {
+		parsed.Amount = requestedAmount
+	}
+	if parsed.Total == 0 && parsed.Amount > 0 {
+		parsed.Total = parsed.Amount + parsed.Admin
+	}
+}
+
 func resolveKiosbankReferenceID(refID string) string {
 	if kiosbank.IsNumericReferenceID(refID) {
 		return refID
@@ -369,6 +421,9 @@ func parseKiosbankData(raw json.RawMessage) kiosbankParsedData {
 	admin := firstPositiveAmount(data, "admin", "adminBank", "biayaAdmin", "AB")
 	total := firstPositiveAmount(data, "total", "totalBayar", "TT", "totalTagihan")
 	amount := firstPositiveAmount(data, "tagihan", "TG", "jumlahPembelian", "harga", "nilaiBeliGas")
+	if amount == 0 {
+		amount = sumArrayAmounts(data, []string{"detail", "rincian", "rincianTagihan"}, []string{"premi", "tagihan", "jumlahPembayaran", "harga"})
+	}
 	if multiTagihan := sumMatchingAmounts(data, "tagihan"); multiTagihan > 0 {
 		amount = multiTagihan
 	}
@@ -391,6 +446,7 @@ func parseKiosbankData(raw json.RawMessage) kiosbankParsedData {
 		Amount:       amount,
 		Admin:        admin,
 		Total:        total,
+		StatusText:   stringFromMapKeys(data, "status", "STATUS"),
 		SerialNumber: serialNumber,
 		ReferenceNo:  referenceNo,
 		Data:         data,
@@ -413,6 +469,24 @@ func buildKiosbankCheckStatusInput(trx *models.Transaction, logs []models.Transa
 		reqMap := rawJSONObject(logs[i].Request)
 		if provider := stringFromMapKeys(reqMap, "provider"); provider != "" && provider != string(models.ProviderKiosbank) {
 			continue
+		}
+		if wireRequest := rawJSONObjectFromAny(reqMap["wire_request"]); len(wireRequest) > 0 {
+			if refID := stringFromMapKeys(wireRequest, "referenceID"); refID != "" {
+				input.ReferenceID = refID
+			}
+			if amount, ok := intValueOK(wireRequest["tagihan"]); ok {
+				input.Tagihan = amount
+			}
+			if admin, ok := intValueOK(wireRequest["admin"]); ok {
+				input.Admin = admin
+			}
+			if total, ok := intValueOK(wireRequest["total"]); ok {
+				input.Total = total
+			}
+			input.NoHandphone = stringFromKeys(wireRequest, "noHandphone", "noHanphone")
+			input.Nama = stringFromKeys(wireRequest, "nama")
+			input.Kode = stringFromKeys(wireRequest, "kode")
+			break
 		}
 		if refID := stringFromMapKeys(reqMap, "ref_id"); refID != "" {
 			input.ReferenceID = refID
@@ -442,6 +516,7 @@ func kiosbankValidationResponse(refID, message string) *ProviderResponse {
 		RefID:         refID,
 		ProviderRefID: refID,
 		HTTPStatus:    http.StatusBadRequest,
+		Phase:         string(kiosbank.ResponsePhaseInitialPayment),
 		Status:        "Failed",
 		RC:            kiosbank.RCFormatError,
 		Message:       message,
@@ -471,6 +546,21 @@ func rawJSONObject(raw json.RawMessage) map[string]any {
 		return map[string]any{}
 	}
 	return out
+}
+
+func rawJSONObjectFromAny(v any) map[string]any {
+	if m, ok := v.(map[string]any); ok {
+		return m
+	}
+	switch raw := v.(type) {
+	case json.RawMessage:
+		return rawJSONObject(raw)
+	case []byte:
+		return rawJSONObject(raw)
+	case string:
+		return rawJSONObject(json.RawMessage(raw))
+	}
+	return map[string]any{}
 }
 
 func cloneAnyMap(src map[string]any) map[string]any {
@@ -601,6 +691,34 @@ func sumMatchingAmounts(data map[string]any, prefix string) int {
 	return total
 }
 
+func sumArrayAmounts(data map[string]any, arrayKeys []string, fieldKeys []string) int {
+	for _, arrayKey := range arrayKeys {
+		items, ok := data[arrayKey].([]any)
+		if !ok {
+			continue
+		}
+		total := 0
+		found := false
+		for _, item := range items {
+			itemMap, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			for _, fieldKey := range fieldKeys {
+				if amount := parseAmountAny(itemMap[fieldKey]); amount > 0 {
+					total += amount
+					found = true
+					break
+				}
+			}
+		}
+		if found {
+			return total
+		}
+	}
+	return 0
+}
+
 func parseAmountAny(v any) int {
 	switch value := v.(type) {
 	case string:
@@ -681,12 +799,21 @@ func parseAmount(s string) int {
 }
 
 // getStatusFromRC converts RC to status string
-func getStatusFromRC(rc string) string {
-	if kiosbank.IsSuccess(rc) {
-		return "Success"
+func pendingTransportResponse(refID string, responseTime time.Duration, err error) *ProviderResponse {
+	raw := map[string]any{
+		"transport_error": err.Error(),
+		"phase":           string(kiosbank.ResponsePhaseInitialPayment),
 	}
-	if kiosbank.IsPending(rc) {
-		return "Pending"
+	rawResp, _ := json.Marshal(raw)
+	return &ProviderResponse{
+		Pending:       true,
+		RefID:         refID,
+		ProviderRefID: refID,
+		Phase:         string(kiosbank.ResponsePhaseInitialPayment),
+		Status:        kiosbank.StatusFromClass(kiosbank.ResponseClassPending),
+		Message:       "No response from Kiosbank",
+		Description:   rawResp,
+		RawResponse:   rawResp,
+		ResponseTime:  responseTime,
 	}
-	return "Failed"
 }

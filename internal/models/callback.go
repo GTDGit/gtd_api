@@ -9,13 +9,15 @@ import (
 type TransactionLog struct {
 	ID             int             `db:"id"`
 	TransactionID  int             `db:"transaction_id"`
-	SkuID          int             `db:"sku_id"`
+	SkuID          *int            `db:"sku_id"`
 	DigiRefID      string          `db:"digi_ref_id"`
 	Request        json.RawMessage `db:"request"`
 	Response       json.RawMessage `db:"response"`
 	RC             *string         `db:"rc"`
 	Status         *string         `db:"status"`
 	Message        *string         `db:"message"`
+	ProviderID     *int            `db:"provider_id"`
+	ProviderSKUID  *int            `db:"provider_sku_id"`
 	CreatedAt      time.Time       `db:"created_at"`
 	ResponseAt     *time.Time      `db:"response_at"`
 	ResponseTimeMs *int            `db:"response_time_ms"`

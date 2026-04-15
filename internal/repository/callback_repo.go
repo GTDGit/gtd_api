@@ -30,9 +30,10 @@ func nullableRawJSON(v json.RawMessage) interface{} {
 func (r *CallbackRepository) CreateTransactionLog(log *models.TransactionLog) error {
 	const q = `
         INSERT INTO transaction_logs (
-            transaction_id, sku_id, digi_ref_id, request, response, rc, status, created_at, response_at
+            transaction_id, sku_id, digi_ref_id, request, response, rc, status, message,
+            provider_id, provider_sku_id, created_at, response_at, response_time_ms
         ) VALUES (
-            $1, $2, $3, $4, $5, $6, $7, NOW(), $8
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), $11, $12
         )`
 	stmt, err := r.db.Preparex(q)
 	if err != nil {
@@ -47,7 +48,11 @@ func (r *CallbackRepository) CreateTransactionLog(log *models.TransactionLog) er
 		nullableRawJSON(log.Response),
 		log.RC,
 		log.Status,
+		log.Message,
+		log.ProviderID,
+		log.ProviderSKUID,
 		log.ResponseAt,
+		log.ResponseTimeMs,
 	)
 	return err
 }

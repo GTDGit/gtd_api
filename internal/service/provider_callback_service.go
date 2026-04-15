@@ -38,6 +38,7 @@ type ProviderCallbackService struct {
 	trxRepo      *repository.TransactionRepository
 	callbackSvc  *CallbackService
 	notifier     sse.TransactionNotifier
+	retrier      ProviderFallbackRetrier
 }
 
 // NewProviderCallbackService creates a new ProviderCallbackService
@@ -56,6 +57,11 @@ func NewProviderCallbackService(
 // SetNotifier sets the SSE notifier for real-time transaction updates
 func (s *ProviderCallbackService) SetNotifier(notifier sse.TransactionNotifier) {
 	s.notifier = notifier
+}
+
+// SetRetrier sets the prepaid provider fallback retrier.
+func (s *ProviderCallbackService) SetRetrier(retrier ProviderFallbackRetrier) {
+	s.retrier = retrier
 }
 
 // ProcessKiosbankCallback processes a callback from Kiosbank
@@ -105,15 +111,23 @@ func (s *ProviderCallbackService) ProcessKiosbankCallback(ctx context.Context, p
 
 	// Determine status message
 	var status, msg *string
-	if kiosbank.IsSuccess(rc) {
+	class := kiosbank.ClassifyRC(rc, kiosbank.ResponsePhaseAsync)
+	switch class {
+	case kiosbank.ResponseClassSuccess:
 		s := "success"
 		status = &s
-	} else if kiosbank.IsFatal(rc) {
+	case kiosbank.ResponseClassFailed:
 		s := "failed"
 		status = &s
 		desc := kiosbank.GetRCDescription(rc)
+		if providerDesc, ok := payload["description"].(string); ok && providerDesc != "" {
+			desc = providerDesc
+		}
+		if providerMsg, ok := payload["message"].(string); ok && providerMsg != "" {
+			desc = providerMsg
+		}
 		msg = &desc
-	} else if kiosbank.IsPending(rc) {
+	case kiosbank.ResponseClassPending:
 		s := "pending"
 		status = &s
 	}
@@ -151,7 +165,8 @@ func (s *ProviderCallbackService) ProcessKiosbankCallback(ctx context.Context, p
 
 	// Process based on RC
 	now := time.Now()
-	if kiosbank.IsSuccess(rc) {
+	switch class {
+	case kiosbank.ResponseClassSuccess:
 		trx.Status = models.StatusSuccess
 		// Extract serial number from data sub-object (product-specific keys)
 		if data, ok := payload["data"].(map[string]any); ok {
@@ -172,13 +187,28 @@ func (s *ProviderCallbackService) ProcessKiosbankCallback(ctx context.Context, p
 			s.notifier.NotifyTransactionStatusChanged(trx)
 		}
 		go s.callbackSvc.SendCallback(trx, "transaction.success")
-	} else if kiosbank.IsFatal(rc) {
-		trx.Status = models.StatusFailed
-		msg := kiosbank.GetRCDescription(rc)
+	case kiosbank.ResponseClassFailed:
+		failedMessage := kiosbank.GetRCDescription(rc)
 		if desc, ok := payload["description"].(string); ok && desc != "" {
-			msg = desc
+			failedMessage = desc
 		}
-		trx.FailedReason = &msg
+		if providerMsg, ok := payload["message"].(string); ok && providerMsg != "" {
+			failedMessage = providerMsg
+		}
+		if s.retrier != nil && trx.Type == models.TrxTypePrepaid {
+			result, handled, err := s.retrier.RetryWithNextProvider(ctx, trx, rc, failedMessage)
+			if err != nil {
+				return err
+			}
+			if handled {
+				_ = result
+				callback.IsProcessed = true
+				_ = s.providerRepo.UpdateProviderCallbackProcessed(callback.ID, true)
+				return nil
+			}
+		}
+		trx.Status = models.StatusFailed
+		trx.FailedReason = &failedMessage
 		trx.FailedCode = &rc
 		trx.ProcessedAt = &now
 		if err := s.trxRepo.Update(trx); err != nil {
@@ -188,7 +218,7 @@ func (s *ProviderCallbackService) ProcessKiosbankCallback(ctx context.Context, p
 			s.notifier.NotifyTransactionStatusChanged(trx)
 		}
 		go s.callbackSvc.SendCallback(trx, "transaction.failed")
-	} else {
+	default:
 		if err := s.trxRepo.Update(trx); err != nil {
 			log.Error().Err(err).Str("transaction_id", trx.TransactionID).Msg("Failed to refresh pending Kiosbank trace from callback")
 		}
@@ -249,9 +279,9 @@ func (s *ProviderCallbackService) ProcessAlterraCallback(ctx context.Context, pa
 	} else if alterra.IsFatal(rc) {
 		s := "failed"
 		status = &s
-		m, _ := payload["message"].(string)
-		if m != "" {
-			msg = &m
+		failedMessage := alterraFailureMessageFromPayload(payload, rc)
+		if failedMessage != "" {
+			msg = &failedMessage
 		}
 	} else if alterra.IsPending(rc) {
 		s := "pending"
@@ -315,10 +345,21 @@ func (s *ProviderCallbackService) ProcessAlterraCallback(ctx context.Context, pa
 		}
 		go s.callbackSvc.SendCallback(trx, "transaction.success")
 	} else if alterra.IsFatal(rc) {
-		trx.Status = models.StatusFailed
-		if msg, ok := payload["message"].(string); ok {
-			trx.FailedReason = &msg
+		failedMessage := alterraFailureMessageFromPayload(payload, rc)
+		if s.retrier != nil && trx.Type == models.TrxTypePrepaid {
+			result, handled, err := s.retrier.RetryWithNextProvider(ctx, trx, rc, failedMessage)
+			if err != nil {
+				return err
+			}
+			if handled {
+				_ = result
+				callback.IsProcessed = true
+				_ = s.providerRepo.UpdateProviderCallbackProcessed(callback.ID, true)
+				return nil
+			}
 		}
+		trx.Status = models.StatusFailed
+		trx.FailedReason = &failedMessage
 		trx.FailedCode = &rc
 		trx.ProcessedAt = &now
 		if err := s.trxRepo.Update(trx); err != nil {
@@ -357,6 +398,21 @@ func extractKiosbankSN(data map[string]any) string {
 		return nr
 	}
 	return ""
+}
+
+func alterraFailureMessageFromPayload(payload map[string]any, rc string) string {
+	if payload == nil {
+		return alterra.GetRCDescription(rc)
+	}
+	if msg, ok := payload["message"].(string); ok && strings.TrimSpace(msg) != "" {
+		return msg
+	}
+	if errMap, ok := payload["error"].(map[string]any); ok {
+		if msg, ok := errMap["message"].(string); ok && strings.TrimSpace(msg) != "" {
+			return msg
+		}
+	}
+	return alterra.GetRCDescription(rc)
 }
 
 // extractKiosbankBuyPrice extracts buy price from Kiosbank callback data.

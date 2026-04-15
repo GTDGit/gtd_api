@@ -1,6 +1,10 @@
 package kiosbank
 
-import "encoding/json"
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+)
 
 // BaseResponse is common response fields
 type BaseResponse struct {
@@ -13,6 +17,22 @@ type BaseResponse struct {
 // SignOnResponse is the response from Sign On
 type SignOnResponse struct {
 	BaseResponse
+}
+
+func (r *SignOnResponse) UnmarshalJSON(data []byte) error {
+	type alias SignOnResponse
+	aux := struct {
+		alias          alias
+		SessionIDUpper string `json:"SessionID"`
+	}{}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	*r = SignOnResponse(aux.alias)
+	if r.BaseResponse.SessionID == "" {
+		r.BaseResponse.SessionID = aux.SessionIDUpper
+	}
+	return nil
 }
 
 // InquiryData contains inquiry result data
@@ -109,6 +129,45 @@ type PriceListItem struct {
 	Category string `json:"category,omitempty"`
 	Price    string `json:"price,omitempty"`
 	Status   string `json:"status,omitempty"`
+}
+
+func (p *PriceListItem) UnmarshalJSON(data []byte) error {
+	type alias struct {
+		Code     string          `json:"code"`
+		Name     string          `json:"name"`
+		Category string          `json:"category,omitempty"`
+		Price    json.RawMessage `json:"price,omitempty"`
+		Status   string          `json:"status,omitempty"`
+	}
+
+	var aux alias
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+
+	p.Code = aux.Code
+	p.Name = aux.Name
+	p.Category = aux.Category
+	p.Status = aux.Status
+
+	if len(aux.Price) == 0 || bytes.Equal(aux.Price, []byte("null")) {
+		p.Price = ""
+		return nil
+	}
+
+	var asString string
+	if err := json.Unmarshal(aux.Price, &asString); err == nil {
+		p.Price = asString
+		return nil
+	}
+
+	var asNumber json.Number
+	if err := json.Unmarshal(aux.Price, &asNumber); err == nil {
+		p.Price = asNumber.String()
+		return nil
+	}
+
+	return fmt.Errorf("invalid price field: %s", string(aux.Price))
 }
 
 // PriceListResponse is the response from Price List

@@ -67,25 +67,29 @@ type WorkerConfig struct {
 
 // KiosbankConfig contains credentials for Kiosbank PPOB provider
 type KiosbankConfig struct {
-	BaseURL          string
-	MerchantID       string
-	CounterID        string
-	AccountID        string
-	Mitra            string
-	Username         string
-	Password         string
-	DevelopmentURL   string
-	DevelopmentCreds KiosbankCredentialConfig
+	BaseURL           string
+	MerchantID        string
+	MerchantName      string
+	CounterID         string
+	AccountID         string
+	Mitra             string
+	Username          string
+	Password          string
+	DevelopmentURL    string
+	StatusCheckMinAge time.Duration
+	StatusCheckMaxAge time.Duration
+	DevelopmentCreds  KiosbankCredentialConfig
 }
 
 // KiosbankCredentialConfig contains environment-specific Kiosbank credentials.
 type KiosbankCredentialConfig struct {
-	MerchantID string
-	CounterID  string
-	AccountID  string
-	Mitra      string
-	Username   string
-	Password   string
+	MerchantID   string
+	MerchantName string
+	CounterID    string
+	AccountID    string
+	Mitra        string
+	Username     string
+	Password     string
 }
 
 // AlterraConfig contains credentials for Alterra PPOB provider
@@ -148,6 +152,7 @@ func Load() (*Config, error) {
 	_ = godotenv.Load()
 
 	cfg := &Config{}
+	var err error
 
 	// Server
 	cfg.Port = getEnv("PORT", "8080")
@@ -182,22 +187,32 @@ func Load() (*Config, error) {
 
 	// Kiosbank PPOB Provider
 	cfg.Kiosbank = KiosbankConfig{
-		BaseURL:        getEnv("KIOSBANK_BASE_URL", "https://transaksi.kiosbank.com:17109"),
-		MerchantID:     getEnv("KIOSBANK_MERCHANT_ID", ""),
-		CounterID:      getEnv("KIOSBANK_COUNTER_ID", ""),
-		AccountID:      getEnv("KIOSBANK_ACCOUNT_ID", ""),
-		Mitra:          getEnv("KIOSBANK_MITRA", ""),
-		Username:       getEnv("KIOSBANK_USERNAME", ""),
-		Password:       getEnv("KIOSBANK_PASSWORD", ""),
-		DevelopmentURL: getEnv("KIOSBANK_DEV_BASE_URL", "https://development.kiosbank.com:4432"),
+		BaseURL:           getEnv("KIOSBANK_BASE_URL", "https://transaksi.kiosbank.com:17109"),
+		MerchantID:        getEnv("KIOSBANK_MERCHANT_ID", ""),
+		MerchantName:      getEnv("KIOSBANK_MERCHANT_NAME", ""),
+		CounterID:         getEnv("KIOSBANK_COUNTER_ID", ""),
+		AccountID:         getEnv("KIOSBANK_ACCOUNT_ID", ""),
+		Mitra:             getEnv("KIOSBANK_MITRA", ""),
+		Username:          getEnv("KIOSBANK_USERNAME", ""),
+		Password:          getEnv("KIOSBANK_PASSWORD", ""),
+		DevelopmentURL:    getEnv("KIOSBANK_DEV_BASE_URL", "https://development.kiosbank.com:4432"),
+		StatusCheckMinAge: 5 * time.Minute,
+		StatusCheckMaxAge: 72 * time.Hour,
 		DevelopmentCreds: KiosbankCredentialConfig{
-			MerchantID: getEnv("KIOSBANK_DEV_MERCHANT_ID", getEnv("KIOSBANK_MERCHANT_ID", "")),
-			CounterID:  getEnv("KIOSBANK_DEV_COUNTER_ID", getEnv("KIOSBANK_COUNTER_ID", "")),
-			AccountID:  getEnv("KIOSBANK_DEV_ACCOUNT_ID", getEnv("KIOSBANK_ACCOUNT_ID", "")),
-			Mitra:      getEnv("KIOSBANK_DEV_MITRA", getEnv("KIOSBANK_MITRA", "")),
-			Username:   getEnv("KIOSBANK_DEV_USERNAME", getEnv("KIOSBANK_USERNAME", "")),
-			Password:   getEnv("KIOSBANK_DEV_PASSWORD", getEnv("KIOSBANK_PASSWORD", "")),
+			MerchantID:   getEnv("KIOSBANK_DEV_MERCHANT_ID", getEnv("KIOSBANK_MERCHANT_ID", "")),
+			MerchantName: getEnv("KIOSBANK_DEV_MERCHANT_NAME", getEnv("KIOSBANK_MERCHANT_NAME", "")),
+			CounterID:    getEnv("KIOSBANK_DEV_COUNTER_ID", getEnv("KIOSBANK_COUNTER_ID", "")),
+			AccountID:    getEnv("KIOSBANK_DEV_ACCOUNT_ID", getEnv("KIOSBANK_ACCOUNT_ID", "")),
+			Mitra:        getEnv("KIOSBANK_DEV_MITRA", getEnv("KIOSBANK_MITRA", "")),
+			Username:     getEnv("KIOSBANK_DEV_USERNAME", getEnv("KIOSBANK_USERNAME", "")),
+			Password:     getEnv("KIOSBANK_DEV_PASSWORD", getEnv("KIOSBANK_PASSWORD", "")),
 		},
+	}
+	if cfg.Kiosbank.StatusCheckMinAge, err = parseDurationEnv("KIOSBANK_STATUS_CHECK_MIN_AGE", cfg.Kiosbank.StatusCheckMinAge.String()); err != nil {
+		return nil, fmt.Errorf("invalid KIOSBANK_STATUS_CHECK_MIN_AGE: %w", err)
+	}
+	if cfg.Kiosbank.StatusCheckMaxAge, err = parseDurationEnv("KIOSBANK_STATUS_CHECK_MAX_AGE", cfg.Kiosbank.StatusCheckMaxAge.String()); err != nil {
+		return nil, fmt.Errorf("invalid KIOSBANK_STATUS_CHECK_MAX_AGE: %w", err)
 	}
 
 	// Alterra PPOB Provider
@@ -265,7 +280,6 @@ func Load() (*Config, error) {
 	}
 
 	// Workers (durations)
-	var err error
 	if cfg.Worker.SyncInterval, err = parseDurationEnv("SYNC_INTERVAL", "15m"); err != nil {
 		return nil, fmt.Errorf("invalid SYNC_INTERVAL: %w", err)
 	}

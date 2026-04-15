@@ -2,10 +2,11 @@ package kiosbank
 
 // SignOnRequest is the request for Sign On
 type SignOnRequest struct {
-	MerchantID string `json:"merchantID"`
-	CounterID  string `json:"counterID"`
-	AccountID  string `json:"accountID"`
-	Mitra      string `json:"mitra"`
+	MerchantID   string `json:"merchantID"`
+	MerchantName string `json:"merchantName"`
+	CounterID    string `json:"counterID"`
+	AccountID    string `json:"accountID"`
+	Mitra        string `json:"mitra"`
 }
 
 // InquiryRequest is the request for Inquiry

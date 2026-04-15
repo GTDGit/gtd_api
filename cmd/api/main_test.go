@@ -12,6 +12,7 @@ func TestKiosbankClientConfigUsesDevelopmentOverrides(t *testing.T) {
 	cfg := config.KiosbankConfig{
 		BaseURL:        "https://prod.example",
 		MerchantID:     "PROD",
+		MerchantName:   "Prod Merchant",
 		CounterID:      "1",
 		AccountID:      "A",
 		Mitra:          "DJI",
@@ -19,22 +20,23 @@ func TestKiosbankClientConfigUsesDevelopmentOverrides(t *testing.T) {
 		Password:       "prod-pass",
 		DevelopmentURL: "https://dev.example",
 		DevelopmentCreds: config.KiosbankCredentialConfig{
-			MerchantID: "DEV",
-			CounterID:  "2",
-			AccountID:  "B",
-			Mitra:      "KB",
-			Username:   "dev-user",
-			Password:   "dev-pass",
+			MerchantID:   "DEV",
+			MerchantName: "Dev Merchant",
+			CounterID:    "2",
+			AccountID:    "B",
+			Mitra:        "KB",
+			Username:     "dev-user",
+			Password:     "dev-pass",
 		},
 	}
 
 	prod := kiosbankClientConfig(cfg, false)
 	dev := kiosbankClientConfig(cfg, true)
 
-	if prod.BaseURL != "https://prod.example" || prod.Username != "prod-user" {
+	if prod.BaseURL != "https://prod.example" || prod.Username != "prod-user" || prod.MerchantName != "Prod Merchant" {
 		t.Fatalf("unexpected prod config: %#v", prod)
 	}
-	if dev.BaseURL != "https://dev.example" || dev.Username != "dev-user" || dev.MerchantID != "DEV" {
+	if dev.BaseURL != "https://dev.example" || dev.Username != "dev-user" || dev.MerchantID != "DEV" || dev.MerchantName != "Dev Merchant" {
 		t.Fatalf("unexpected dev config: %#v", dev)
 	}
 }
@@ -46,6 +48,7 @@ func TestKiosbankClientConfigFallsBackToProductionCredentials(t *testing.T) {
 		BaseURL:        "https://prod.example",
 		DevelopmentURL: "https://dev.example",
 		MerchantID:     "PROD",
+		MerchantName:   "Prod Merchant",
 		CounterID:      "1",
 		AccountID:      "A",
 		Mitra:          "DJI",
@@ -54,7 +57,7 @@ func TestKiosbankClientConfigFallsBackToProductionCredentials(t *testing.T) {
 	}
 
 	dev := kiosbankClientConfig(cfg, true)
-	if dev.Username != "prod-user" || dev.Password != "prod-pass" || dev.MerchantID != "PROD" {
+	if dev.Username != "prod-user" || dev.Password != "prod-pass" || dev.MerchantID != "PROD" || dev.MerchantName != "Prod Merchant" {
 		t.Fatalf("unexpected fallback dev config: %#v", dev)
 	}
 }

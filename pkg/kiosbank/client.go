@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -20,13 +21,42 @@ import (
 
 // Config holds Kiosbank API configuration
 type Config struct {
-	BaseURL    string
-	MerchantID string
-	CounterID  string
-	AccountID  string
-	Mitra      string
-	Username   string
-	Password   string
+	BaseURL      string
+	MerchantID   string
+	MerchantName string
+	CounterID    string
+	AccountID    string
+	Mitra        string
+	Username     string
+	Password     string
+}
+
+// TransportError represents an uncertain provider transport result after the
+// authenticated request was sent to Kiosbank.
+type TransportError struct {
+	Err error
+}
+
+func (e *TransportError) Error() string {
+	if e == nil || e.Err == nil {
+		return "kiosbank transport error"
+	}
+	return e.Err.Error()
+}
+
+func (e *TransportError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
+
+// IsTransportUncertainError returns true when the request result is ambiguous
+// and the transaction should be treated as pending instead of definitively
+// failed.
+func IsTransportUncertainError(err error) bool {
+	var transportErr *TransportError
+	return errors.As(err, &transportErr)
 }
 
 // Client is the Kiosbank API client with HTTP Digest authentication
@@ -241,6 +271,17 @@ func sanitizeMap(obj map[string]any, sensitiveFields []string) {
 	}
 }
 
+func sessionExpiry(now time.Time) time.Time {
+	wib := time.FixedZone("WIB", 7*3600)
+	current := now.In(wib)
+	return time.Date(current.Year(), current.Month(), current.Day(), 23, 59, 59, 0, wib)
+}
+
+func (c *Client) clearSession() {
+	c.sessionID = ""
+	c.sessionExp = time.Time{}
+}
+
 // ensureSession ensures we have a valid session
 func (c *Client) ensureSession(ctx context.Context) (string, error) {
 	c.sessionMu.RLock()
@@ -266,12 +307,25 @@ func (c *Client) ensureSession(ctx context.Context) (string, error) {
 		return "", err
 	}
 
-	if resp.RC != "00" {
-		return "", fmt.Errorf("sign on failed: %s", resp.Description)
+	if resp.SessionID == "" {
+		if resp.Description != "" {
+			return "", fmt.Errorf("sign on failed: %s", resp.Description)
+		}
+		if resp.RC != "" && resp.RC != RCSuccess {
+			return "", fmt.Errorf("sign on failed: rc %s", resp.RC)
+		}
+		return "", fmt.Errorf("sign on failed: missing SessionID")
+	}
+
+	if resp.RC != "" && resp.RC != RCSuccess {
+		if resp.Description != "" {
+			return "", fmt.Errorf("sign on failed: %s", resp.Description)
+		}
+		return "", fmt.Errorf("sign on failed: rc %s", resp.RC)
 	}
 
 	c.sessionID = resp.SessionID
-	c.sessionExp = time.Now().Add(25 * time.Minute) // Session valid for ~30 mins, refresh at 25
+	c.sessionExp = sessionExpiry(time.Now())
 
 	return c.sessionID, nil
 }

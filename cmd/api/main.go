@@ -218,6 +218,7 @@ func main() {
 	// Initialize provider callback service
 	providerCallbackSvc := service.NewProviderCallbackService(ppobProviderRepo, trxRepo, callbackSvc)
 	providerCallbackSvc.SetNotifier(sseNotifier)
+	providerCallbackSvc.SetRetrier(trxSvc)
 	transferCallbackSvc := service.NewTransferCallbackService(clientRepo, bankCodeRepo)
 	transferSvc := service.NewTransferService(
 		transferRepo,
@@ -299,10 +300,12 @@ func main() {
 	// Digiflazz callback worker disabled
 	// go worker.NewDigiflazzCallbackWorker(cbRepo, trxRepo, trxSvc, callbackSvc, cfg.Worker.DigiflazzCallbackInterval).Start(ctx)
 	go worker.NewStatusCheckWorker(
-		trxRepo, skuRepo, callbackSvc, digiProd, digiDev, providerRouter,
+		trxRepo, skuRepo, callbackSvc, digiProd, digiDev, providerRouter, trxSvc,
 		cfg.Worker.StatusCheckInterval,
 		cfg.Worker.StatusCheckStaleAfter,
 		cfg.Worker.StatusCheckMaxAge,
+		cfg.Kiosbank.StatusCheckMinAge,
+		cfg.Kiosbank.StatusCheckMaxAge,
 	).Start(ctx)
 	go worker.NewTransferStatusWorker(
 		transferSvc,
@@ -476,6 +479,12 @@ func buildKiosbankClients(cfg config.KiosbankConfig) (*kiosbank.Client, *kiosban
 	if cfg.Username == "" {
 		return nil, nil
 	}
+	if cfg.MerchantName == "" {
+		log.Warn().Msg("KIOSBANK_MERCHANT_NAME is empty; sign-on request will not match live docs")
+	}
+	if cfg.DevelopmentURL != "" && cfg.DevelopmentCreds.MerchantName == "" {
+		log.Warn().Msg("KIOSBANK_DEV_MERCHANT_NAME is empty; development sign-on request will not match live docs")
+	}
 
 	prodClient := kiosbank.NewClient(kiosbankClientConfig(cfg, false))
 	devClient := kiosbank.NewClient(kiosbankClientConfig(cfg, true))
@@ -486,13 +495,14 @@ func buildKiosbankClients(cfg config.KiosbankConfig) (*kiosbank.Client, *kiosban
 func kiosbankClientConfig(cfg config.KiosbankConfig, development bool) kiosbank.Config {
 	if !development {
 		return kiosbank.Config{
-			BaseURL:    cfg.BaseURL,
-			MerchantID: cfg.MerchantID,
-			CounterID:  cfg.CounterID,
-			AccountID:  cfg.AccountID,
-			Mitra:      cfg.Mitra,
-			Username:   cfg.Username,
-			Password:   cfg.Password,
+			BaseURL:      cfg.BaseURL,
+			MerchantID:   cfg.MerchantID,
+			MerchantName: cfg.MerchantName,
+			CounterID:    cfg.CounterID,
+			AccountID:    cfg.AccountID,
+			Mitra:        cfg.Mitra,
+			Username:     cfg.Username,
+			Password:     cfg.Password,
 		}
 	}
 
@@ -501,19 +511,21 @@ func kiosbankClientConfig(cfg config.KiosbankConfig, development bool) kiosbank.
 		devCreds.Username = cfg.Username
 		devCreds.Password = cfg.Password
 		devCreds.MerchantID = cfg.MerchantID
+		devCreds.MerchantName = cfg.MerchantName
 		devCreds.CounterID = cfg.CounterID
 		devCreds.AccountID = cfg.AccountID
 		devCreds.Mitra = cfg.Mitra
 	}
 
 	return kiosbank.Config{
-		BaseURL:    cfg.DevelopmentURL,
-		MerchantID: devCreds.MerchantID,
-		CounterID:  devCreds.CounterID,
-		AccountID:  devCreds.AccountID,
-		Mitra:      devCreds.Mitra,
-		Username:   devCreds.Username,
-		Password:   devCreds.Password,
+		BaseURL:      cfg.DevelopmentURL,
+		MerchantID:   devCreds.MerchantID,
+		MerchantName: devCreds.MerchantName,
+		CounterID:    devCreds.CounterID,
+		AccountID:    devCreds.AccountID,
+		Mitra:        devCreds.Mitra,
+		Username:     devCreds.Username,
+		Password:     devCreds.Password,
 	}
 }
 

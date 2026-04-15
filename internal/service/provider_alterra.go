@@ -283,11 +283,8 @@ func (c *AlterraProviderClient) convertResponse(resp *alterra.TransactionRespons
 		}
 	}
 
-	// Get error message
-	message := ""
-	if resp.Error != nil {
-		message = resp.Error.Message
-	}
+	rc := alterraResponseCode(resp)
+	message := alterraResponseMessage(resp, rc)
 
 	providerRefID := ""
 	if resp.TransactionID > 0 {
@@ -301,7 +298,7 @@ func (c *AlterraProviderClient) convertResponse(resp *alterra.TransactionRespons
 		ProviderRefID: providerRefID,
 		HTTPStatus:    resp.HTTPStatus,
 		Status:        resp.Status,
-		RC:            resp.ResponseCode,
+		RC:            rc,
 		Message:       message,
 		SerialNumber:  serialNumber,
 		CustomerName:  resp.CustomerName,
@@ -312,4 +309,36 @@ func (c *AlterraProviderClient) convertResponse(resp *alterra.TransactionRespons
 		NeedsRetry:    alterra.NeedsNewRefID(resp.ResponseCode),
 		ResponseTime:  responseTime,
 	}
+}
+
+func alterraResponseCode(resp *alterra.TransactionResponse) string {
+	if resp == nil {
+		return ""
+	}
+	if resp.ResponseCode != "" {
+		return resp.ResponseCode
+	}
+	if resp.Error != nil && resp.Error.Code != "" {
+		return resp.Error.Code
+	}
+	if resp.HTTPStatus > 0 {
+		return strconv.Itoa(resp.HTTPStatus)
+	}
+	return ""
+}
+
+func alterraResponseMessage(resp *alterra.TransactionResponse, rc string) string {
+	if resp == nil {
+		return ""
+	}
+	if resp.Error != nil && resp.Error.Message != "" {
+		return resp.Error.Message
+	}
+	if desc := alterra.GetRCDescription(rc); desc != "Unknown error" {
+		return desc
+	}
+	if resp.Status != "" {
+		return resp.Status
+	}
+	return "Alterra transaction failed"
 }

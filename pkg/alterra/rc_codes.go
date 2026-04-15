@@ -65,7 +65,10 @@ func IsPending(rc string) bool {
 
 // IsFatal returns true if RC indicates definite failure
 func IsFatal(rc string) bool {
-	return fatalCodes[rc]
+	if rc == "" {
+		return false
+	}
+	return !IsSuccess(rc) && !IsPending(rc)
 }
 
 // IsRetryable returns true if RC indicates temporary failure that can be retried

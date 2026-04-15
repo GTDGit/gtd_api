@@ -1,5 +1,23 @@
 package kiosbank
 
+// ResponsePhase describes which Kiosbank flow produced the RC.
+type ResponsePhase string
+
+const (
+	ResponsePhaseInquiry        ResponsePhase = "inquiry"
+	ResponsePhaseInitialPayment ResponsePhase = "initial_payment"
+	ResponsePhaseAsync          ResponsePhase = "async"
+)
+
+// ResponseClass is the derived transaction state for a Kiosbank RC in a given phase.
+type ResponseClass string
+
+const (
+	ResponseClassSuccess ResponseClass = "success"
+	ResponseClassPending ResponseClass = "pending"
+	ResponseClassFailed  ResponseClass = "failed"
+)
+
 // Response code constants
 const (
 	RCSuccess              = "00"
@@ -46,14 +64,9 @@ const (
 	RCDuplicateRef         = "86"
 )
 
-// successCodes are RC values that indicate success
-var successCodes = map[string]bool{
-	RCSuccess: true,
-}
-
-// pendingCodes are RC values that indicate pending/processing (for Payment)
-// Per Kiosbank docs: these RCs are PENDING for payment, wait for callback
-var pendingCodes = map[string]bool{
+// initialPaymentPendingCodes are RC values that indicate pending/processing
+// for initial Payment / SinglePayment.
+var initialPaymentPendingCodes = map[string]bool{
 	RCUndefinedError:       true, // 01: Payment=PENDING per docs
 	RCBillerNoResponse:     true, // 03
 	RCNoResponseFromBiller: true, // 04
@@ -66,59 +79,63 @@ var pendingCodes = map[string]bool{
 	RCProcessing:           true, // 71
 }
 
-// fatalCodes are RC values that indicate definite failure (no retry)
-var fatalCodes = map[string]bool{
-	RCFormatError:         true,
-	RCCannotProcess:       true,
-	RCInsufficientBalance: true,
-	RCUnknownProduct:      true,
-	RCTransactionFailed:   true, // 17: definitive failure
-	RCNotRegistered:       true,
-	RCCannotTransact:      true,
-	RCSessionExpired:      true,
-	RCAdminError:          true,
-	RCUnknownMessage:      true,
-	RCNotAuthorized:       true,
-	RCInvalidPrice:        true,
-	RCExpired:             true,
-	RCPayAtOffice:         true,
-	RCInquiryRequired:     true,
-	RCBillNotAvailable:    true,
-	RCAlreadyPaid:         true,
-	RCInvalidCustomer:     true,
-	RCDailyLimitReached:   true,
-	RCNumberNotAllowed:    true,
-	RCInvalidAmount:       true,
-	RCExceedsMaxPayment:   true,
-	RCRoutingError:        true,
-	RCAlreadySettled:      true,
-	RCMinInterval:         true,
-	RCExpiredNumber:       true,
-	RCExceedsMaxTunggakan: true,
-	RCNoDataOrPaid:        true,
-	RCBlocked:             true,
-	RCCutOff:              true,
-	RCDuplicateRef:        true,
-}
-
 // sessionExpiredCodes indicate session needs refresh
 var sessionExpiredCodes = map[string]bool{
 	RCSessionExpired: true,
 }
 
+// ClassifyRC returns the live-doc transaction state for an RC in a specific phase.
+func ClassifyRC(rc string, phase ResponsePhase) ResponseClass {
+	switch phase {
+	case ResponsePhaseInquiry:
+		if rc == RCSuccess {
+			return ResponseClassSuccess
+		}
+		return ResponseClassFailed
+	case ResponsePhaseAsync:
+		if rc == RCSuccess {
+			return ResponseClassSuccess
+		}
+		if rc == RCTransactionFailed {
+			return ResponseClassFailed
+		}
+		return ResponseClassPending
+	default:
+		if rc == RCSuccess {
+			return ResponseClassSuccess
+		}
+		if initialPaymentPendingCodes[rc] {
+			return ResponseClassPending
+		}
+		return ResponseClassFailed
+	}
+}
+
+// StatusFromClass converts a response class into the service-level status string.
+func StatusFromClass(class ResponseClass) string {
+	switch class {
+	case ResponseClassSuccess:
+		return "Success"
+	case ResponseClassPending:
+		return "Pending"
+	default:
+		return "Failed"
+	}
+}
+
 // IsSuccess returns true if RC indicates success
 func IsSuccess(rc string) bool {
-	return successCodes[rc]
+	return ClassifyRC(rc, ResponsePhaseInitialPayment) == ResponseClassSuccess
 }
 
-// IsPending returns true if RC indicates pending (need to check status later)
+// IsPending returns true if RC indicates pending for the initial payment flow.
 func IsPending(rc string) bool {
-	return pendingCodes[rc]
+	return ClassifyRC(rc, ResponsePhaseInitialPayment) == ResponseClassPending
 }
 
-// IsFatal returns true if RC indicates definite failure
+// IsFatal returns true if RC indicates failed for the initial payment flow.
 func IsFatal(rc string) bool {
-	return fatalCodes[rc]
+	return ClassifyRC(rc, ResponsePhaseInitialPayment) == ResponseClassFailed
 }
 
 // IsSessionExpired returns true if session needs to be refreshed

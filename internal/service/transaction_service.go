@@ -362,8 +362,8 @@ func (s *TransactionService) handleSuccess(trx *models.Transaction, sku *models.
 	if resp.RefID != "" {
 		trx.DigiRefID = &resp.RefID
 	}
-	if err := s.trxRepo.Update(trx); err != nil {
-		log.Error().Err(err).Str("transaction_id", trx.TransactionID).Str("status", string(trx.Status)).Msg("CRITICAL: failed to update transaction in DB")
+	if err := s.persistTransactionUpdate(trx); err != nil {
+		return nil, err
 	}
 	if s.notifier != nil {
 		s.notifier.NotifyTransactionStatusChanged(trx)
@@ -382,8 +382,8 @@ func (s *TransactionService) handlePending(trx *models.Transaction, sku *models.
 	if resp.RefID != "" {
 		trx.DigiRefID = &resp.RefID
 	}
-	if err := s.trxRepo.Update(trx); err != nil {
-		log.Error().Err(err).Str("transaction_id", trx.TransactionID).Str("status", string(trx.Status)).Msg("CRITICAL: failed to update transaction in DB")
+	if err := s.persistTransactionUpdate(trx); err != nil {
+		return nil, err
 	}
 	if s.notifier != nil {
 		s.notifier.NotifyTransactionStatusChanged(trx)
@@ -404,8 +404,8 @@ func (s *TransactionService) handleFatal(trx *models.Transaction, resp *digiflaz
 		trx.FailedCode = &rc
 	}
 	trx.ProcessedAt = &now
-	if err := s.trxRepo.Update(trx); err != nil {
-		log.Error().Err(err).Str("transaction_id", trx.TransactionID).Str("status", string(trx.Status)).Msg("CRITICAL: failed to update transaction in DB")
+	if err := s.persistTransactionUpdate(trx); err != nil {
+		return nil, err
 	}
 	if s.notifier != nil {
 		s.notifier.NotifyTransactionStatusChanged(trx)
@@ -425,8 +425,8 @@ func (s *TransactionService) handleAllSKUsFailed(trx *models.Transaction) (*mode
 	trx.FailedReason = &reason
 	trx.ProcessedAt = &now
 	trx.NextRetryAt = nil
-	if err := s.trxRepo.Update(trx); err != nil {
-		log.Error().Err(err).Str("transaction_id", trx.TransactionID).Str("status", string(trx.Status)).Msg("CRITICAL: failed to update transaction in DB")
+	if err := s.persistTransactionUpdate(trx); err != nil {
+		return nil, err
 	}
 	if s.notifier != nil {
 		s.notifier.NotifyTransactionStatusChanged(trx)
@@ -434,6 +434,18 @@ func (s *TransactionService) handleAllSKUsFailed(trx *models.Transaction) (*mode
 
 	go s.callbackSvc.SendCallback(trx, "transaction.failed")
 	return trx, nil
+}
+
+func (s *TransactionService) persistTransactionUpdate(trx *models.Transaction) error {
+	if err := s.trxRepo.Update(trx); err != nil {
+		log.Error().
+			Err(err).
+			Str("transaction_id", trx.TransactionID).
+			Str("status", string(trx.Status)).
+			Msg("CRITICAL: failed to update transaction in DB")
+		return err
+	}
+	return nil
 }
 
 func extractProviderErrorCode(message string) string {
@@ -664,8 +676,8 @@ func (s *TransactionService) processPayment(ctx context.Context, req *CreateTran
 		payment.BuyPrice = &resp.Price
 		payment.ProcessedAt = &now
 		payment.DigiRefID = &refID
-		if err := s.trxRepo.Update(payment); err != nil {
-			log.Error().Err(err).Str("transaction_id", payment.TransactionID).Str("status", string(payment.Status)).Msg("CRITICAL: failed to update payment in DB")
+		if err := s.persistTransactionUpdate(payment); err != nil {
+			return nil, err
 		}
 
 		if err := s.inquiryCache.Delete(ctx, inquiryData); err != nil {
@@ -683,8 +695,8 @@ func (s *TransactionService) processPayment(ctx context.Context, req *CreateTran
 		payment.Status = models.StatusProcessing
 		payment.Amount = &resp.Price
 		payment.DigiRefID = &refID
-		if err := s.trxRepo.Update(payment); err != nil {
-			log.Error().Err(err).Str("transaction_id", payment.TransactionID).Str("status", string(payment.Status)).Msg("CRITICAL: failed to update payment in DB")
+		if err := s.persistTransactionUpdate(payment); err != nil {
+			return nil, err
 		}
 		if s.notifier != nil {
 			s.notifier.NotifyTransactionStatusChanged(payment)
@@ -699,8 +711,8 @@ func (s *TransactionService) processPayment(ctx context.Context, req *CreateTran
 	payment.FailedReason = &msg
 	payment.ProcessedAt = &now
 	payment.DigiRefID = &refID
-	if err := s.trxRepo.Update(payment); err != nil {
-		log.Error().Err(err).Str("transaction_id", payment.TransactionID).Str("status", string(payment.Status)).Msg("CRITICAL: failed to update payment in DB")
+	if err := s.persistTransactionUpdate(payment); err != nil {
+		return nil, err
 	}
 	if s.notifier != nil {
 		s.notifier.NotifyTransactionStatusChanged(payment)
@@ -1444,8 +1456,8 @@ func (s *TransactionService) handleProviderSuccess(trx *models.Transaction, resp
 		trx.Description = models.NullableRawMessage(resp.Description)
 	}
 	trx.ProcessedAt = &now
-	if err := s.trxRepo.Update(trx); err != nil {
-		log.Error().Err(err).Str("transaction_id", trx.TransactionID).Str("status", string(trx.Status)).Msg("CRITICAL: failed to update transaction in DB")
+	if err := s.persistTransactionUpdate(trx); err != nil {
+		return nil, err
 	}
 	if s.notifier != nil {
 		s.notifier.NotifyTransactionStatusChanged(trx)
@@ -1467,8 +1479,8 @@ func (s *TransactionService) handleProviderPending(trx *models.Transaction, resp
 	if len(resp.Description) > 0 {
 		trx.Description = models.NullableRawMessage(resp.Description)
 	}
-	if err := s.trxRepo.Update(trx); err != nil {
-		log.Error().Err(err).Str("transaction_id", trx.TransactionID).Str("status", string(trx.Status)).Msg("CRITICAL: failed to update transaction in DB")
+	if err := s.persistTransactionUpdate(trx); err != nil {
+		return nil, err
 	}
 	if s.notifier != nil {
 		s.notifier.NotifyTransactionStatusChanged(trx)
@@ -1495,8 +1507,8 @@ func (s *TransactionService) handleProviderFailed(trx *models.Transaction, resp 
 		trx.FailedCode = &resp.RC
 	}
 	trx.ProcessedAt = &now
-	if err := s.trxRepo.Update(trx); err != nil {
-		log.Error().Err(err).Str("transaction_id", trx.TransactionID).Str("status", string(trx.Status)).Msg("CRITICAL: failed to update transaction in DB")
+	if err := s.persistTransactionUpdate(trx); err != nil {
+		return nil, err
 	}
 	if s.notifier != nil {
 		s.notifier.NotifyTransactionStatusChanged(trx)
@@ -1899,8 +1911,8 @@ func (s *TransactionService) executePaymentWithProvider(
 		errResp := providerResponseFromError(inquiryData.ProviderCode, err)
 		if errResp != nil && errResp.Pending {
 			payment.Status = models.StatusProcessing
-			if err := s.trxRepo.Update(payment); err != nil {
-				log.Error().Err(err).Str("transaction_id", payment.TransactionID).Str("status", string(payment.Status)).Msg("CRITICAL: failed to update payment in DB")
+			if err := s.persistTransactionUpdate(payment); err != nil {
+				return nil, err
 			}
 			if s.notifier != nil {
 				s.notifier.NotifyTransactionStatusChanged(payment)
@@ -1927,8 +1939,8 @@ func (s *TransactionService) executePaymentWithProvider(
 			payment.BuyPrice = &resp.Amount
 		}
 		payment.ProcessedAt = &now
-		if err := s.trxRepo.Update(payment); err != nil {
-			log.Error().Err(err).Str("transaction_id", payment.TransactionID).Str("status", string(payment.Status)).Msg("CRITICAL: failed to update payment in DB")
+		if err := s.persistTransactionUpdate(payment); err != nil {
+			return nil, err
 		}
 
 		// Delete inquiry from cache (already paid)
@@ -1948,8 +1960,8 @@ func (s *TransactionService) executePaymentWithProvider(
 		if resp.Amount > 0 {
 			payment.Amount = &resp.Amount
 		}
-		if err := s.trxRepo.Update(payment); err != nil {
-			log.Error().Err(err).Str("transaction_id", payment.TransactionID).Str("status", string(payment.Status)).Msg("CRITICAL: failed to update payment in DB")
+		if err := s.persistTransactionUpdate(payment); err != nil {
+			return nil, err
 		}
 		if s.notifier != nil {
 			s.notifier.NotifyTransactionStatusChanged(payment)

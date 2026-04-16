@@ -144,6 +144,108 @@ class AlterraUATScriptTests(unittest.TestCase):
         self.assertIn('"response_code": "10"', formatted)
         self.assertIn('"status": "Pending"', formatted)
 
+    def test_fill_scenario_rows_uses_step_specific_results_for_multi_cycle_scenario(self):
+        workbook = openpyxl.Workbook()
+        sheet = workbook.active
+        scenario = {
+            "customer_no": "211001025251",
+            "product_id": "80",
+            "flow": "inquiry_payment",
+            "steps": [
+                {"action": "Inquiry (6 month)", "row": 1},
+                {"action": "Purchase (4 month)", "row": 2},
+                {"action": "Get detail/Callback", "row": 3},
+                {"action": "Inquiry (2 month)", "row": 4},
+                {"action": "Purchase (2 month)", "row": 5},
+                {"action": "Get detail/Callback", "row": 6},
+            ],
+        }
+        results = {
+            "_step_results": {
+                1: {
+                    "kind": "inquiry",
+                    "result": {
+                        "provider_response": json.dumps(
+                            {"reference_no": "REF-6M", "response_code": "00", "status": "Success"}
+                        )
+                    },
+                    "customer_no": "211001025251",
+                    "request_data": {},
+                },
+                2: {
+                    "kind": "payment",
+                    "result": {
+                        "alterra_order_id": "INQ-6M",
+                        "provider_response_initial": json.dumps(
+                            {"order_id": "INQ-6M", "response_code": "10", "status": "Pending"}
+                        ),
+                        "provider_response": json.dumps(
+                            {"transaction_id": 600001, "response_code": "00", "status": "Success"}
+                        ),
+                    },
+                    "customer_no": "211001025251",
+                    "request_data": {},
+                    "reference_no": "REF-6M",
+                },
+                3: {
+                    "kind": "callback",
+                    "result": {
+                        "provider_response": json.dumps(
+                            {"transaction_id": 600001, "response_code": "00", "status": "Success"}
+                        )
+                    },
+                    "customer_no": "211001025251",
+                    "request_data": {},
+                    "reference_no": "REF-6M",
+                },
+                4: {
+                    "kind": "inquiry",
+                    "result": {
+                        "provider_response": json.dumps(
+                            {"reference_no": "REF-2M", "response_code": "00", "status": "Success"}
+                        )
+                    },
+                    "customer_no": "211001025251",
+                    "request_data": {},
+                },
+                5: {
+                    "kind": "payment",
+                    "result": {
+                        "alterra_order_id": "INQ-2M",
+                        "provider_response_initial": json.dumps(
+                            {"order_id": "INQ-2M", "response_code": "10", "status": "Pending"}
+                        ),
+                        "provider_response": json.dumps(
+                            {"transaction_id": 600002, "response_code": "00", "status": "Success"}
+                        ),
+                    },
+                    "customer_no": "211001025251",
+                    "request_data": {},
+                    "reference_no": "REF-2M",
+                },
+                6: {
+                    "kind": "callback",
+                    "result": {
+                        "provider_response": json.dumps(
+                            {"transaction_id": 600002, "response_code": "00", "status": "Success"}
+                        )
+                    },
+                    "customer_no": "211001025251",
+                    "request_data": {},
+                    "reference_no": "REF-2M",
+                },
+            }
+        }
+
+        MODULE.fill_scenario_rows(sheet, scenario, results, True, "")
+
+        self.assertIn('"reference_no": "REF-6M"', sheet.cell(1, 12).value)
+        self.assertIn('"order_id": "INQ-6M"', sheet.cell(2, 11).value)
+        self.assertIn("/transaction/600001", sheet.cell(3, 11).value)
+        self.assertIn('"reference_no": "REF-2M"', sheet.cell(4, 12).value)
+        self.assertIn('"order_id": "INQ-2M"', sheet.cell(5, 11).value)
+        self.assertIn("/transaction/600002", sheet.cell(6, 11).value)
+
 
 if __name__ == "__main__":
     unittest.main()

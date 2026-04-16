@@ -708,64 +708,118 @@ def execute_scenario(scenario):
     if not sku_code:
         return {"error": f"No SKU mapping for product_id={product_id}"}
 
-    ref_id = next_ref(scenario["sheet"][:6].upper().replace("_", ""))
-    results = {}
-    steps = scenario["steps"]
-    first_action = steps[0]["action"].lower() if steps else ""
-    has_purchase = any(
-        "purchase" in step["action"].lower() or "transaction" in step["action"].lower()
-        for step in steps
-    )
-    has_inquiry = first_action.startswith("inquiry")
+    results = {"_step_results": {}}
+    current_ref_id = ""
+    current_inquiry = None
+    current_transaction = None
 
     print(
         f"  [{scenario['number']}] {scenario['name'][:60]} | "
-        f"product={product_id} customer={customer_no} ref={ref_id}"
+        f"product={product_id} customer={customer_no}"
     )
 
-    if has_inquiry:
-        inquiry = execute_inquiry(ref_id, sku_code, customer_no, extra_data=extra_data)
-        results["inquiry"] = inquiry
-        inquiry_trx_id = inquiry.get("transactionId")
-        print(
-            f"    Inquiry: GTD HTTP {inquiry.get('inquiry_http_code')} "
-            f"status={inquiry.get('inquiry_status')}"
-        )
+    for step in scenario["steps"]:
+        action = (step.get("action") or "").lower()
+        row = step["row"]
 
-        if has_purchase and inquiry.get("inquiry_status") == "Success" and inquiry_trx_id:
-            time.sleep(2)
-            if scenario["flow"] == "inquiry_purchase":
-                purchase = execute_prepaid(ref_id, sku_code, customer_no)
-                results["purchase"] = purchase
-                print(
-                    f"    Purchase: GTD HTTP {purchase.get('purchase_http_code')} "
-                    f"final={purchase.get('final_status')}"
-                )
-            else:
-                payment = execute_payment(
-                    inquiry_trx_id,
-                    ref_id,
+        if "inquiry" in action:
+            current_ref_id = next_ref(scenario["sheet"][:6].upper().replace("_", ""))
+            inquiry = execute_inquiry(
+                current_ref_id,
+                sku_code,
+                customer_no,
+                extra_data=extra_data,
+            )
+            current_inquiry = inquiry
+            current_transaction = None
+            results["inquiry"] = inquiry
+            results["_step_results"][row] = {
+                "kind": "inquiry",
+                "result": inquiry,
+                "product_id": product_id,
+                "customer_no": customer_no,
+                "request_data": extra_data,
+            }
+            print(
+                f"    Inquiry: GTD HTTP {inquiry.get('inquiry_http_code')} "
+                f"status={inquiry.get('inquiry_status')} ref={current_ref_id}"
+            )
+            continue
+
+        if ("purchase" in action or "transaction" in action) and "callback" not in action and "get detail" not in action:
+            if not current_ref_id:
+                current_ref_id = next_ref(scenario["sheet"][:6].upper().replace("_", ""))
+
+            if current_inquiry and current_inquiry.get("inquiry_status") == "Success" and current_inquiry.get("transactionId"):
+                if scenario["flow"] == "inquiry_purchase":
+                    trx = execute_prepaid(current_ref_id, sku_code, customer_no)
+                    kind = "purchase"
+                    print(
+                        f"    Purchase: GTD HTTP {trx.get('purchase_http_code')} "
+                        f"final={trx.get('final_status')} ref={current_ref_id}"
+                    )
+                else:
+                    trx = execute_payment(
+                        current_inquiry["transactionId"],
+                        current_ref_id,
+                        sku_code,
+                        customer_no,
+                        extra_data=extra_data,
+                    )
+                    kind = "payment"
+                    print(
+                        f"    Payment: GTD HTTP {trx.get('payment_http_code')} "
+                        f"final={trx.get('final_status')} ref={current_ref_id}"
+                    )
+            elif scenario["flow"] == "prepaid_only":
+                trx = execute_prepaid(
+                    current_ref_id,
                     sku_code,
                     customer_no,
                     extra_data=extra_data,
                 )
-                results["payment"] = payment
+                kind = "purchase"
                 print(
-                    f"    Payment: GTD HTTP {payment.get('payment_http_code')} "
-                    f"final={payment.get('final_status')}"
+                    f"    Purchase: GTD HTTP {trx.get('purchase_http_code')} "
+                    f"final={trx.get('final_status')} ref={current_ref_id}"
                 )
-        elif has_purchase:
-            print("    Inquiry not successful, skipping purchase/payment")
+            else:
+                print("    Inquiry not successful, skipping purchase/payment")
+                continue
 
-    elif "purchase" in first_action:
-        purchase = execute_prepaid(ref_id, sku_code, customer_no, extra_data=extra_data)
-        results["purchase"] = purchase
-        print(
-            f"    Purchase: GTD HTTP {purchase.get('purchase_http_code')} "
-            f"final={purchase.get('final_status')}"
-        )
+            current_transaction = trx
+            results[kind] = trx
+            results["_step_results"][row] = {
+                "kind": kind,
+                "result": trx,
+                "product_id": product_id,
+                "customer_no": customer_no,
+                "request_data": extra_data,
+                "reference_no": extract_reference_no(
+                    current_inquiry.get("provider_response") if current_inquiry else ""
+                ),
+            }
+            continue
+
+        if "callback" in action or "get detail" in action:
+            if current_transaction is not None:
+                results["_step_results"][row] = {
+                    "kind": "callback",
+                    "result": current_transaction,
+                    "product_id": product_id,
+                    "customer_no": customer_no,
+                    "request_data": extra_data,
+                    "reference_no": extract_reference_no(
+                        current_inquiry.get("provider_response") if current_inquiry else ""
+                    ),
+                }
 
     return results
+
+
+def get_step_result(results, row):
+    step_results = results.get("_step_results") or {}
+    return step_results.get(row)
 
 
 def validate_step(step, scenario, results):
@@ -774,9 +828,11 @@ def validate_step(step, scenario, results):
     expected_rc = step["expected_rc"]
     expected_result = step["expected_result"]
     issues = []
+    step_row = step.get("row")
+    step_result = get_step_result(results, step_row) if step_row is not None else None
 
-    if "inquiry" in action and "inquiry" in results:
-        inquiry = results["inquiry"]
+    if "inquiry" in action and step_result and step_result["kind"] == "inquiry":
+        inquiry = step_result["result"]
         actual_http = extract_http_status(inquiry.get("provider_http_status"))
         actual_rc = extract_rc(inquiry.get("provider_response"))
         actual_status = status_from_response(inquiry.get("provider_response")) or (inquiry.get("inquiry_status") or "").lower()
@@ -791,44 +847,60 @@ def validate_step(step, scenario, results):
             issues.append("Missing Alterra inquiry response payload")
 
     elif ("purchase" in action or "transaction" in action) and "callback" not in action and "get detail" not in action:
-        key = "purchase" if "purchase" in results else "payment"
-        if key in results:
+        if step_result and step_result["kind"] in ("purchase", "payment"):
+            trx = step_result["result"]
+            actual_http = extract_http_status(trx.get("provider_initial_http_status"))
+            initial_response = trx.get("provider_response_initial") or trx.get("provider_response")
+            actual_rc = extract_rc(initial_response)
+            actual_status = status_from_response(initial_response)
+        else:
+            key = "purchase" if "purchase" in results else "payment"
+            if key not in results:
+                return issues
             trx = results[key]
             actual_http = extract_http_status(trx.get("provider_initial_http_status"))
             initial_response = trx.get("provider_response_initial") or trx.get("provider_response")
             actual_rc = extract_rc(initial_response)
             actual_status = status_from_response(initial_response)
 
-            if not matches_expected(expected_http, actual_http):
-                issues.append(f"Initial HTTP expected {expected_http}, got {actual_http or '-'}")
-            if not matches_expected(expected_rc, actual_rc):
-                issues.append(f"Initial RC expected {expected_rc}, got {actual_rc or '-'}")
-            if not result_status_matches(expected_result, actual_status):
-                issues.append(f"Initial result expected {expected_result}, got {actual_status or '-'}")
-            if not initial_response:
-                issues.append("Missing Alterra initial response payload")
-            if scenario["flow"] != "prepaid_only":
-                request_order_id = extract_order_id(initial_response) or trx.get("alterra_order_id") or ""
-                if not request_order_id:
-                    issues.append("Missing actual Alterra order_id for inquiry-based purchase/payment")
+        if not matches_expected(expected_http, actual_http):
+            issues.append(f"Initial HTTP expected {expected_http}, got {actual_http or '-'}")
+        if not matches_expected(expected_rc, actual_rc):
+            issues.append(f"Initial RC expected {expected_rc}, got {actual_rc or '-'}")
+        if not result_status_matches(expected_result, actual_status):
+            issues.append(f"Initial result expected {expected_result}, got {actual_status or '-'}")
+        if not initial_response:
+            issues.append("Missing Alterra initial response payload")
+        if scenario["flow"] != "prepaid_only":
+            request_order_id = extract_order_id(initial_response) or trx.get("alterra_order_id") or ""
+            if not request_order_id:
+                issues.append("Missing actual Alterra order_id for inquiry-based purchase/payment")
 
     elif "callback" in action or "get detail" in action:
-        key = "purchase" if "purchase" in results else "payment"
-        if key in results:
+        if step_result and step_result["kind"] == "callback":
+            trx = step_result["result"]
+            final_response = trx.get("provider_response")
+            actual_http = extract_http_status(trx.get("provider_http_status")) or ("200" if final_response else "")
+            actual_rc = extract_rc(final_response)
+            actual_status = status_from_response(final_response) or (trx.get("final_status") or "").lower()
+        else:
+            key = "purchase" if "purchase" in results else "payment"
+            if key not in results:
+                return issues
             trx = results[key]
             final_response = trx.get("provider_response")
             actual_http = extract_http_status(trx.get("provider_http_status")) or ("200" if final_response else "")
             actual_rc = extract_rc(final_response)
             actual_status = status_from_response(final_response) or (trx.get("final_status") or "").lower()
 
-            if not matches_expected(expected_http, actual_http):
-                issues.append(f"Final HTTP expected {expected_http}, got {actual_http or '-'}")
-            if not matches_expected(expected_rc, actual_rc):
-                issues.append(f"Final RC expected {expected_rc}, got {actual_rc or '-'}")
-            if not result_status_matches(expected_result, actual_status):
-                issues.append(f"Final result expected {expected_result}, got {actual_status or '-'}")
-            if not final_response:
-                issues.append("Missing Alterra final callback/detail payload")
+        if not matches_expected(expected_http, actual_http):
+            issues.append(f"Final HTTP expected {expected_http}, got {actual_http or '-'}")
+        if not matches_expected(expected_rc, actual_rc):
+            issues.append(f"Final RC expected {expected_rc}, got {actual_rc or '-'}")
+        if not result_status_matches(expected_result, actual_status):
+            issues.append(f"Final result expected {expected_result}, got {actual_status or '-'}")
+        if not final_response:
+            issues.append("Missing Alterra final callback/detail payload")
 
     return issues
 
@@ -854,32 +926,25 @@ def safe_set_cell(ws, row, col, value):
 
 
 def fill_scenario_rows(ws, scenario, results, matches, issues):
-    reference_no = ""
-    request_data = {}
-    customer_no = scenario["customer_no"]
-    if "inquiry" in results:
-        request_data = results["inquiry"].get("request_data") or {}
-        customer_no = results["inquiry"].get("customer_no") or customer_no
-        reference_no = extract_reference_no(results["inquiry"].get("provider_response"))
-        if not reference_no:
-            reference_no = results["inquiry"].get("provider_ref_no", "")
-    elif "purchase" in results:
-        request_data = results["purchase"].get("request_data") or {}
-        customer_no = results["purchase"].get("customer_no") or customer_no
-    elif "payment" in results:
-        request_data = results["payment"].get("request_data") or {}
-        customer_no = results["payment"].get("customer_no") or customer_no
-
     for step in scenario["steps"]:
         row = step["row"]
         action = step["action"].lower()
+        step_result = get_step_result(results, row)
+
+        customer_no = scenario["customer_no"]
+        request_data = {}
+        reference_no = ""
+        if step_result:
+            customer_no = step_result.get("customer_no") or customer_no
+            request_data = step_result.get("request_data") or {}
+            reference_no = step_result.get("reference_no") or ""
 
         safe_set_cell(ws, row, 9, TEST_DATE)
         safe_set_cell(ws, row, 10, matches)
         safe_set_cell(ws, row, 13, SCREENSHOT_TEXT)
 
-        if "inquiry" in action and "inquiry" in results:
-            inquiry = results["inquiry"]
+        if "inquiry" in action and step_result and step_result["kind"] == "inquiry":
+            inquiry = step_result["result"]
             safe_set_cell(
                 ws,
                 row,
@@ -894,12 +959,11 @@ def fill_scenario_rows(ws, scenario, results, matches, issues):
             safe_set_cell(ws, row, 12, format_json_text(inquiry.get("provider_response")))
 
         elif ("purchase" in action or "transaction" in action) and "callback" not in action and "get detail" not in action:
-            key = "purchase" if "purchase" in results else "payment"
-            if key in results:
-                trx = results[key]
+            if step_result and step_result["kind"] in ("purchase", "payment"):
+                trx = step_result["result"]
                 initial_response = trx.get("provider_response_initial") or trx.get("provider_response")
                 actual_order_id = extract_order_id(initial_response) or trx.get("alterra_order_id") or trx.get("transactionId")
-                if key == "payment":
+                if step_result["kind"] == "payment":
                     trx_type = "payment"
                 elif scenario["flow"] == "inquiry_purchase":
                     trx_type = "purchase_with_reference"
@@ -921,9 +985,8 @@ def fill_scenario_rows(ws, scenario, results, matches, issues):
                 safe_set_cell(ws, row, 12, format_json_text(initial_response))
 
         elif "callback" in action or "get detail" in action:
-            key = "purchase" if "purchase" in results else "payment"
-            if key in results:
-                trx = results[key]
+            if step_result and step_result["kind"] == "callback":
+                trx = step_result["result"]
                 final_response = trx.get("provider_response")
                 alterra_trx_id = extract_alterra_transaction_id(final_response) or trx.get("provider_ref_id") or ""
                 req_type = "callback" if response_shape(final_response) == "callback" else "status_check"

@@ -49,3 +49,52 @@ func TestBuildProviderLogRequestIncludesKiosbankWireRequest(t *testing.T) {
 		t.Fatalf("noHanphone = %#v", wireRequest["noHanphone"])
 	}
 }
+
+func TestBuildProviderLogRequestSanitizesAlterraPaymentWireRequest(t *testing.T) {
+	t.Parallel()
+
+	req := &ProviderRequest{
+		RefID:      "GRB-ALT-001",
+		SKUCode:    "34",
+		CustomerNo: "0000001430071801",
+		Type:       ProviderTrxPayment,
+		Extra: map[string]any{
+			"admin":          0,
+			"commission":     0,
+			"reference_no":   "68752409",
+			"payment_period": "01",
+		},
+	}
+	opt := &models.ProviderOption{
+		ProviderCode:    models.ProviderAlterra,
+		ProviderSKUCode: "34",
+	}
+
+	logRequest := buildProviderLogRequest(opt, req)
+
+	extra, ok := logRequest["extra"].(map[string]any)
+	if !ok {
+		t.Fatalf("extra missing: %#v", logRequest)
+	}
+	if _, exists := extra["payment_period"]; exists {
+		t.Fatalf("payment_period should not be logged for Alterra payment extra: %#v", extra)
+	}
+	if extra["reference_no"] != "68752409" {
+		t.Fatalf("reference_no = %#v", extra["reference_no"])
+	}
+
+	wireRequest, ok := logRequest["wire_request"].(map[string]any)
+	if !ok {
+		t.Fatalf("wire_request missing: %#v", logRequest)
+	}
+	data, ok := wireRequest["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("wire_request.data missing: %#v", wireRequest)
+	}
+	if _, exists := data["payment_period"]; exists {
+		t.Fatalf("payment_period should not be present in Alterra payment wire request: %#v", data)
+	}
+	if data["reference_no"] != "68752409" {
+		t.Fatalf("reference_no = %#v", data["reference_no"])
+	}
+}

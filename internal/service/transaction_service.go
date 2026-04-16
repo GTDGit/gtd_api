@@ -1087,7 +1087,11 @@ func buildProviderLogRequest(opt *models.ProviderOption, req *ProviderRequest) m
 		logRequest["amount"] = req.Amount
 	}
 	if len(req.Extra) > 0 {
-		logRequest["extra"] = cloneAnyMap(req.Extra)
+		extra := cloneAnyMap(req.Extra)
+		if opt != nil && opt.ProviderCode == models.ProviderAlterra {
+			extra = buildAlterraLogExtra(req)
+		}
+		logRequest["extra"] = extra
 	}
 	if opt != nil {
 		logRequest["provider"] = string(opt.ProviderCode)
@@ -1101,7 +1105,65 @@ func buildProviderLogRequest(opt *models.ProviderOption, req *ProviderRequest) m
 			logRequest["wire_request"] = wireRequest
 		}
 	}
+	if logRequest["provider"] == string(models.ProviderAlterra) {
+		if wireRequest := buildAlterraWireRequest(req); len(wireRequest) > 0 {
+			logRequest["wire_request"] = wireRequest
+		}
+	}
 	return logRequest
+}
+
+func buildAlterraLogExtra(req *ProviderRequest) map[string]any {
+	if req == nil {
+		return nil
+	}
+
+	extra := cloneAnyMap(req.Extra)
+	delete(extra, "admin")
+	delete(extra, "commission")
+
+	if req.Type == ProviderTrxPayment {
+		return buildAlterraPaymentData(extra)
+	}
+
+	return extra
+}
+
+func buildAlterraWireRequest(req *ProviderRequest) map[string]any {
+	if req == nil {
+		return nil
+	}
+
+	productID := req.SKUCode
+	if intID, ok := intValueOK(req.SKUCode); ok {
+		productID = fmt.Sprintf("%d", intID)
+	}
+
+	wireRequest := map[string]any{
+		"customer_id": req.CustomerNo,
+	}
+
+	switch req.Type {
+	case ProviderTrxInquiry:
+		wireRequest["inquiry_type"] = "Customer_information"
+		data := map[string]any{
+			"product_id": productID,
+		}
+		for key, value := range buildAlterraLogExtra(req) {
+			data[key] = value
+		}
+		wireRequest["data"] = data
+	case ProviderTrxPrepaid:
+		wireRequest["product_id"] = productID
+		wireRequest["order_id"] = req.RefID
+		wireRequest["data"] = buildAlterraLogExtra(req)
+	case ProviderTrxPayment:
+		wireRequest["product_id"] = productID
+		wireRequest["order_id"] = req.RefID
+		wireRequest["data"] = buildAlterraLogExtra(req)
+	}
+
+	return wireRequest
 }
 
 func buildKiosbankWireRequest(req *ProviderRequest, opt *models.ProviderOption) map[string]any {

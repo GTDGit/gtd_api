@@ -100,7 +100,7 @@ func TestSanitizeAlterraExtraStripsInternalPricingFields(t *testing.T) {
 	}
 }
 
-func TestBuildAlterraPaymentDataOnlyKeepsReferenceNo(t *testing.T) {
+func TestBuildAlterraPaymentDataKeepsReferenceNoAndPaymentPeriod(t *testing.T) {
 	t.Parallel()
 
 	input := map[string]any{
@@ -111,7 +111,8 @@ func TestBuildAlterraPaymentDataOnlyKeepsReferenceNo(t *testing.T) {
 
 	got := buildAlterraPaymentData(input)
 	want := map[string]any{
-		"reference_no": "REF-123",
+		"reference_no":   "REF-123",
+		"payment_period": "02",
 	}
 
 	if !reflect.DeepEqual(got, want) {

@@ -112,8 +112,8 @@ func (c *AlterraProviderClient) Payment(ctx context.Context, req *ProviderReques
 		return nil, err
 	}
 
-	// Alterra purchase/payment docs require only reference_no from inquiry.
-	// Avoid forwarding inquiry-only helper fields like payment_period into purchase.
+	// Alterra purchase/payment for BPJS-style flows requires the inquiry reference
+	// and now also supports forwarding payment_period when the provider asks for it.
 	paymentData := buildAlterraPaymentData(req.Extra)
 	data, _ := json.Marshal(paymentData)
 
@@ -370,6 +370,9 @@ func buildAlterraPaymentData(extra map[string]any) map[string]any {
 
 	if refNo, ok := extra["reference_no"].(string); ok && refNo != "" {
 		paymentData["reference_no"] = refNo
+	}
+	if paymentPeriod, ok := extra["payment_period"].(string); ok && paymentPeriod != "" {
+		paymentData["payment_period"] = paymentPeriod
 	}
 	return paymentData
 }

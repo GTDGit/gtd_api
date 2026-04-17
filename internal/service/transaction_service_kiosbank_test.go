@@ -76,11 +76,11 @@ func TestBuildProviderLogRequestSanitizesAlterraPaymentWireRequest(t *testing.T)
 	if !ok {
 		t.Fatalf("extra missing: %#v", logRequest)
 	}
-	if _, exists := extra["payment_period"]; exists {
-		t.Fatalf("payment_period should not be logged for Alterra payment extra: %#v", extra)
-	}
 	if extra["reference_no"] != "68752409" {
 		t.Fatalf("reference_no = %#v", extra["reference_no"])
+	}
+	if extra["payment_period"] != "01" {
+		t.Fatalf("payment_period = %#v", extra["payment_period"])
 	}
 
 	wireRequest, ok := logRequest["wire_request"].(map[string]any)
@@ -91,10 +91,10 @@ func TestBuildProviderLogRequestSanitizesAlterraPaymentWireRequest(t *testing.T)
 	if !ok {
 		t.Fatalf("wire_request.data missing: %#v", wireRequest)
 	}
-	if _, exists := data["payment_period"]; exists {
-		t.Fatalf("payment_period should not be present in Alterra payment wire request: %#v", data)
-	}
 	if data["reference_no"] != "68752409" {
 		t.Fatalf("reference_no = %#v", data["reference_no"])
+	}
+	if data["payment_period"] != "01" {
+		t.Fatalf("payment_period = %#v", data["payment_period"])
 	}
 }

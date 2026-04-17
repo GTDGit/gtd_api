@@ -1486,7 +1486,11 @@ func (s *TransactionService) executeWithProviderRouter(ctx context.Context, trx 
 	}
 	if err != nil {
 		log.Error().Err(err).Str("transaction_id", trx.TransactionID).Msg("Provider router execution failed")
-		if resp := BuildFinalFailureResponseFromAttempts(result.Attempts, phase); resp != nil {
+		var attempts []ProviderAttempt
+		if result != nil {
+			attempts = result.Attempts
+		}
+		if resp := BuildFinalFailureResponseFromAttempts(attempts, phase); resp != nil {
 			applyAttemptProvider(trx, latestAttemptOption(result))
 			applyProviderTrace(trx, resp)
 			if resp.ProviderRefID != "" {

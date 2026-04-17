@@ -31,6 +31,20 @@ class AlterraUATScriptTests(unittest.TestCase):
 
         self.assertFalse(should_wait)
 
+    def test_matches_expected_http_accepts_pending_202_for_legacy_201(self):
+        self.assertTrue(MODULE.matches_expected_http("201", "202"))
+
+    def test_scenario_override_reuses_mobile_duplicate_reference(self):
+        override = MODULE.scenario_override(
+            {
+                "sheet": "Mobile_Prepaid",
+                "number": "7",
+                "name": "Failed Transaction, Duplicate Order ID Using Order ID 114",
+            }
+        )
+
+        self.assertEqual(override["shared_reference_id"], "mobile_order_114")
+
     def test_bpjs_inquiry_request_includes_payment_period(self):
         payload = json.loads(
             MODULE.make_alterra_request(
@@ -75,6 +89,7 @@ class AlterraUATScriptTests(unittest.TestCase):
             {
                 "sheet": "BPJS_Kesehatan",
                 "number": "2",
+                "name": 'Success 2 month bill ("payment_period" : "02")',
             }
         )
 
@@ -85,10 +100,22 @@ class AlterraUATScriptTests(unittest.TestCase):
             {
                 "sheet": "BPJS_TK",
                 "number": "2",
+                "name": 'Success 3 month bill ("payment_period" : "03")',
             }
         )
 
         self.assertEqual(override["data"]["payment_period"], "03")
+
+    def test_scenario_override_does_not_apply_bpjs_period_by_reused_number_alone(self):
+        override = MODULE.scenario_override(
+            {
+                "sheet": "BPJS_Kesehatan",
+                "number": "2",
+                "name": "Product Issue",
+            }
+        )
+
+        self.assertEqual(override["data"]["payment_period"], "01")
 
     def test_validate_step_uses_alterra_http_and_rc(self):
         step = {

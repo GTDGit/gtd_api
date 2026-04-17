@@ -127,6 +127,10 @@ SCENARIO_OVERRIDES = {
     },
 }
 
+SHARED_REFERENCE_IDS = {
+    "mobile_order_114": f"UAT-MOBILE-114-{RUN_STAMP}",
+}
+
 
 def next_ref(prefix):
     global REF_COUNTER
@@ -198,7 +202,10 @@ def query_transaction_trace(trx_id):
         f"cd {shlex.quote(REMOTE_BACKEND_DIR)} && "
         f"docker exec gtd-postgres psql -U gtd_user -d gtd -t -A -c {shlex.quote(sql)}"
     )
-    out, _, _ = remote_exec(script, timeout=20)
+    try:
+        out, _, _ = remote_exec(script, timeout=60)
+    except Exception:
+        return {}
     if not out:
         return {}
     try:
@@ -216,7 +223,10 @@ cd {shlex.quote(REMOTE_BACKEND_DIR)}
 REDIS_PASSWORD="$(grep '^REDIS_PASSWORD=' .env | head -1 | cut -d= -f2- | tr -d '\\r')"
 docker exec gtd-redis redis-cli --raw --no-auth-warning -a "$REDIS_PASSWORD" GET "inquiry:trx:{trx_id}"
 """
-    out, _, _ = remote_exec(script, timeout=20)
+    try:
+        out, _, _ = remote_exec(script, timeout=60)
+    except Exception:
+        return {}
     if not out or out == "(nil)":
         return {}
     try:
@@ -427,6 +437,25 @@ def matches_expected(expected, actual):
     return str(actual) in options
 
 
+def matches_expected_http(expected, actual):
+    if not expected or expected == "-":
+        return True
+    if actual == "":
+        return False
+
+    options = [part.strip() for part in str(expected).split("/")]
+    actual_text = str(actual)
+    if actual_text in options:
+        return True
+
+    # GTD now returns 202 for pending create responses that older UAT sheets
+    # still document as 201.
+    if actual_text == "202" and "201" in options:
+        return True
+
+    return False
+
+
 def result_status_matches(expected_result, actual_status):
     if not expected_result or expected_result == "-":
         return True
@@ -442,17 +471,23 @@ def result_status_matches(expected_result, actual_status):
 
 def scenario_override(scenario):
     override = dict(SCENARIO_OVERRIDES.get((scenario["sheet"], scenario["number"]), {}))
+    scenario_name = (scenario.get("name") or "").lower()
 
     if scenario["sheet"] in ("BPJS_Kesehatan", "BPJS_TK"):
         payment_period = "01"
-        if scenario["sheet"] == "BPJS_Kesehatan" and scenario["number"] == "2":
+        if scenario["sheet"] == "BPJS_Kesehatan" and "2 month bill" in scenario_name:
             payment_period = "02"
-        elif scenario["sheet"] == "BPJS_TK" and scenario["number"] == "2":
+        elif scenario["sheet"] == "BPJS_TK" and "3 month bill" in scenario_name:
             payment_period = "03"
-        elif scenario["number"] == "9":
+        elif "payment_period" in scenario_name and "00 / 13" in scenario_name:
             payment_period = "00"
         override.setdefault("data", {})
         override["data"]["payment_period"] = payment_period
+
+    if scenario["sheet"] == "Mobile_Prepaid" and (
+        "using order id 114" in scenario_name or "duplicate order id using order id 114" in scenario_name
+    ):
+        override["shared_reference_id"] = "mobile_order_114"
 
     return override
 
@@ -724,6 +759,7 @@ def execute_scenario(scenario):
     product_id = override.get("product_id", scenario["product_id"])
     customer_no = override.get("customer_no", scenario["customer_no"])
     extra_data = override.get("data") or {}
+    shared_reference_id = override.get("shared_reference_id")
     if not product_id or not customer_no:
         return {"error": f"Missing product_id={product_id} or customer_no={customer_no}"}
 
@@ -746,7 +782,9 @@ def execute_scenario(scenario):
         row = step["row"]
 
         if "inquiry" in action:
-            current_ref_id = next_ref(scenario["sheet"][:6].upper().replace("_", ""))
+            current_ref_id = SHARED_REFERENCE_IDS.get(shared_reference_id) or next_ref(
+                scenario["sheet"][:6].upper().replace("_", "")
+            )
             inquiry = execute_inquiry(
                 current_ref_id,
                 sku_code,
@@ -771,7 +809,9 @@ def execute_scenario(scenario):
 
         if ("purchase" in action or "transaction" in action) and "callback" not in action and "get detail" not in action:
             if not current_ref_id:
-                current_ref_id = next_ref(scenario["sheet"][:6].upper().replace("_", ""))
+                current_ref_id = SHARED_REFERENCE_IDS.get(shared_reference_id) or next_ref(
+                    scenario["sheet"][:6].upper().replace("_", "")
+                )
 
             if current_inquiry and current_inquiry.get("inquiry_status") == "Success" and current_inquiry.get("transactionId"):
                 if scenario["flow"] == "inquiry_purchase":
@@ -872,7 +912,11 @@ def validate_step(step, scenario, results):
     elif ("purchase" in action or "transaction" in action) and "callback" not in action and "get detail" not in action:
         if step_result and step_result["kind"] in ("purchase", "payment"):
             trx = step_result["result"]
-            actual_http = extract_http_status(trx.get("provider_initial_http_status"))
+            actual_http = extract_http_status(
+                trx.get("purchase_http_code")
+                or trx.get("payment_http_code")
+                or trx.get("provider_initial_http_status")
+            )
             initial_response = trx.get("provider_response_initial") or trx.get("provider_response")
             actual_rc = extract_rc(initial_response)
             actual_status = status_from_response(initial_response)
@@ -881,12 +925,16 @@ def validate_step(step, scenario, results):
             if key not in results:
                 return issues
             trx = results[key]
-            actual_http = extract_http_status(trx.get("provider_initial_http_status"))
+            actual_http = extract_http_status(
+                trx.get("purchase_http_code")
+                or trx.get("payment_http_code")
+                or trx.get("provider_initial_http_status")
+            )
             initial_response = trx.get("provider_response_initial") or trx.get("provider_response")
             actual_rc = extract_rc(initial_response)
             actual_status = status_from_response(initial_response)
 
-        if not matches_expected(expected_http, actual_http):
+        if not matches_expected_http(expected_http, actual_http):
             issues.append(f"Initial HTTP expected {expected_http}, got {actual_http or '-'}")
         if not matches_expected(expected_rc, actual_rc):
             issues.append(f"Initial RC expected {expected_rc}, got {actual_rc or '-'}")
@@ -903,7 +951,7 @@ def validate_step(step, scenario, results):
         if step_result and step_result["kind"] == "callback":
             trx = step_result["result"]
             final_response = trx.get("provider_response")
-            actual_http = extract_http_status(trx.get("provider_http_status")) or ("200" if final_response else "")
+            actual_http = extract_http_status(trx.get("callback_http_code") or trx.get("provider_http_status")) or ("200" if final_response else "")
             actual_rc = extract_rc(final_response)
             actual_status = status_from_response(final_response) or (trx.get("final_status") or "").lower()
         else:
@@ -912,11 +960,11 @@ def validate_step(step, scenario, results):
                 return issues
             trx = results[key]
             final_response = trx.get("provider_response")
-            actual_http = extract_http_status(trx.get("provider_http_status")) or ("200" if final_response else "")
+            actual_http = extract_http_status(trx.get("callback_http_code") or trx.get("provider_http_status")) or ("200" if final_response else "")
             actual_rc = extract_rc(final_response)
             actual_status = status_from_response(final_response) or (trx.get("final_status") or "").lower()
 
-        if not matches_expected(expected_http, actual_http):
+        if not matches_expected_http(expected_http, actual_http):
             issues.append(f"Final HTTP expected {expected_http}, got {actual_http or '-'}")
         if not matches_expected(expected_rc, actual_rc):
             issues.append(f"Final RC expected {expected_rc}, got {actual_rc or '-'}")

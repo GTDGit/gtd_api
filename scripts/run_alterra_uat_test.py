@@ -13,6 +13,24 @@ SPEC.loader.exec_module(MODULE)
 
 
 class AlterraUATScriptTests(unittest.TestCase):
+    def test_should_wait_for_terminal_for_processing_202(self):
+        should_wait = MODULE.should_wait_for_terminal(
+            "GRB-20260417-000001",
+            202,
+            {"data": {"status": "Processing"}},
+        )
+
+        self.assertTrue(should_wait)
+
+    def test_should_not_wait_for_terminal_for_final_status(self):
+        should_wait = MODULE.should_wait_for_terminal(
+            "GRB-20260417-000001",
+            503,
+            {"data": {"status": "Failed"}},
+        )
+
+        self.assertFalse(should_wait)
+
     def test_bpjs_inquiry_request_includes_payment_period(self):
         payload = json.loads(
             MODULE.make_alterra_request(

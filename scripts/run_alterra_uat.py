@@ -274,6 +274,29 @@ def wait_for_terminal(trx_id, max_wait=60, poll_interval=5):
     return api_call("GET", f"/v1/ppob/transaction/{trx_id}")[:2]
 
 
+def response_status(resp):
+    if not isinstance(resp, dict):
+        return ""
+    data = resp.get("data")
+    if not isinstance(data, dict):
+        return ""
+    status = data.get("status")
+    return "" if status in (None, "") else str(status)
+
+
+def should_wait_for_terminal(trx_id, http_code, resp):
+    if not trx_id or not isinstance(resp, dict):
+        return False
+
+    status = response_status(resp)
+    if status in ("Success", "Failed"):
+        return False
+
+    # GTD now returns 202 for pending creates, but some older flows still
+    # use 201 with a Processing status before the async callback settles.
+    return http_code in (200, 201, 202) and status == "Processing"
+
+
 def parse_json(text):
     if text in (None, ""):
         return None
@@ -508,19 +531,16 @@ def execute_prepaid(ref_id, sku_code, customer_no, extra_data=None):
         result["provider_initial_http_status"] = trace.get("provider_initial_http_status") or trace.get("provider_http_status")
         result["provider_ref_id"] = trace.get("provider_ref_id")
 
-    if trx_id and code == 201:
-        status = resp.get("data", {}).get("status", "")
-        if status == "Processing":
-            poll_code, poll_resp = wait_for_terminal(trx_id)
-            result["callback_http_code"] = poll_code
-            result["callback_response"] = poll_resp
-            result["final_status"] = poll_resp.get("data", {}).get("status") if poll_resp else "Unknown"
-        else:
-            result["final_status"] = status
+    if should_wait_for_terminal(trx_id, code, resp):
+        poll_code, poll_resp = wait_for_terminal(trx_id)
+        result["callback_http_code"] = poll_code
+        result["callback_response"] = poll_resp
+        result["final_status"] = response_status(poll_resp) or "Unknown"
+    else:
+        result["final_status"] = response_status(resp) if resp else "Error"
+        if resp:
             result["callback_http_code"] = code
             result["callback_response"] = resp
-    else:
-        result["final_status"] = resp.get("data", {}).get("status") if resp else "Error"
 
     if trx_id:
         trace = query_transaction_trace(trx_id)
@@ -598,19 +618,16 @@ def execute_payment(inquiry_trx_id, ref_id, sku_code, customer_no, extra_data=No
         result["provider_initial_http_status"] = trace.get("provider_initial_http_status") or trace.get("provider_http_status")
         result["provider_ref_id"] = trace.get("provider_ref_id")
 
-    if trx_id and code == 201:
-        status = resp.get("data", {}).get("status", "")
-        if status == "Processing":
-            poll_code, poll_resp = wait_for_terminal(trx_id)
-            result["callback_http_code"] = poll_code
-            result["callback_response"] = poll_resp
-            result["final_status"] = poll_resp.get("data", {}).get("status") if poll_resp else "Unknown"
-        else:
-            result["final_status"] = status
+    if should_wait_for_terminal(trx_id, code, resp):
+        poll_code, poll_resp = wait_for_terminal(trx_id)
+        result["callback_http_code"] = poll_code
+        result["callback_response"] = poll_resp
+        result["final_status"] = response_status(poll_resp) or "Unknown"
+    else:
+        result["final_status"] = response_status(resp) if resp else "Error"
+        if resp:
             result["callback_http_code"] = code
             result["callback_response"] = resp
-    else:
-        result["final_status"] = resp.get("data", {}).get("status") if resp else "Error"
 
     if trx_id:
         trace = query_transaction_trace(trx_id)

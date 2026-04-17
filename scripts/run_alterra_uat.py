@@ -420,10 +420,12 @@ def result_status_matches(expected_result, actual_status):
 def scenario_override(scenario):
     override = dict(SCENARIO_OVERRIDES.get((scenario["sheet"], scenario["number"]), {}))
 
-    if scenario["sheet"] == "BPJS_Kesehatan":
+    if scenario["sheet"] in ("BPJS_Kesehatan", "BPJS_TK"):
         payment_period = "01"
-        if scenario["number"] == "2":
+        if scenario["sheet"] == "BPJS_Kesehatan" and scenario["number"] == "2":
             payment_period = "02"
+        elif scenario["sheet"] == "BPJS_TK" and scenario["number"] == "2":
+            payment_period = "03"
         elif scenario["number"] == "9":
             payment_period = "00"
         override.setdefault("data", {})
@@ -452,6 +454,10 @@ def make_alterra_request(customer_no, product_id, trx_type, order_id=None, refer
         data = {}
         if trx_type == "prepaid":
             data = dict(extra_data or {})
+        elif extra_data:
+            for key in ("payment_period",):
+                if key in extra_data and extra_data[key] not in (None, ""):
+                    data[key] = extra_data[key]
         if trx_type in ("purchase_with_reference", "payment") and reference_no:
             data["reference_no"] = reference_no
         return json.dumps(

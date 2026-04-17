@@ -26,7 +26,7 @@ class AlterraUATScriptTests(unittest.TestCase):
         self.assertEqual(payload["data"]["product_id"], 34)
         self.assertEqual(payload["data"]["payment_period"], "02")
 
-    def test_make_alterra_request_payment_includes_reference_no(self):
+    def test_make_alterra_request_payment_includes_reference_no_and_payment_period(self):
         payload = json.loads(
             MODULE.make_alterra_request(
                 "01428800700",
@@ -40,7 +40,7 @@ class AlterraUATScriptTests(unittest.TestCase):
 
         self.assertEqual(payload["order_id"], "TRX-123")
         self.assertEqual(payload["data"]["reference_no"], "REF-999")
-        self.assertNotIn("payment_period", payload["data"])
+        self.assertEqual(payload["data"]["payment_period"], "02")
 
     def test_scenario_override_applies_vendor_number_for_mobile_restriction(self):
         override = MODULE.scenario_override(
@@ -61,6 +61,16 @@ class AlterraUATScriptTests(unittest.TestCase):
         )
 
         self.assertEqual(override["data"]["payment_period"], "02")
+
+    def test_scenario_override_applies_bpjs_tk_payment_period(self):
+        override = MODULE.scenario_override(
+            {
+                "sheet": "BPJS_TK",
+                "number": "2",
+            }
+        )
+
+        self.assertEqual(override["data"]["payment_period"], "03")
 
     def test_validate_step_uses_alterra_http_and_rc(self):
         step = {

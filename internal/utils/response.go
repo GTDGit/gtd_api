@@ -100,6 +100,24 @@ func Error(c *gin.Context, code int, errCode, message string) {
 	})
 }
 
+// ErrorWithData writes an error response that still includes a data payload.
+func ErrorWithData(c *gin.Context, code int, message, errCode, errMessage string, data interface{}) {
+	c.JSON(code, Response{
+		Success: false,
+		Code:    code,
+		Message: message,
+		Data:    data,
+		Error: &ErrorInfo{
+			Code:    errCode,
+			Message: errMessage,
+		},
+		Meta: Meta{
+			RequestID: getRequestID(c),
+			Timestamp: time.Now().Format(time.RFC3339),
+		},
+	})
+}
+
 func getRequestID(c *gin.Context) string {
 	if id := c.GetString("request_id"); id != "" {
 		return id

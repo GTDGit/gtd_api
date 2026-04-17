@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"net/http"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -58,13 +59,20 @@ func (h *TransactionHandler) CreateTransaction(c *gin.Context) {
 		return
 	}
 
+	httpCode := transactionCreateHTTPCode(req.Type, trx)
 	message := transactionCreateMessage(req.Type, trx.Status)
-	httpCode := 201
-	if req.Type == "inquiry" {
-		httpCode = 200
+	data := h.formatTransaction(trx)
+
+	if trx.Status == models.StatusFailed {
+		failure := service.GetCanonicalProviderFailure("")
+		if trx.FailedCode != nil {
+			failure = service.GetCanonicalProviderFailure(*trx.FailedCode)
+		}
+		utils.ErrorWithData(c, httpCode, message, failure.Code, failure.Message, data)
+		return
 	}
 
-	utils.Success(c, httpCode, message, h.formatTransaction(trx))
+	utils.Success(c, httpCode, message, data)
 }
 
 // GetTransaction handles GET /v1/transaction/:transactionId
@@ -125,11 +133,20 @@ func (h *TransactionHandler) formatTransaction(trx *models.Transaction) interfac
 func transactionCreateMessage(reqType string, status models.TransactionStatus) string {
 	switch reqType {
 	case "inquiry":
+		if status == models.StatusProcessing || status == models.StatusPending {
+			return "Inquiry is being processed"
+		}
 		if status == models.StatusFailed {
 			return "Inquiry failed"
 		}
 		return "Inquiry success"
 	case "payment":
+		if status == models.StatusProcessing || status == models.StatusPending {
+			return "Transaction is being processed"
+		}
+		if status == models.StatusFailed {
+			return "Payment failed"
+		}
 		return "Payment " + strings.ToLower(string(status))
 	default:
 		switch status {
@@ -138,9 +155,35 @@ func transactionCreateMessage(reqType string, status models.TransactionStatus) s
 		case models.StatusFailed:
 			return "Transaction failed"
 		case models.StatusProcessing, models.StatusPending:
-			return "Transaction processing"
+			return "Transaction is being processed"
 		default:
 			return "Transaction created"
 		}
+	}
+}
+
+func transactionCreateHTTPCode(reqType string, trx *models.Transaction) int {
+	if trx == nil {
+		return http.StatusInternalServerError
+	}
+
+	switch trx.Status {
+	case models.StatusProcessing, models.StatusPending:
+		return http.StatusAccepted
+	case models.StatusFailed:
+		if trx.FailedCode != nil && *trx.FailedCode != "" {
+			return service.GetCanonicalProviderFailure(*trx.FailedCode).HTTPStatus
+		}
+		return service.GetCanonicalProviderFailure("").HTTPStatus
+	case models.StatusSuccess:
+		if reqType == "inquiry" {
+			return http.StatusOK
+		}
+		return http.StatusCreated
+	default:
+		if reqType == "inquiry" {
+			return http.StatusOK
+		}
+		return http.StatusCreated
 	}
 }

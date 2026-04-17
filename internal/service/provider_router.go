@@ -58,6 +58,9 @@ type ProviderResponse struct {
 	RawResponse    json.RawMessage `json:"rawResponse,omitempty"`
 	NeedsRetry     bool            `json:"needsRetry"` // RC 49 equivalent - needs new ref_id
 	ResponseTime   time.Duration   `json:"responseTime"`
+	PublicCode     string          `json:"-"`
+	PublicMessage  string          `json:"-"`
+	PublicHTTPCode int             `json:"-"`
 }
 
 // PPOBProvider interface that all providers must implement

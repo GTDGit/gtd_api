@@ -168,6 +168,8 @@ func (s *ProviderCallbackService) ProcessKiosbankCallback(ctx context.Context, p
 	switch class {
 	case kiosbank.ResponseClassSuccess:
 		trx.Status = models.StatusSuccess
+		trx.FailedCode = nil
+		trx.FailedReason = nil
 		// Extract serial number from data sub-object (product-specific keys)
 		if data, ok := payload["data"].(map[string]any); ok {
 			sn := extractKiosbankSN(data)
@@ -208,8 +210,13 @@ func (s *ProviderCallbackService) ProcessKiosbankCallback(ctx context.Context, p
 			}
 		}
 		trx.Status = models.StatusFailed
-		trx.FailedReason = &failedMessage
-		trx.FailedCode = &rc
+		ApplyCanonicalFailureToTransaction(trx, string(models.ProviderKiosbank), ProviderFailurePhaseAsync, &ProviderResponse{
+			Status:      string(models.StatusFailed),
+			RC:          rc,
+			Message:     failedMessage,
+			HTTPStatus:  http.StatusOK,
+			RawResponse: rawPayload,
+		})
 		trx.ProcessedAt = &now
 		if err := s.trxRepo.Update(trx); err != nil {
 			log.Error().Err(err).Str("transaction_id", trx.TransactionID).Msg("CRITICAL: failed to update transaction in DB from callback")
@@ -328,6 +335,8 @@ func (s *ProviderCallbackService) ProcessAlterraCallback(ctx context.Context, pa
 	now := time.Now()
 	if alterra.IsSuccess(rc) {
 		trx.Status = models.StatusSuccess
+		trx.FailedCode = nil
+		trx.FailedReason = nil
 		if sn, ok := payload["serial_number"].(string); ok && sn != "" {
 			trx.SerialNumber = &sn
 		}
@@ -359,8 +368,13 @@ func (s *ProviderCallbackService) ProcessAlterraCallback(ctx context.Context, pa
 			}
 		}
 		trx.Status = models.StatusFailed
-		trx.FailedReason = &failedMessage
-		trx.FailedCode = &rc
+		ApplyCanonicalFailureToTransaction(trx, string(models.ProviderAlterra), ProviderFailurePhaseAsync, &ProviderResponse{
+			Status:      string(models.StatusFailed),
+			RC:          rc,
+			Message:     failedMessage,
+			HTTPStatus:  http.StatusOK,
+			RawResponse: rawPayload,
+		})
 		trx.ProcessedAt = &now
 		if err := s.trxRepo.Update(trx); err != nil {
 			log.Error().Err(err).Str("transaction_id", trx.TransactionID).Msg("CRITICAL: failed to update transaction in DB from callback")

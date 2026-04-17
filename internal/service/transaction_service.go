@@ -18,9 +18,7 @@ import (
 	"github.com/GTDGit/gtd_api/internal/repository"
 	"github.com/GTDGit/gtd_api/internal/sse"
 	"github.com/GTDGit/gtd_api/internal/utils"
-	"github.com/GTDGit/gtd_api/pkg/alterra"
 	"github.com/GTDGit/gtd_api/pkg/digiflazz"
-	"github.com/GTDGit/gtd_api/pkg/kiosbank"
 )
 
 // isDuplicateKeyError checks if the error is a PostgreSQL unique constraint violation.
@@ -420,9 +418,12 @@ func (s *TransactionService) handleFatal(trx *models.Transaction, resp *digiflaz
 // tried all sellers, there's no point in waiting. Mark as failed immediately.
 func (s *TransactionService) handleAllSKUsFailed(trx *models.Transaction) (*models.Transaction, error) {
 	now := time.Now()
-	reason := "All available SKUs failed"
+	failure := GetCanonicalProviderFailure(ProviderFailureNoProviderAvailable)
+	reason := failure.Message
+	code := failure.Code
 	trx.Status = models.StatusFailed
 	trx.FailedReason = &reason
+	trx.FailedCode = &code
 	trx.ProcessedAt = &now
 	trx.NextRetryAt = nil
 	if err := s.persistTransactionUpdate(trx); err != nil {
@@ -475,45 +476,66 @@ func extractProviderErrorCode(message string) string {
 	return ""
 }
 
-func providerResponseFromError(providerCode string, err error) *ProviderResponse {
+func providerResponseFromError(providerCode string, phase ProviderFailurePhase, err error) *ProviderResponse {
 	if err == nil {
 		return nil
 	}
 
 	message := strings.TrimSpace(err.Error())
 	rc := extractProviderErrorCode(message)
+	rawResp, _ := json.Marshal(map[string]any{
+		"transport_error": message,
+		"phase":           string(phase),
+	})
+
+	resp := &ProviderResponse{
+		Status:      string(models.StatusFailed),
+		RC:          rc,
+		Message:     "Transaction could not be completed",
+		RawResponse: rawResp,
+	}
 
 	switch providerCode {
 	case string(models.ProviderAlterra):
-		if rc != "" {
-			if desc := alterra.GetRCDescription(rc); desc != "Unknown error" {
-				message = desc
-			} else if strings.HasPrefix(message, "http error:") {
-				message = fmt.Sprintf("HTTP error %s", rc)
-			}
+		failureCode := ProviderFailureProviderUnavailable
+		if looksLikeTimeoutMessage(message) {
+			failureCode = ProviderFailureProviderTimeout
 		}
+		failure := GetCanonicalProviderFailure(failureCode)
+		resp.Message = failure.Message
+		resp.PublicCode = failure.Code
+		resp.PublicMessage = failure.Message
+		resp.PublicHTTPCode = failure.HTTPStatus
 	case string(models.ProviderKiosbank):
-		if rc == "" {
-			return &ProviderResponse{
-				Pending: true,
-				Status:  string(models.StatusPending),
-				Message: "No response from Kiosbank",
-			}
+		if phase == ProviderFailurePhaseInitialPayment || phase == ProviderFailurePhaseAsync {
+			resp.Pending = true
+			resp.Status = string(models.StatusPending)
+			resp.Message = "Transaction is being processed"
+			resp.Description = nil
+			return resp
 		}
-		if desc := kiosbank.GetRCDescription(rc); desc != "Unknown error" {
-			message = desc
+		failureCode := ProviderFailureProviderUnavailable
+		if looksLikeTimeoutMessage(message) {
+			failureCode = ProviderFailureProviderTimeout
 		}
+		failure := GetCanonicalProviderFailure(failureCode)
+		resp.Message = failure.Message
+		resp.PublicCode = failure.Code
+		resp.PublicMessage = failure.Message
+		resp.PublicHTTPCode = failure.HTTPStatus
+	default:
+		failureCode := ProviderFailureProviderUnavailable
+		if looksLikeTimeoutMessage(message) {
+			failureCode = ProviderFailureProviderTimeout
+		}
+		failure := GetCanonicalProviderFailure(failureCode)
+		resp.Message = failure.Message
+		resp.PublicCode = failure.Code
+		resp.PublicMessage = failure.Message
+		resp.PublicHTTPCode = failure.HTTPStatus
 	}
 
-	if message == "" {
-		message = "Provider transaction failed"
-	}
-
-	return &ProviderResponse{
-		Status:  string(models.StatusFailed),
-		RC:      rc,
-		Message: message,
-	}
+	return resp
 }
 
 // processInquiry handles postpaid inquiry using Redis cache.
@@ -1260,7 +1282,7 @@ func (s *TransactionService) cachedInquiryToTransaction(data *cache.InquiryData,
 		Amount:        &amount,
 		Admin:         data.Admin,
 		CustomerName:  customerName,
-		Description:   models.NullableRawMessage(data.Description),
+		Description:   models.NullableRawMessage(SanitizePublicProviderDescription(data.Description)),
 		FailedCode:    failedCode,
 		FailedReason:  failedReason,
 		ProviderID:    providerID,
@@ -1458,15 +1480,19 @@ func (s *TransactionService) executeWithProviderRouter(ctx context.Context, trx 
 	// Execute with provider router
 	result, err := s.providerRouter.Execute(ctx, trx.ProductID, req)
 	s.logProviderAttempts(trx.ID, result)
+	phase := ProviderFailurePhaseInitialPayment
+	if trxType == ProviderTrxInquiry {
+		phase = ProviderFailurePhaseInquiry
+	}
 	if err != nil {
 		log.Error().Err(err).Str("transaction_id", trx.TransactionID).Msg("Provider router execution failed")
-		if resp := exhaustedProviderResponseFromResult(result); resp != nil {
+		if resp := BuildFinalFailureResponseFromAttempts(result.Attempts, phase); resp != nil {
 			applyAttemptProvider(trx, latestAttemptOption(result))
 			applyProviderTrace(trx, resp)
 			if resp.ProviderRefID != "" {
 				trx.ProviderRefID = &resp.ProviderRefID
 			}
-			return s.handleProviderFailed(trx, resp)
+			return s.handleProviderFailedForPhase(trx, resp, phase)
 		}
 		return s.handleAllSKUsFailed(trx)
 	}
@@ -1497,13 +1523,15 @@ func (s *TransactionService) executeWithProviderRouter(ctx context.Context, trx 
 	}
 
 	// Failed
-	return s.handleProviderFailed(trx, result.Response)
+	return s.handleProviderFailedForPhase(trx, result.Response, phase)
 }
 
 // handleProviderSuccess handles a successful provider response
 func (s *TransactionService) handleProviderSuccess(trx *models.Transaction, resp *ProviderResponse) (*models.Transaction, error) {
 	now := time.Now()
 	trx.Status = models.StatusSuccess
+	trx.FailedCode = nil
+	trx.FailedReason = nil
 	if resp.SerialNumber != "" {
 		trx.SerialNumber = &resp.SerialNumber
 	}
@@ -1514,8 +1542,8 @@ func (s *TransactionService) handleProviderSuccess(trx *models.Transaction, resp
 	if resp.CustomerName != "" {
 		trx.CustomerName = &resp.CustomerName
 	}
-	if len(resp.Description) > 0 {
-		trx.Description = models.NullableRawMessage(resp.Description)
+	if desc := SanitizePublicProviderDescription(resp.Description); len(desc) > 0 {
+		trx.Description = models.NullableRawMessage(desc)
 	}
 	trx.ProcessedAt = &now
 	if err := s.persistTransactionUpdate(trx); err != nil {
@@ -1532,14 +1560,16 @@ func (s *TransactionService) handleProviderSuccess(trx *models.Transaction, resp
 // handleProviderPending handles a pending provider response
 func (s *TransactionService) handleProviderPending(trx *models.Transaction, resp *ProviderResponse) (*models.Transaction, error) {
 	trx.Status = models.StatusProcessing
+	trx.FailedCode = nil
+	trx.FailedReason = nil
 	if resp.Amount > 0 {
 		trx.Amount = &resp.Amount
 	}
 	if resp.CustomerName != "" {
 		trx.CustomerName = &resp.CustomerName
 	}
-	if len(resp.Description) > 0 {
-		trx.Description = models.NullableRawMessage(resp.Description)
+	if desc := SanitizePublicProviderDescription(resp.Description); len(desc) > 0 {
+		trx.Description = models.NullableRawMessage(desc)
 	}
 	if err := s.persistTransactionUpdate(trx); err != nil {
 		return nil, err
@@ -1552,21 +1582,15 @@ func (s *TransactionService) handleProviderPending(trx *models.Transaction, resp
 
 // handleProviderFailed handles a failed provider response
 func (s *TransactionService) handleProviderFailed(trx *models.Transaction, resp *ProviderResponse) (*models.Transaction, error) {
+	return s.handleProviderFailedForPhase(trx, resp, ProviderFailurePhaseForTransactionType(trx.Type))
+}
+
+func (s *TransactionService) handleProviderFailedForPhase(trx *models.Transaction, resp *ProviderResponse, phase ProviderFailurePhase) (*models.Transaction, error) {
 	now := time.Now()
 	trx.Status = models.StatusFailed
 	trx.NextRetryAt = nil
-	failedMessage := ""
 	if resp != nil {
-		failedMessage = strings.TrimSpace(resp.Message)
-		if failedMessage == "" && resp.RC != "" {
-			failedMessage = "Provider transaction failed"
-		}
-	}
-	if failedMessage != "" {
-		trx.FailedReason = &failedMessage
-	}
-	if resp != nil && resp.RC != "" {
-		trx.FailedCode = &resp.RC
+		ApplyCanonicalFailureToTransaction(trx, providerCodeForTransaction(trx), phase, resp)
 	}
 	trx.ProcessedAt = &now
 	if err := s.persistTransactionUpdate(trx); err != nil {
@@ -1598,32 +1622,27 @@ func (s *TransactionService) getTriedProviderSKUs(trxID int) (map[int]bool, erro
 func exhaustedProviderResponse(failedRC, failedMessage string) *ProviderResponse {
 	message := failedMessage
 	if message == "" {
-		message = "All available providers failed"
+		message = GetCanonicalProviderFailure(ProviderFailureNoProviderAvailable).Message
 	}
-	return &ProviderResponse{
+	resp := &ProviderResponse{
 		Status:  string(models.StatusFailed),
 		RC:      failedRC,
 		Message: message,
 	}
+	if failedRC == "" {
+		failure := GetCanonicalProviderFailure(ProviderFailureNoProviderAvailable)
+		resp.PublicCode = failure.Code
+		resp.PublicMessage = failure.Message
+		resp.PublicHTTPCode = failure.HTTPStatus
+	}
+	return resp
 }
 
 func exhaustedProviderResponseFromResult(result *ExecuteResult) *ProviderResponse {
 	if result == nil {
 		return nil
 	}
-	if result.Response != nil {
-		return result.Response
-	}
-	for i := len(result.Attempts) - 1; i >= 0; i-- {
-		attempt := result.Attempts[i]
-		if attempt.Response != nil {
-			return attempt.Response
-		}
-		if attempt.Error != "" {
-			return exhaustedProviderResponse("", "No response from provider")
-		}
-	}
-	return nil
+	return BuildFinalFailureResponseFromAttempts(result.Attempts, ProviderFailurePhaseInitialPayment)
 }
 
 func latestAttemptOption(result *ExecuteResult) *models.ProviderOption {
@@ -1658,6 +1677,13 @@ func applyAttemptProvider(trx *models.Transaction, opt *models.ProviderOption) {
 	}
 }
 
+func providerCodeForTransaction(trx *models.Transaction) string {
+	if trx == nil || trx.ProviderCode == nil {
+		return ""
+	}
+	return strings.TrimSpace(*trx.ProviderCode)
+}
+
 // executeInquiryWithProviders tries inquiry across multiple providers in price order.
 // On success, caches the inquiry data WITH provider info so payment routes to the same provider.
 // If req.Provider is set, only that provider is used (user preference).
@@ -1686,6 +1712,8 @@ func (s *TransactionService) executeInquiryWithProviders(
 			providers = filtered
 		}
 	}
+
+	attempts := make([]ProviderAttempt, 0, len(providers))
 
 	for _, opt := range providers {
 		adapter := s.providerRouter.GetAdapter(string(opt.ProviderCode))
@@ -1716,11 +1744,23 @@ func (s *TransactionService) executeInquiryWithProviders(
 			Str("ref_id", trxID).
 			Msg("Trying inquiry with provider")
 
+		reqSnapshot := cloneProviderRequest(provReq)
 		resp, err := adapter.Inquiry(ctx, provReq)
 		if err != nil {
+			attempts = append(attempts, ProviderAttempt{
+				Provider: providerOptionPtr(opt),
+				Request:  reqSnapshot,
+				Error:    err.Error(),
+			})
 			log.Warn().Err(err).Str("provider", string(opt.ProviderCode)).Msg("Inquiry network error, trying next provider")
 			continue
 		}
+
+		attempts = append(attempts, ProviderAttempt{
+			Provider: providerOptionPtr(opt),
+			Request:  reqSnapshot,
+			Response: resp,
+		})
 
 		if resp.Success {
 			// Extract provider reference_no from description (needed for payment)
@@ -1754,7 +1794,7 @@ func (s *TransactionService) executeInquiryWithProviders(
 				Amount:                resp.Amount,
 				Admin:                 resp.Admin,
 				CustomerName:          resp.CustomerName,
-				Description:           resp.Description,
+				Description:           SanitizePublicProviderDescription(resp.Description),
 				ExpiredAt:             expiredAt,
 				ProviderCode:          string(opt.ProviderCode),
 				ProviderSKUCode:       opt.ProviderSKUCode,
@@ -1789,10 +1829,7 @@ func (s *TransactionService) executeInquiryWithProviders(
 			Str("message", resp.Message).
 			Msg("Inquiry failed with provider (biller error)")
 
-		failedReason := strings.TrimSpace(resp.Message)
-		if failedReason == "" {
-			failedReason = fmt.Sprintf("Inquiry failed: RC %s", resp.RC)
-		}
+		failure := CanonicalFailureForResponse(string(opt.ProviderCode), ProviderFailurePhaseInquiry, resp)
 		inquiryData := &cache.InquiryData{
 			TransactionID:         trxID,
 			ReferenceID:           req.ReferenceID,
@@ -1803,7 +1840,7 @@ func (s *TransactionService) executeInquiryWithProviders(
 			Amount:                resp.Amount,
 			Admin:                 resp.Admin,
 			CustomerName:          resp.CustomerName,
-			Description:           resp.Description,
+			Description:           SanitizePublicProviderDescription(resp.Description),
 			ExpiredAt:             eod,
 			ProviderCode:          string(opt.ProviderCode),
 			ProviderSKUCode:       opt.ProviderSKUCode,
@@ -1814,8 +1851,8 @@ func (s *TransactionService) executeInquiryWithProviders(
 			ProviderTransactionID: resp.ProviderRefID,
 			ProviderExtra:         cloneAnyMap(provReq.Extra),
 			Status:                string(models.StatusFailed),
-			FailedReason:          failedReason,
-			FailedCode:            resp.RC,
+			FailedReason:          failure.Message,
+			FailedCode:            failure.Code,
 		}
 		if err := s.inquiryCache.SetPrimaryOnly(ctx, inquiryData); err != nil {
 			log.Warn().Err(err).Str("transaction_id", trxID).Msg("failed to cache failed inquiry")
@@ -1824,9 +1861,41 @@ func (s *TransactionService) executeInquiryWithProviders(
 		return s.cachedInquiryToTransaction(inquiryData, client.ID, product.ID), nil
 	}
 
-	// All providers failed (network errors), fall back to legacy Digiflazz
-	log.Info().Msg("All multi-providers failed for inquiry, falling back to Digiflazz")
-	return s.executeInquiryWithDigiflazz(ctx, req, client, product, trxID, eod, false)
+	// All providers failed (network or transport errors).
+	failureResp := BuildFinalFailureResponseFromAttempts(attempts, ProviderFailurePhaseInquiry)
+	failure := CanonicalFailureForResponse("", ProviderFailurePhaseInquiry, failureResp)
+	var lastOpt *models.ProviderOption
+	if len(attempts) > 0 {
+		lastOpt = attempts[len(attempts)-1].Provider
+	}
+	inquiryData := &cache.InquiryData{
+		TransactionID: trxID,
+		ReferenceID:   req.ReferenceID,
+		ClientID:      client.ID,
+		ProductID:     product.ID,
+		SKUCode:       req.SkuCode,
+		CustomerNo:    req.CustomerNo,
+		ExpiredAt:     eod,
+		Status:        string(models.StatusFailed),
+		FailedReason:  failure.Message,
+		FailedCode:    failure.Code,
+	}
+	if lastOpt != nil {
+		inquiryData.ProviderCode = string(lastOpt.ProviderCode)
+		inquiryData.ProviderSKUCode = lastOpt.ProviderSKUCode
+		inquiryData.ProviderID = lastOpt.ProviderID
+		inquiryData.ProviderSKUID = lastOpt.ProviderSKUID
+	}
+	if failureResp != nil {
+		inquiryData.ProviderResponse = safeMarshalRaw(failureResp.RawResponse)
+		inquiryData.ProviderHTTPStatus = failureResp.HTTPStatus
+		inquiryData.ProviderTransactionID = failureResp.ProviderRefID
+		inquiryData.Description = SanitizePublicProviderDescription(failureResp.Description)
+	}
+	if err := s.inquiryCache.SetPrimaryOnly(ctx, inquiryData); err != nil {
+		log.Warn().Err(err).Str("transaction_id", trxID).Msg("failed to cache failed inquiry")
+	}
+	return s.cachedInquiryToTransaction(inquiryData, client.ID, product.ID), nil
 }
 
 // executeInquiryWithDigiflazz runs the legacy Digiflazz inquiry flow.
@@ -1970,7 +2039,7 @@ func (s *TransactionService) executePaymentWithProvider(
 
 	if err != nil {
 		log.Error().Err(err).Str("provider", inquiryData.ProviderCode).Msg("Payment provider error")
-		errResp := providerResponseFromError(inquiryData.ProviderCode, err)
+		errResp := providerResponseFromError(inquiryData.ProviderCode, ProviderFailurePhaseInitialPayment, err)
 		if errResp != nil && errResp.Pending {
 			payment.Status = models.StatusProcessing
 			if err := s.persistTransactionUpdate(payment); err != nil {
@@ -1993,12 +2062,17 @@ func (s *TransactionService) executePaymentWithProvider(
 	if resp.Success {
 		now := time.Now()
 		payment.Status = models.StatusSuccess
+		payment.FailedCode = nil
+		payment.FailedReason = nil
 		if resp.SerialNumber != "" {
 			payment.SerialNumber = &resp.SerialNumber
 		}
 		if resp.Amount > 0 {
 			payment.Amount = &resp.Amount
 			payment.BuyPrice = &resp.Amount
+		}
+		if desc := SanitizePublicProviderDescription(resp.Description); len(desc) > 0 {
+			payment.Description = models.NullableRawMessage(desc)
 		}
 		payment.ProcessedAt = &now
 		if err := s.persistTransactionUpdate(payment); err != nil {
@@ -2019,8 +2093,13 @@ func (s *TransactionService) executePaymentWithProvider(
 
 	if resp.Pending {
 		payment.Status = models.StatusProcessing
+		payment.FailedCode = nil
+		payment.FailedReason = nil
 		if resp.Amount > 0 {
 			payment.Amount = &resp.Amount
+		}
+		if desc := SanitizePublicProviderDescription(resp.Description); len(desc) > 0 {
+			payment.Description = models.NullableRawMessage(desc)
 		}
 		if err := s.persistTransactionUpdate(payment); err != nil {
 			return nil, err

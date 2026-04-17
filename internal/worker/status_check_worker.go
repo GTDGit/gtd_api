@@ -212,6 +212,8 @@ func (w *StatusCheckWorker) checkMultiProviderTransaction(ctx context.Context, t
 	switch {
 	case result.Success:
 		trx.Status = models.StatusSuccess
+		trx.FailedCode = nil
+		trx.FailedReason = nil
 		if result.SerialNumber != "" {
 			trx.SerialNumber = &result.SerialNumber
 		}
@@ -264,8 +266,14 @@ func (w *StatusCheckWorker) checkMultiProviderTransaction(ctx context.Context, t
 			}
 		}
 		trx.Status = models.StatusFailed
-		trx.FailedReason = &msg
-		trx.FailedCode = &rc
+		service.ApplyCanonicalFailureToTransaction(trx, providerCode(trx), service.ProviderFailurePhaseAsync, &service.ProviderResponse{
+			Status:      string(models.StatusFailed),
+			RC:          rc,
+			Message:     msg,
+			HTTPStatus:  valueOrZero(trx.ProviderHTTPStatus),
+			RawResponse: result.RawResponse,
+			Description: result.Description,
+		})
 		trx.ProcessedAt = &now
 
 		if err := w.trxRepo.Update(trx); err != nil {
@@ -285,6 +293,13 @@ func (w *StatusCheckWorker) checkMultiProviderTransaction(ctx context.Context, t
 func valueOrEmpty(v *string) string {
 	if v == nil {
 		return ""
+	}
+	return *v
+}
+
+func valueOrZero(v *int) int {
+	if v == nil {
+		return 0
 	}
 	return *v
 }

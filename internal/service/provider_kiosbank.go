@@ -811,8 +811,7 @@ func pendingTransportResponse(refID string, responseTime time.Duration, err erro
 		ProviderRefID: refID,
 		Phase:         string(kiosbank.ResponsePhaseInitialPayment),
 		Status:        kiosbank.StatusFromClass(kiosbank.ResponseClassPending),
-		Message:       "No response from Kiosbank",
-		Description:   rawResp,
+		Message:       "Transaction is being processed",
 		RawResponse:   rawResp,
 		ResponseTime:  responseTime,
 	}

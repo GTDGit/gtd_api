@@ -31,8 +31,12 @@ import (
 	"github.com/GTDGit/gtd_api/pkg/alterra"
 	"github.com/GTDGit/gtd_api/pkg/bnc"
 	"github.com/GTDGit/gtd_api/pkg/bri"
+	"github.com/GTDGit/gtd_api/pkg/dana"
 	dfg "github.com/GTDGit/gtd_api/pkg/digiflazz"
 	"github.com/GTDGit/gtd_api/pkg/kiosbank"
+	"github.com/GTDGit/gtd_api/pkg/midtrans"
+	"github.com/GTDGit/gtd_api/pkg/pakailink"
+	"github.com/GTDGit/gtd_api/pkg/xendit"
 )
 
 // main is the application entrypoint for the GTD API Gateway (Phase 1).
@@ -161,6 +165,92 @@ func main() {
 		log.Info().Msg("BRI config incomplete - BRIVA/BRIZZI/transfer BRI will be disabled")
 	}
 
+	// 5b. Initialize Payment provider clients (optional per-provider)
+	var pakailinkClient *pakailink.Client
+	if cfg.Payment.Pakailink.ClientID != "" && cfg.Payment.Pakailink.ClientSecret != "" &&
+		(cfg.Payment.Pakailink.PrivateKeyPath != "" || cfg.Payment.Pakailink.PrivateKeyPEM != "") {
+		var err error
+		pakailinkClient, err = pakailink.NewClient(pakailink.Config{
+			BaseURL:        cfg.Payment.Pakailink.BaseURL,
+			ClientID:       cfg.Payment.Pakailink.ClientID,
+			ClientSecret:   cfg.Payment.Pakailink.ClientSecret,
+			PartnerID:      cfg.Payment.Pakailink.PartnerID,
+			ChannelID:      cfg.Payment.Pakailink.ChannelID,
+			PrivateKeyPath: cfg.Payment.Pakailink.PrivateKeyPath,
+			PrivateKeyPEM:  cfg.Payment.Pakailink.PrivateKeyPEM,
+		})
+		if err != nil {
+			log.Warn().Err(err).Msg("Pakailink client initialization failed - VA/QRIS via Pakailink disabled")
+			pakailinkClient = nil
+		} else {
+			log.Info().Msg("Pakailink client registered")
+		}
+	} else {
+		log.Info().Msg("Pakailink config incomplete - VA/QRIS via Pakailink disabled")
+	}
+
+	var danaClient *dana.Client
+	if cfg.Payment.Dana.ClientID != "" && cfg.Payment.Dana.ClientSecret != "" &&
+		cfg.Payment.Dana.MerchantID != "" &&
+		(cfg.Payment.Dana.PrivateKeyPath != "" || cfg.Payment.Dana.PrivateKeyPEM != "") {
+		var err error
+		danaClient, err = dana.NewClient(dana.Config{
+			BaseURL:        cfg.Payment.Dana.BaseURL,
+			MerchantID:     cfg.Payment.Dana.MerchantID,
+			ClientID:       cfg.Payment.Dana.ClientID,
+			ClientSecret:   cfg.Payment.Dana.ClientSecret,
+			PartnerID:      cfg.Payment.Dana.PartnerID,
+			PrivateKeyPath: cfg.Payment.Dana.PrivateKeyPath,
+			PrivateKeyPEM:  cfg.Payment.Dana.PrivateKeyPEM,
+		})
+		if err != nil {
+			log.Warn().Err(err).Msg("DANA client initialization failed - DANA e-wallet disabled")
+			danaClient = nil
+		} else {
+			log.Info().Msg("DANA client registered")
+		}
+	} else {
+		log.Info().Msg("DANA config incomplete - DANA e-wallet disabled")
+	}
+
+	var midtransClient *midtrans.Client
+	if cfg.Payment.Midtrans.ServerKey != "" {
+		var err error
+		midtransClient, err = midtrans.NewClient(midtrans.Config{
+			BaseURL:    cfg.Payment.Midtrans.BaseURL,
+			ServerKey:  cfg.Payment.Midtrans.ServerKey,
+			ClientKey:  cfg.Payment.Midtrans.ClientKey,
+			MerchantID: cfg.Payment.Midtrans.MerchantID,
+		})
+		if err != nil {
+			log.Warn().Err(err).Msg("Midtrans client initialization failed - GoPay/ShopeePay disabled")
+			midtransClient = nil
+		} else {
+			log.Info().Msg("Midtrans client registered")
+		}
+	} else {
+		log.Info().Msg("Midtrans config incomplete - GoPay/ShopeePay disabled")
+	}
+
+	var xenditClient *xendit.Client
+	if cfg.Payment.Xendit.APIKey != "" {
+		var err error
+		xenditClient, err = xendit.NewClient(xendit.Config{
+			BaseURL:      cfg.Payment.Xendit.BaseURL,
+			APIKey:       cfg.Payment.Xendit.APIKey,
+			APIVersion:   cfg.Payment.Xendit.APIVersion,
+			WebhookToken: cfg.Payment.Xendit.WebhookToken,
+		})
+		if err != nil {
+			log.Warn().Err(err).Msg("Xendit client initialization failed - Indomaret/Alfamart disabled")
+			xenditClient = nil
+		} else {
+			log.Info().Msg("Xendit client registered")
+		}
+	} else {
+		log.Info().Msg("Xendit config incomplete - Indomaret/Alfamart disabled")
+	}
+
 	// 6. Initialize services
 	authSvc := service.NewAuthService(clientRepo)
 	adminAuthSvc := service.NewAdminAuthService(adminRepo)
@@ -253,6 +343,42 @@ func main() {
 		cfg.BRI.Env,
 	)
 
+	// 6b. Payment module wiring
+	paymentRouter := service.NewPaymentProviderRouter()
+	if pakailinkClient != nil {
+		paymentRouter.Register(service.NewPakailinkProviderClient(pakailinkClient, cfg.Payment.Pakailink.CallbackURL))
+		log.Info().Msg("Pakailink payment adapter registered")
+	}
+	if danaClient != nil {
+		paymentRouter.Register(service.NewDanaProviderClient(danaClient, cfg.Payment.Dana.CallbackURL, cfg.Payment.Dana.ReturnURL))
+		log.Info().Msg("DANA payment adapter registered")
+	}
+	if midtransClient != nil {
+		paymentRouter.Register(service.NewMidtransProviderClient(midtransClient, cfg.Payment.Midtrans.CallbackURL))
+		log.Info().Msg("Midtrans payment adapter registered")
+	}
+	if xenditClient != nil {
+		paymentRouter.Register(service.NewXenditProviderClient(xenditClient))
+		log.Info().Msg("Xendit payment adapter registered")
+	}
+
+	paymentCallbackSvc := service.NewPaymentCallbackService(paymentRepo, clientRepo)
+	paymentSvc := service.NewPaymentService(paymentRepo, clientRepo, paymentRouter, paymentCallbackSvc)
+	paymentSvc.SetNotifier(sseNotifier)
+	adminPaymentSvc := service.NewAdminPaymentService(paymentRepo, clientRepo, paymentSvc, paymentCallbackSvc)
+
+	// Resolve webhook secrets for inbound signature verification.
+	pakailinkWebhookSecret := cfg.Payment.Pakailink.ClientSecret
+	if pakailinkClient != nil {
+		pakailinkWebhookSecret = pakailinkClient.ClientSecret()
+	}
+	danaWebhookSecret := cfg.Payment.Dana.ClientSecret
+	midtransWebhookSecret := cfg.Payment.Midtrans.ServerKey
+	if cfg.Payment.Midtrans.WebhookSecret != "" {
+		midtransWebhookSecret = cfg.Payment.Midtrans.WebhookSecret
+	}
+	xenditWebhookToken := cfg.Payment.Xendit.WebhookToken
+
 	// 7. Initialize handlers
 	handlers := &Handlers{
 		Health:            handler.NewHealthHandler(digiProd),
@@ -272,6 +398,16 @@ func main() {
 		PPOBProvider:      handler.NewPPOBProviderHandler(ppobProviderRepo),
 		ProviderCallback:  handler.NewProviderCallbackHandler(providerCallbackSvc, cfg.Alterra.CallbackPublicKey),
 		SSE:               handler.NewSSEHandler(sseHub),
+		Payment:           handler.NewPaymentHandler(paymentSvc),
+		PaymentWebhook: handler.NewPaymentWebhookHandler(
+			paymentRepo,
+			paymentSvc,
+			pakailinkWebhookSecret,
+			danaWebhookSecret,
+			midtransWebhookSecret,
+			xenditWebhookToken,
+		),
+		AdminPayment: handler.NewAdminPaymentHandler(adminPaymentSvc),
 	}
 
 	// 8. Initialize middleware
@@ -318,6 +454,16 @@ func main() {
 	// Start provider price sync worker
 	providerClients := providerRouter.GetClients()
 	go worker.NewProviderSyncWorker(ppobProviderRepo, providerClients, cfg.Worker.SyncInterval).Start(ctx)
+
+	// Payment module workers
+	go worker.NewPaymentStatusWorker(
+		paymentSvc,
+		cfg.Worker.PaymentStatusInterval,
+		cfg.Worker.PaymentStatusStaleAfter,
+		50,
+	).Start(ctx)
+	go worker.NewPaymentExpiryWorker(paymentSvc, cfg.Worker.PaymentExpiryInterval, 100).Start(ctx)
+	go worker.NewPaymentCallbackWorker(paymentCallbackSvc, cfg.Worker.PaymentCallbackInterval, 50).Start(ctx)
 
 	// 12. Start HTTP server
 	srv := &http.Server{
@@ -370,6 +516,9 @@ type Handlers struct {
 	PPOBProvider      *handler.PPOBProviderHandler
 	ProviderCallback  *handler.ProviderCallbackHandler
 	SSE               *handler.SSEHandler
+	Payment           *handler.PaymentHandler
+	PaymentWebhook    *handler.PaymentWebhookHandler
+	AdminPayment      *handler.AdminPaymentHandler
 }
 
 // setupRoutes registers all routes.
@@ -382,6 +531,12 @@ func setupRoutes(router *gin.Engine, handlers *Handlers, authMiddleware *middlew
 	router.POST("/bnc/v1.0/transfer/notify", handlers.BNCConnector.HandleTransferNotify)
 	router.POST("/snap/v1.0/access-token/b2b", handlers.BRIConnector.CreateAccessToken)
 	router.POST("/snap/v1.0/transfer-va/notify-payment-intrabank", handlers.BRIConnector.HandleVAPaymentNotify)
+
+	// Payment provider webhooks (public — each handler verifies its own signature).
+	router.POST("/v1/webhook/pakailink", handlers.PaymentWebhook.HandlePakailink)
+	router.POST("/v1/webhook/dana", handlers.PaymentWebhook.HandleDANA)
+	router.POST("/v1/webhook/midtrans", handlers.PaymentWebhook.HandleMidtrans)
+	router.POST("/v1/webhook/xendit", handlers.PaymentWebhook.HandleXendit)
 
 	router.GET("/v1/health", handlers.Health.GetHealth)
 	// API PPOB routes (protected with client API key)
@@ -403,6 +558,17 @@ func setupRoutes(router *gin.Engine, handlers *Handlers, authMiddleware *middlew
 		transfer.POST("/inquiry", handlers.Transfer.CreateInquiry)
 		transfer.POST("", handlers.Transfer.CreateTransfer)
 		transfer.GET("/:transferId", handlers.Transfer.GetTransfer)
+	}
+
+	// Payment client API (protected with client API key).
+	payment := router.Group("/v1/payment")
+	payment.Use(authMiddleware.Handle())
+	{
+		payment.GET("/methods", handlers.Payment.ListMethods)
+		payment.POST("/create", handlers.Payment.CreatePayment)
+		payment.GET("/:paymentId", handlers.Payment.GetPayment)
+		payment.POST("/:paymentId/cancel", handlers.Payment.CancelPayment)
+		payment.POST("/:paymentId/refund", handlers.Payment.RefundPayment)
 	}
 
 	// Admin routes
@@ -472,6 +638,21 @@ func setupRoutes(router *gin.Engine, handlers *Handlers, authMiddleware *middlew
 		// PPOB Provider Health
 		admin.GET("/ppob/health", handlers.PPOBProvider.GetAllProviderHealthToday)
 		admin.GET("/ppob/providers/:id/health", handlers.PPOBProvider.GetProviderHealth)
+
+		// Payment admin
+		admin.GET("/payments", handlers.AdminPayment.ListPayments)
+		admin.GET("/payments/stats", handlers.AdminPayment.Stats)
+		admin.GET("/payments/:id", handlers.AdminPayment.GetPayment)
+		admin.GET("/payments/:id/logs", handlers.AdminPayment.GetPaymentLogs)
+		admin.GET("/payments/:id/callbacks", handlers.AdminPayment.GetPaymentCallbacks)
+		admin.GET("/payments/:id/callback-logs", handlers.AdminPayment.ListCallbackLogs)
+		admin.GET("/payments/:id/refunds", handlers.AdminPayment.ListRefunds)
+		admin.POST("/payments/:id/retry-callback", handlers.AdminPayment.RetryCallback)
+		admin.POST("/payments/:id/refund", handlers.AdminPayment.Refund)
+
+		// Payment method admin
+		admin.GET("/payment-methods", handlers.AdminPayment.ListMethods)
+		admin.PUT("/payment-methods/:id", handlers.AdminPayment.UpdateMethod)
 	}
 }
 

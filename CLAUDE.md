@@ -35,6 +35,10 @@ pkg/
   alterra/               # Alterra PPOB provider client
   bnc/                   # Bank Neo Commerce (BNC) SNAP BI client
   bri/                   # BRI SNAP BI client
+  pakailink/             # Pakailink SNAP BI (VA + QRIS payment acceptance)
+  dana/                  # DANA Direct (e-wallet + QRIS)
+  midtrans/              # Midtrans Core API (GoPay, ShopeePay)
+  xendit/                # Xendit Payment Request API (Indomaret, Alfamart)
   identity/              # KYC verification
 migrations/              # PostgreSQL migrations (golang-migrate)
 frontend/                # React/Next.js admin dashboard (separate)
@@ -107,14 +111,17 @@ See `.env.example` for all required variables. Key groups:
 - `GET/POST /v1/ppob/*` - Products, balance, transactions
 - `POST /v1/transfer`, `GET /v1/transfer/:id` - Bank transfers
 - `GET /v1/bank-codes`
+- `GET /v1/payment/methods`, `POST /v1/payment/create`, `GET /v1/payment/:id`, `POST /v1/payment/:id/cancel|refund`
 
 **Admin (JWT)**:
 - `/v1/admin/auth/*` - Login
-- `/v1/admin/clients/*` - Client management
+- `/v1/admin/clients/*` - Client management (includes `paymentCallbackUrl` + `key_type: payment_webhook`)
 - `/v1/admin/products/*`, `/v1/admin/skus/*` - Product catalog
 - `/v1/admin/transactions/*` - Transaction monitoring & retry
 - `/v1/admin/providers/*` - Provider health & config
-- `/v1/admin/sse` - Real-time updates
+- `/v1/admin/payments/*` - Payment monitoring, refunds, callback retry
+- `/v1/admin/payment-methods/*` - Method config (provider, fees, maintenance)
+- `/v1/admin/sse` - Real-time updates (emits `payment.*` events)
 
 ## Code Conventions
 
@@ -128,7 +135,7 @@ See `.env.example` for all required variables. Key groups:
 ## Database
 
 PostgreSQL with golang-migrate. Migrations in `migrations/` directory.
-Key tables: `clients`, `products`, `skus`, `transactions`, `transfers`, `payments`, `ppob_providers`, `provider_skus`, `callbacks`, `bank_codes`, `admin_users`
+Key tables: `clients`, `products`, `skus`, `transactions`, `transfers`, `payments`, `payment_methods`, `payment_callbacks`, `payment_callback_logs`, `payment_logs`, `refunds`, `ppob_providers`, `provider_skus`, `callbacks`, `bank_codes`, `admin_users`
 
 ## PPOB Providers
 
@@ -139,6 +146,19 @@ Multi-provider support with intelligent routing:
 - **BRI BRIZZI** - BRI-specific products
 
 Provider selection logic in `service/provider_router.go`. Each provider has its own adapter in `pkg/` and service layer in `internal/service/`.
+
+## Payment Module
+
+Phase 1 provider routing (dispatcher: `payment_methods.provider` column):
+- **Pakailink** — VA (BCA/BSI/OCBC/CIMB/Permata/Muamalat + fallback for BNI/BRI/Mandiri/BNC) and QRIS MPM
+- **DANA Direct** — DANA e-wallet + QRIS (default)
+- **Midtrans** — GoPay, ShopeePay
+- **Xendit** — Indomaret, Alfamart retail
+- **OVO** — disabled in Phase 1 (`is_active=false`)
+
+Client webhooks use dedicated `payment_callback_url` + `payment_callback_secret` (falls back to generic `callback_url`/`callback_secret`). Signature header: `X-GTD-Payment-Signature: sha256=<hex>`. Retry backoff: 30s/1m/5m/30m/2h (max 5 attempts). QRIS provider is switchable from admin UI. Pakailink dual-webhook dedupe: `callbackType=settlement` is ACK-only.
+
+Workers: `PaymentStatusWorker` (pending inquiry), `PaymentExpiryWorker` (mark expired), `PaymentCallbackWorker` (retry client webhooks).
 
 ## Alterra Integration
 

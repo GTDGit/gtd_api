@@ -19,12 +19,34 @@ func NewClientRepository(db *sqlx.DB) *ClientRepository {
 	return &ClientRepository{db: db}
 }
 
+const clientColumns = `id, client_id, name, api_key, sandbox_key, callback_url, callback_secret,
+    payment_callback_url, payment_callback_secret,
+    ip_whitelist, is_active, created_at, updated_at`
+
+func scanClient(scanner interface {
+	Scan(dest ...any) error
+}, c *models.Client) error {
+	return scanner.Scan(
+		&c.ID,
+		&c.ClientID,
+		&c.Name,
+		&c.APIKey,
+		&c.SandboxKey,
+		&c.CallbackURL,
+		&c.CallbackSecret,
+		&c.PaymentCallbackURL,
+		&c.PaymentCallbackSecret,
+		pq.Array(&c.IPWhitelist),
+		&c.IsActive,
+		&c.CreatedAt,
+		&c.UpdatedAt,
+	)
+}
+
 // getBy is a small helper to fetch a single client by a specific column
 // using a prepared statement. It ensures ip_whitelist is scanned via pq.Array.
 func (r *ClientRepository) getBy(where string, arg any) (*models.Client, error) {
-	const base = `SELECT id, client_id, name, api_key, sandbox_key, callback_url, callback_secret,
-        ip_whitelist, is_active, created_at, updated_at
-        FROM clients WHERE `
+	const base = `SELECT ` + clientColumns + ` FROM clients WHERE `
 
 	stmt, err := r.db.Preparex(base + where + " LIMIT 1")
 	if err != nil {
@@ -34,20 +56,7 @@ func (r *ClientRepository) getBy(where string, arg any) (*models.Client, error) 
 
 	row := stmt.QueryRowx(arg)
 	var c models.Client
-	// Explicit scan to use pq.Array for the TEXT[] field as required.
-	if err := row.Scan(
-		&c.ID,
-		&c.ClientID,
-		&c.Name,
-		&c.APIKey,
-		&c.SandboxKey,
-		&c.CallbackURL,
-		&c.CallbackSecret,
-		pq.Array(&c.IPWhitelist),
-		&c.IsActive,
-		&c.CreatedAt,
-		&c.UpdatedAt,
-	); err != nil {
+	if err := scanClient(row, &c); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, sql.ErrNoRows
 		}
@@ -78,8 +87,10 @@ func (r *ClientRepository) GetByID(id int) (*models.Client, error) {
 
 // Create creates a new client.
 func (r *ClientRepository) Create(client *models.Client) error {
-	query := `INSERT INTO clients (client_id, name, api_key, sandbox_key, callback_url, callback_secret, ip_whitelist, is_active)
-              VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+	query := `INSERT INTO clients (
+        client_id, name, api_key, sandbox_key, callback_url, callback_secret,
+        payment_callback_url, payment_callback_secret, ip_whitelist, is_active
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
               RETURNING id, created_at, updated_at`
 
 	return r.db.QueryRowx(query,
@@ -89,6 +100,8 @@ func (r *ClientRepository) Create(client *models.Client) error {
 		client.SandboxKey,
 		client.CallbackURL,
 		client.CallbackSecret,
+		client.PaymentCallbackURL,
+		client.PaymentCallbackSecret,
 		pq.Array(client.IPWhitelist),
 		client.IsActive,
 	).Scan(&client.ID, &client.CreatedAt, &client.UpdatedAt)
@@ -98,8 +111,9 @@ func (r *ClientRepository) Create(client *models.Client) error {
 func (r *ClientRepository) Update(client *models.Client) error {
 	query := `UPDATE clients
               SET client_id = $1, name = $2, callback_url = $3, callback_secret = $4,
-                  ip_whitelist = $5, is_active = $6, api_key = $7, sandbox_key = $8
-              WHERE id = $9
+                  payment_callback_url = $5, payment_callback_secret = $6,
+                  ip_whitelist = $7, is_active = $8, api_key = $9, sandbox_key = $10
+              WHERE id = $11
               RETURNING updated_at`
 
 	return r.db.QueryRowx(query,
@@ -107,6 +121,8 @@ func (r *ClientRepository) Update(client *models.Client) error {
 		client.Name,
 		client.CallbackURL,
 		client.CallbackSecret,
+		client.PaymentCallbackURL,
+		client.PaymentCallbackSecret,
 		pq.Array(client.IPWhitelist),
 		client.IsActive,
 		client.APIKey,
@@ -117,10 +133,7 @@ func (r *ClientRepository) Update(client *models.Client) error {
 
 // List retrieves all clients.
 func (r *ClientRepository) List() ([]*models.Client, error) {
-	query := `SELECT id, client_id, name, api_key, sandbox_key, callback_url, callback_secret,
-                     ip_whitelist, is_active, created_at, updated_at
-              FROM clients
-              ORDER BY created_at DESC`
+	query := `SELECT ` + clientColumns + ` FROM clients ORDER BY created_at DESC`
 
 	rows, err := r.db.Queryx(query)
 	if err != nil {
@@ -131,19 +144,7 @@ func (r *ClientRepository) List() ([]*models.Client, error) {
 	var clients []*models.Client
 	for rows.Next() {
 		var c models.Client
-		if err := rows.Scan(
-			&c.ID,
-			&c.ClientID,
-			&c.Name,
-			&c.APIKey,
-			&c.SandboxKey,
-			&c.CallbackURL,
-			&c.CallbackSecret,
-			pq.Array(&c.IPWhitelist),
-			&c.IsActive,
-			&c.CreatedAt,
-			&c.UpdatedAt,
-		); err != nil {
+		if err := scanClient(rows, &c); err != nil {
 			return nil, err
 		}
 		clients = append(clients, &c)

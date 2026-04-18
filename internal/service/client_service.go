@@ -22,20 +22,22 @@ func NewClientService(clientRepo *repository.ClientRepository) *ClientService {
 
 // CreateClientRequest represents the request to create a new client.
 type CreateClientRequest struct {
-	ClientID    string   `json:"clientId" binding:"required"`
-	Name        string   `json:"name" binding:"required"`
-	CallbackURL string   `json:"callbackUrl" binding:"required"`
-	IPWhitelist []string `json:"ipWhitelist"`
-	IsActive    *bool    `json:"isActive"`
+	ClientID           string   `json:"clientId" binding:"required"`
+	Name               string   `json:"name" binding:"required"`
+	CallbackURL        string   `json:"callbackUrl" binding:"required"`
+	PaymentCallbackURL string   `json:"paymentCallbackUrl"`
+	IPWhitelist        []string `json:"ipWhitelist"`
+	IsActive           *bool    `json:"isActive"`
 }
 
 // UpdateClientRequest represents the request to update a client.
 type UpdateClientRequest struct {
-	ClientID    string   `json:"clientId"`
-	Name        string   `json:"name"`
-	CallbackURL string   `json:"callbackUrl"`
-	IPWhitelist []string `json:"ipWhitelist"`
-	IsActive    *bool    `json:"isActive"`
+	ClientID           string   `json:"clientId"`
+	Name               string   `json:"name"`
+	CallbackURL        string   `json:"callbackUrl"`
+	PaymentCallbackURL *string  `json:"paymentCallbackUrl"`
+	IPWhitelist        []string `json:"ipWhitelist"`
+	IsActive           *bool    `json:"isActive"`
 }
 
 // CreateClient creates a new client with auto-generated keys.
@@ -78,6 +80,15 @@ func (s *ClientService) CreateClient(ctx context.Context, req *CreateClientReque
 		CallbackSecret: webhookSecret,
 		IPWhitelist:    req.IPWhitelist,
 		IsActive:       active,
+	}
+	if req.PaymentCallbackURL != "" {
+		paymentSecret, err := utils.GenerateWebhookSecret()
+		if err != nil {
+			return nil, err
+		}
+		url := req.PaymentCallbackURL
+		client.PaymentCallbackURL = &url
+		client.PaymentCallbackSecret = &paymentSecret
 	}
 
 	if err := s.clientRepo.Create(client); err != nil {
@@ -129,6 +140,14 @@ func (s *ClientService) UpdateClient(id int, req *UpdateClientRequest) (*models.
 	if req.CallbackURL != "" {
 		client.CallbackURL = req.CallbackURL
 	}
+	if req.PaymentCallbackURL != nil {
+		url := *req.PaymentCallbackURL
+		if url == "" {
+			client.PaymentCallbackURL = nil
+		} else {
+			client.PaymentCallbackURL = &url
+		}
+	}
 	if req.IPWhitelist != nil {
 		client.IPWhitelist = req.IPWhitelist
 	}
@@ -172,8 +191,14 @@ func (s *ClientService) RegenerateKeys(id int, keyType string) (*models.Client, 
 			return nil, err
 		}
 		client.CallbackSecret = newSecret
+	case "payment_webhook":
+		newSecret, err := utils.GenerateWebhookSecret()
+		if err != nil {
+			return nil, err
+		}
+		client.PaymentCallbackSecret = &newSecret
 	default:
-		return nil, errors.New("invalid key_type: must be 'live', 'sandbox', or 'webhook'")
+		return nil, errors.New("invalid key_type: must be 'live', 'sandbox', 'webhook', or 'payment_webhook'")
 	}
 
 	if err := s.clientRepo.Update(client); err != nil {

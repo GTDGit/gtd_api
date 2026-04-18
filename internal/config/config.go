@@ -26,6 +26,59 @@ type Config struct {
 	Alterra      AlterraConfig
 	BRI          BRIConfig
 	Disbursement DisbursementConfig
+	Payment      PaymentConfig
+}
+
+// PaymentConfig aggregates provider credentials for the payment module.
+type PaymentConfig struct {
+	Pakailink PakailinkConfig
+	Dana      DanaConfig
+	Midtrans  MidtransConfig
+	Xendit    XenditConfig
+}
+
+type PakailinkConfig struct {
+	Env            string
+	BaseURL        string
+	ClientID       string
+	ClientSecret   string
+	PartnerID      string
+	ChannelID      string
+	PrivateKeyPath string
+	PrivateKeyPEM  string
+	CallbackURL    string
+}
+
+type DanaConfig struct {
+	Env            string
+	BaseURL        string
+	MerchantID     string
+	ClientID       string
+	ClientSecret   string
+	PartnerID      string
+	PrivateKeyPath string
+	PrivateKeyPEM  string
+	CallbackURL    string
+	ReturnURL      string
+}
+
+type MidtransConfig struct {
+	Env           string
+	BaseURL       string
+	ServerKey     string
+	ClientKey     string
+	MerchantID    string
+	WebhookSecret string
+	CallbackURL   string
+}
+
+type XenditConfig struct {
+	Env          string
+	BaseURL      string
+	APIKey       string
+	APIVersion   string
+	WebhookToken string
+	CallbackURL  string
 }
 
 // DatabaseConfig contains PostgreSQL connection parameters.
@@ -63,6 +116,10 @@ type WorkerConfig struct {
 	StatusCheckInterval       time.Duration
 	StatusCheckStaleAfter     time.Duration
 	StatusCheckMaxAge         time.Duration
+	PaymentStatusInterval     time.Duration
+	PaymentStatusStaleAfter   time.Duration
+	PaymentExpiryInterval     time.Duration
+	PaymentCallbackInterval   time.Duration
 }
 
 // KiosbankConfig contains credentials for Kiosbank PPOB provider
@@ -306,6 +363,73 @@ func Load() (*Config, error) {
 	}
 	if cfg.Worker.StatusCheckMaxAge, err = parseDurationEnv("STATUS_CHECK_MAX_AGE", "5m"); err != nil {
 		return nil, fmt.Errorf("invalid STATUS_CHECK_MAX_AGE: %w", err)
+	}
+	if cfg.Worker.PaymentStatusInterval, err = parseDurationEnv("PAYMENT_STATUS_INTERVAL", "10s"); err != nil {
+		return nil, fmt.Errorf("invalid PAYMENT_STATUS_INTERVAL: %w", err)
+	}
+	if cfg.Worker.PaymentStatusStaleAfter, err = parseDurationEnv("PAYMENT_STATUS_STALE_AFTER", "30s"); err != nil {
+		return nil, fmt.Errorf("invalid PAYMENT_STATUS_STALE_AFTER: %w", err)
+	}
+	if cfg.Worker.PaymentExpiryInterval, err = parseDurationEnv("PAYMENT_EXPIRY_INTERVAL", "1m"); err != nil {
+		return nil, fmt.Errorf("invalid PAYMENT_EXPIRY_INTERVAL: %w", err)
+	}
+	if cfg.Worker.PaymentCallbackInterval, err = parseDurationEnv("PAYMENT_CALLBACK_INTERVAL", "30s"); err != nil {
+		return nil, fmt.Errorf("invalid PAYMENT_CALLBACK_INTERVAL: %w", err)
+	}
+
+	// Payment providers
+	cfg.Payment = PaymentConfig{
+		Pakailink: PakailinkConfig{
+			Env:            getEnv("PAKAILINK_ENV", "SANDBOX"),
+			BaseURL:        getEnv("PAKAILINK_BASE_URL", ""),
+			ClientID:       getEnv("PAKAILINK_CLIENT_ID", ""),
+			ClientSecret:   getEnv("PAKAILINK_CLIENT_SECRET", ""),
+			PartnerID:      getEnv("PAKAILINK_PARTNER_ID", ""),
+			ChannelID:      getEnv("PAKAILINK_CHANNEL_ID", ""),
+			PrivateKeyPath: getEnv("PAKAILINK_PRIVATE_KEY_PATH", ""),
+			PrivateKeyPEM:  getEnv("PAKAILINK_PRIVATE_KEY_PEM", ""),
+			CallbackURL:    getEnv("PAKAILINK_CALLBACK_URL", ""),
+		},
+		Dana: DanaConfig{
+			Env:            getEnv("DANA_ENV", "SANDBOX"),
+			BaseURL:        getEnv("DANA_BASE_URL", ""),
+			MerchantID:     getEnv("DANA_MERCHANT_ID", ""),
+			ClientID:       getEnv("DANA_CLIENT_ID", ""),
+			ClientSecret:   getEnv("DANA_CLIENT_SECRET", ""),
+			PartnerID:      getEnv("DANA_PARTNER_ID", ""),
+			PrivateKeyPath: getEnv("DANA_PRIVATE_KEY_PATH", ""),
+			PrivateKeyPEM:  getEnv("DANA_PRIVATE_KEY_PEM", ""),
+			CallbackURL:    getEnv("DANA_CALLBACK_URL", ""),
+			ReturnURL:      getEnv("DANA_RETURN_URL", ""),
+		},
+		Midtrans: MidtransConfig{
+			Env:           getEnv("MIDTRANS_ENV", "SANDBOX"),
+			BaseURL:       getEnv("MIDTRANS_BASE_URL", ""),
+			ServerKey:     getEnv("MIDTRANS_SERVER_KEY", ""),
+			ClientKey:     getEnv("MIDTRANS_CLIENT_KEY", ""),
+			MerchantID:    getEnv("MIDTRANS_MERCHANT_ID", ""),
+			WebhookSecret: getEnv("MIDTRANS_WEBHOOK_SECRET", ""),
+			CallbackURL:   getEnv("MIDTRANS_CALLBACK_URL", ""),
+		},
+		Xendit: XenditConfig{
+			Env:          getEnv("XENDIT_ENV", "SANDBOX"),
+			BaseURL:      getEnv("XENDIT_BASE_URL", ""),
+			APIKey:       getEnv("XENDIT_API_KEY", ""),
+			APIVersion:   getEnv("XENDIT_API_VERSION", "2024-11-11"),
+			WebhookToken: getEnv("XENDIT_WEBHOOK_TOKEN", ""),
+			CallbackURL:  getEnv("XENDIT_CALLBACK_URL", ""),
+		},
+	}
+	if cfg.Payment.Midtrans.BaseURL == "" {
+		switch cfg.Payment.Midtrans.Env {
+		case "PRODUCTION":
+			cfg.Payment.Midtrans.BaseURL = "https://api.midtrans.com"
+		default:
+			cfg.Payment.Midtrans.BaseURL = "https://api.sandbox.midtrans.com"
+		}
+	}
+	if cfg.Payment.Xendit.BaseURL == "" {
+		cfg.Payment.Xendit.BaseURL = "https://api.xendit.co"
 	}
 
 	// Basic validation for DB parameters — keeps messages concise and helpful.

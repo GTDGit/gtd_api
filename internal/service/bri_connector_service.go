@@ -227,7 +227,7 @@ func (s *BRIConnectorService) HandleVAPaymentNotify(ctx context.Context, headers
 	signature := strings.TrimSpace(headers.Get("X-SIGNATURE"))
 
 	callback := &models.PaymentCallback{
-		Provider:         string(models.DisbursementProviderBRI),
+		Provider:         models.PaymentProvider(models.DisbursementProviderBRI),
 		ProviderRef:      stringPtr(payload.ProviderRef()),
 		Headers:          marshalHeaders(headers),
 		Payload:          models.NullableRawMessage(body),

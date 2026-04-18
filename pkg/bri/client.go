@@ -131,6 +131,9 @@ type BRIZZICheckStatusResponse struct {
 }
 
 func NewClient(cfg Config) (*Client, error) {
+	cfg.PartnerID = strings.TrimSpace(cfg.PartnerID)
+	cfg.ChannelID = deriveBRIChannelID(cfg.ChannelID, cfg.PartnerID)
+
 	if strings.TrimSpace(cfg.BaseURL) == "" {
 		return nil, fmt.Errorf("bri base url is required")
 	}
@@ -329,7 +332,7 @@ func (c *Client) doSNAPRequest(ctx context.Context, method, path string, body an
 
 	timestamp := formatSNAPTimestamp(time.Now())
 	signature := c.signSNAP(method, path, token, bodyBytes, timestamp)
-	externalID := generateSNAPExternalID()
+	externalID := generateSNAPExternalID(path)
 
 	req, err := http.NewRequestWithContext(ctx, method, c.cfg.BaseURL+path, bytes.NewReader(bodyBytes))
 	if err != nil {
@@ -591,8 +594,17 @@ func formatAmount(amount int64) string {
 	return fmt.Sprintf("%d.00", amount)
 }
 
-func generateSNAPExternalID() string {
-	return strconv.FormatInt(time.Now().UnixNano(), 10)
+func generateSNAPExternalID(path string) string {
+	if strings.HasPrefix(strings.TrimSpace(path), "/snap/v1.0/transfer-va") {
+		v := time.Now().UnixNano() % 1000000000
+		if v < 0 {
+			v = -v
+		}
+		return fmt.Sprintf("%09d", v)
+	}
+
+	now := time.Now()
+	return fmt.Sprintf("%018d%018d", now.Unix(), now.UnixNano()%1000000000000000000)
 }
 
 func generateBRIZZIExternalID() string {
@@ -601,4 +613,44 @@ func generateBRIZZIExternalID() string {
 		v = -v
 	}
 	return fmt.Sprintf("%09d", v)
+}
+
+func deriveBRIChannelID(channelID, partnerID string) string {
+	channelID = strings.TrimSpace(channelID)
+	if isFixedNumeric(channelID, 5) {
+		return channelID
+	}
+
+	partnerID = strings.TrimSpace(partnerID)
+	if isFixedNumeric(partnerID, 5) {
+		return partnerID
+	}
+
+	return channelID
+}
+
+func deriveBRIVAPartnerServiceID(companyCode, partnerID string) string {
+	value := strings.TrimSpace(companyCode)
+	if value == "" {
+		value = strings.TrimSpace(partnerID)
+	}
+	if value == "" {
+		return ""
+	}
+	if len(value) > 8 {
+		value = value[len(value)-8:]
+	}
+	return fmt.Sprintf("%8s", value)
+}
+
+func isFixedNumeric(value string, length int) bool {
+	if len(value) != length {
+		return false
+	}
+	for _, r := range value {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }

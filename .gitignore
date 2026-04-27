@@ -8,7 +8,12 @@
 .env.*.local
 
 # Keys & Secrets (sensitive credentials)
-keys/
+# Ignore all files under keys/ by default (private keys, certs, etc.)
+keys/**
+# Allow directory traversal so subfolders are visible to git
+!keys/**/
+# Whitelist: only public_key.pem is safe to track
+!keys/**/public_key.pem
 
 # Documentation (internal only)
 docs/

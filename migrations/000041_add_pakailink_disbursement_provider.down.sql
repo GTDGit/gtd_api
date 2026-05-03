@@ -1,0 +1,3 @@
+-- Note: PostgreSQL does not support removing values from an enum type.
+-- The down migration is intentionally a no-op; if rollback is required, the
+-- enum must be dropped and recreated together with all dependent tables.

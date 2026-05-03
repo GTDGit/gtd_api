@@ -84,13 +84,15 @@ type CreateTransferRequest struct {
 }
 
 type TransferService struct {
-	transferRepo     *repository.TransferRepository
-	bankRepo         *repository.BankCodeRepository
-	bncClient        snapTransferClient
-	briClient        snapTransferClient
-	callbackSvc      *TransferCallbackService
-	bncSourceAccount string
-	briSourceAccount string
+	transferRepo           *repository.TransferRepository
+	bankRepo               *repository.BankCodeRepository
+	bncClient              snapTransferClient
+	briClient              snapTransferClient
+	pakailinkClient        snapTransferClient
+	callbackSvc            *TransferCallbackService
+	bncSourceAccount       string
+	briSourceAccount       string
+	pakailinkSourceLabel   string
 }
 
 func NewTransferService(
@@ -113,9 +115,21 @@ func NewTransferService(
 	}
 }
 
+// SetPakailinkClient registers a PakaiLink disbursement adapter. When set, the
+// service routes ALL bank transfers via PakaiLink in preference to BNC/BRI.
+// sourceLabel is the merchant-facing source identifier persisted on transfers
+// (PakaiLink does not expose a bank account; we use the partner ID/label).
+func (s *TransferService) SetPakailinkClient(client snapTransferClient, sourceLabel string) {
+	s.pakailinkClient = client
+	s.pakailinkSourceLabel = strings.TrimSpace(sourceLabel)
+}
+
 func (s *TransferService) Available() bool {
 	if s == nil {
 		return false
+	}
+	if s.pakailinkClient != nil {
+		return true
 	}
 	return (s.bncClient != nil && s.bncSourceAccount != "") || (s.briClient != nil && s.briSourceAccount != "")
 }
@@ -419,6 +433,69 @@ func (s *TransferService) ProcessPendingTransfers(ctx context.Context, staleAfte
 	return nil
 }
 
+// PakailinkCallbackEvent is the parsed Service 44 callback delivered by
+// PakaiLink for previously-pending transfers.
+type PakailinkCallbackEvent struct {
+	PaymentFlagStatus string // "00" success, "06" failed
+	PartnerReference  string // maps to transfers.transfer_id
+	ReferenceNo       string
+	AccountNumber     string
+	AccountName       string
+	PaidAmount        int64
+	FeeAmount         int64
+	RawPayload        []byte
+}
+
+// ApplyPakailinkCallback updates the transfer state from a Service 44 callback.
+// Returns the matched transfer (or nil) so the handler can decide on response.
+func (s *TransferService) ApplyPakailinkCallback(ctx context.Context, ev PakailinkCallbackEvent) (*models.Transfer, error) {
+	partnerRef := strings.TrimSpace(ev.PartnerReference)
+	if partnerRef == "" {
+		return nil, errors.New("partnerReferenceNo is required")
+	}
+	transfer, err := s.transferRepo.GetTransferByTransferID(ctx, partnerRef)
+	if err != nil {
+		return nil, err
+	}
+
+	transfer.ProviderData = mergeTransferProviderData(transfer.ProviderData, "callback", json.RawMessage(ev.RawPayload))
+	if strings.TrimSpace(ev.ReferenceNo) != "" {
+		transfer.ProviderRef = stringPtr(ev.ReferenceNo)
+	}
+
+	switch strings.TrimSpace(ev.PaymentFlagStatus) {
+	case "00":
+		if transfer.Status != models.TransferStatusSuccess {
+			now := time.Now()
+			transfer.Status = models.TransferStatusSuccess
+			transfer.CompletedAt = &now
+			transfer.FailedAt = nil
+			transfer.FailedReason = nil
+			transfer.FailedCode = nil
+		}
+	case "06":
+		if transfer.Status != models.TransferStatusFailed {
+			now := time.Now()
+			transfer.Status = models.TransferStatusFailed
+			transfer.FailedReason = stringPtr("Disbursement failed by provider")
+			transfer.FailedCode = stringPtr(ev.PaymentFlagStatus)
+			transfer.FailedAt = &now
+			transfer.CompletedAt = nil
+		}
+	default:
+		// "03" pending or anything else — keep current state.
+	}
+
+	if err := s.transferRepo.UpdateTransfer(ctx, transfer); err != nil {
+		return transfer, err
+	}
+
+	if transfer.Status == models.TransferStatusSuccess || transfer.Status == models.TransferStatusFailed {
+		s.trySendFinalCallback(ctx, transfer)
+	}
+	return transfer, nil
+}
+
 func (s *TransferService) RetryPendingCallbacks(ctx context.Context, limit int) error {
 	if s.callbackSvc == nil {
 		return nil
@@ -719,6 +796,11 @@ func (s *TransferService) buildTransferResponse(
 }
 
 func (s *TransferService) resolveTransferRoute(bankCode string) (models.TransferType, models.DisbursementProvider, error) {
+	// PakaiLink, when configured, supersedes per-bank routing: every transfer
+	// goes through Service 43 (interbank) regardless of the destination.
+	if s.pakailinkClient != nil {
+		return models.TransferTypeInterbank, models.DisbursementProviderPakaiLink, nil
+	}
 	switch strings.TrimSpace(bankCode) {
 	case briSourceBankCode:
 		if s.briClient == nil || s.briSourceAccount == "" {
@@ -740,6 +822,11 @@ func (s *TransferService) resolveTransferRoute(bankCode string) (models.Transfer
 
 func (s *TransferService) clientForProvider(provider models.DisbursementProvider) (snapTransferClient, error) {
 	switch provider {
+	case models.DisbursementProviderPakaiLink:
+		if s.pakailinkClient == nil {
+			return nil, newTransferError(503, "DISBURSEMENT_UNAVAILABLE", "PakaiLink disbursement provider is not configured", nil)
+		}
+		return s.pakailinkClient, nil
 	case models.DisbursementProviderBRI:
 		if s.briClient == nil {
 			return nil, newTransferError(503, "DISBURSEMENT_UNAVAILABLE", "BRI disbursement provider is not configured", nil)
@@ -757,6 +844,14 @@ func (s *TransferService) clientForProvider(provider models.DisbursementProvider
 
 func (s *TransferService) sourceAccountForProvider(provider models.DisbursementProvider) (string, string, error) {
 	switch provider {
+	case models.DisbursementProviderPakaiLink:
+		// PakaiLink does not expose a source bank account; we persist the
+		// configured partner label so admins can identify the funding source.
+		label := s.pakailinkSourceLabel
+		if label == "" {
+			label = "PAKAILINK"
+		}
+		return "PAKAILINK", label, nil
 	case models.DisbursementProviderBRI:
 		if s.briSourceAccount == "" {
 			return "", "", newTransferError(503, "DISBURSEMENT_UNAVAILABLE", "BRI source account is not configured", nil)

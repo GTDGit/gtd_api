@@ -183,7 +183,17 @@ type BRIConfig struct {
 
 // DisbursementConfig contains provider configuration for bank transfers.
 type DisbursementConfig struct {
-	BNC BNCConfig
+	BNC       BNCConfig
+	Pakailink PakailinkDisbursementConfig
+}
+
+// PakailinkDisbursementConfig holds the disbursement-specific callback URL for
+// PakaiLink Service 44. Credentials & signing keys are reused from the payment
+// PakaiLink configuration to avoid splitting one account into two key pairs.
+type PakailinkDisbursementConfig struct {
+	Enabled     bool
+	CallbackURL string
+	SourceLabel string
 }
 
 // BNCConfig contains configuration for Bank Neo disbursement integration.
@@ -316,7 +326,7 @@ func Load() (*Config, error) {
 		}
 	}
 
-	// Disbursement - BNC
+	// Disbursement providers
 	cfg.Disbursement = DisbursementConfig{
 		BNC: BNCConfig{
 			Env:                    getEnv("BNC_ENV", "SANDBOX"),
@@ -331,6 +341,11 @@ func Load() (*Config, error) {
 			ConnectorClientKey:     getEnv("BNC_CONNECTOR_CLIENT_KEY", ""),
 			ConnectorPublicKeyPath: getEnv("BNC_CONNECTOR_PUBLIC_KEY_PATH", ""),
 			ConnectorPublicKeyPEM:  getEnv("BNC_CONNECTOR_PUBLIC_KEY_PEM", ""),
+		},
+		Pakailink: PakailinkDisbursementConfig{
+			Enabled:     getEnv("PAKAILINK_DISBURSEMENT_ENABLED", "false") == "true",
+			CallbackURL: getEnv("PAKAILINK_DISBURSEMENT_CALLBACK_URL", ""),
+			SourceLabel: getEnv("PAKAILINK_DISBURSEMENT_SOURCE_LABEL", ""),
 		},
 	}
 	if cfg.Disbursement.BNC.BaseURL == "" {

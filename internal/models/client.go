@@ -15,6 +15,7 @@ type Client struct {
 	PaymentCallbackURL    *string   `db:"payment_callback_url" json:"paymentCallbackUrl,omitempty"`
 	PaymentCallbackSecret *string   `db:"payment_callback_secret" json:"paymentCallbackSecret,omitempty"`
 	IPWhitelist           []string  `db:"ip_whitelist" json:"ipWhitelist"`
+	Scopes                []string  `db:"scopes" json:"scopes"`
 	IsActive              bool      `db:"is_active" json:"isActive"`
 	CreatedAt             time.Time `db:"created_at" json:"createdAt"`
 	UpdatedAt             time.Time `db:"updated_at" json:"updatedAt"`

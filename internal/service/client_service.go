@@ -10,6 +10,16 @@ import (
 	"github.com/GTDGit/gtd_api/internal/utils"
 )
 
+// validateScopes ensures every requested scope is recognized.
+func validateScopes(scopes []string) error {
+	for _, s := range scopes {
+		if !models.IsValidScope(s) {
+			return errors.New("invalid scope: " + s)
+		}
+	}
+	return nil
+}
+
 // ClientService handles client business logic.
 type ClientService struct {
 	clientRepo *repository.ClientRepository
@@ -27,6 +37,7 @@ type CreateClientRequest struct {
 	CallbackURL        string   `json:"callbackUrl" binding:"required"`
 	PaymentCallbackURL string   `json:"paymentCallbackUrl"`
 	IPWhitelist        []string `json:"ipWhitelist"`
+	Scopes             []string `json:"scopes"`
 	IsActive           *bool    `json:"isActive"`
 }
 
@@ -37,6 +48,7 @@ type UpdateClientRequest struct {
 	CallbackURL        string   `json:"callbackUrl"`
 	PaymentCallbackURL *string  `json:"paymentCallbackUrl"`
 	IPWhitelist        []string `json:"ipWhitelist"`
+	Scopes             []string `json:"scopes"`
 	IsActive           *bool    `json:"isActive"`
 }
 
@@ -71,6 +83,16 @@ func (s *ClientService) CreateClient(ctx context.Context, req *CreateClientReque
 		active = *req.IsActive
 	}
 
+	// Default to all scopes when not specified — preserves pre-scope behavior
+	// for clients created via existing automation. Admin UI will pass explicit scopes.
+	scopes := req.Scopes
+	if len(scopes) == 0 {
+		scopes = append([]string(nil), models.AllScopes...)
+	}
+	if err := validateScopes(scopes); err != nil {
+		return nil, err
+	}
+
 	client := &models.Client{
 		ClientID:       req.ClientID,
 		Name:           req.Name,
@@ -79,6 +101,7 @@ func (s *ClientService) CreateClient(ctx context.Context, req *CreateClientReque
 		CallbackURL:    req.CallbackURL,
 		CallbackSecret: webhookSecret,
 		IPWhitelist:    req.IPWhitelist,
+		Scopes:         scopes,
 		IsActive:       active,
 	}
 	if req.PaymentCallbackURL != "" {
@@ -150,6 +173,12 @@ func (s *ClientService) UpdateClient(id int, req *UpdateClientRequest) (*models.
 	}
 	if req.IPWhitelist != nil {
 		client.IPWhitelist = req.IPWhitelist
+	}
+	if req.Scopes != nil {
+		if err := validateScopes(req.Scopes); err != nil {
+			return nil, err
+		}
+		client.Scopes = req.Scopes
 	}
 	if req.IsActive != nil {
 		client.IsActive = *req.IsActive

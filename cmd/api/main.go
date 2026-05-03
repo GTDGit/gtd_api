@@ -319,6 +319,13 @@ func main() {
 		cfg.Disbursement.BNC.SourceAccount,
 		cfg.BRI.SourceAccount,
 	)
+	if pakailinkClient != nil && cfg.Disbursement.Pakailink.Enabled {
+		transferSvc.SetPakailinkClient(
+			service.NewPakailinkTransferAdapter(pakailinkClient, cfg.Disbursement.Pakailink.CallbackURL),
+			cfg.Disbursement.Pakailink.SourceLabel,
+		)
+		log.Info().Msg("PakaiLink disbursement adapter registered (handles all banks)")
+	}
 	bncConnectorSvc := service.NewBNCConnectorService(
 		transferRepo,
 		transferSvc,
@@ -406,6 +413,11 @@ func main() {
 			danaWebhookSecret,
 			midtransWebhookSecret,
 			xenditWebhookToken,
+		),
+		DisbursementWebhook: handler.NewDisbursementWebhookHandler(
+			transferRepo,
+			transferSvc,
+			pakailinkWebhookSecret,
 		),
 		AdminPayment: handler.NewAdminPaymentHandler(adminPaymentSvc),
 	}
@@ -516,9 +528,10 @@ type Handlers struct {
 	PPOBProvider      *handler.PPOBProviderHandler
 	ProviderCallback  *handler.ProviderCallbackHandler
 	SSE               *handler.SSEHandler
-	Payment           *handler.PaymentHandler
-	PaymentWebhook    *handler.PaymentWebhookHandler
-	AdminPayment      *handler.AdminPaymentHandler
+	Payment              *handler.PaymentHandler
+	PaymentWebhook       *handler.PaymentWebhookHandler
+	DisbursementWebhook  *handler.DisbursementWebhookHandler
+	AdminPayment         *handler.AdminPaymentHandler
 }
 
 // setupRoutes registers all routes.
@@ -538,10 +551,13 @@ func setupRoutes(router *gin.Engine, handlers *Handlers, authMiddleware *middlew
 	router.POST("/v1/webhook/midtrans", handlers.PaymentWebhook.HandleMidtrans)
 	router.POST("/v1/webhook/xendit", handlers.PaymentWebhook.HandleXendit)
 
+	// Disbursement provider webhooks (public — each handler verifies its own signature).
+	router.POST("/v1/webhook/pakailink-disbursement", handlers.DisbursementWebhook.HandlePakailink)
+
 	router.GET("/v1/health", handlers.Health.GetHealth)
-	// API PPOB routes (protected with client API key)
+	// API PPOB routes (protected with client API key + ppob scope)
 	ppob := router.Group("/v1/ppob")
-	ppob.Use(authMiddleware.Handle())
+	ppob.Use(authMiddleware.Handle(), middleware.RequireScope(middleware.ScopePPOB))
 	{
 		ppob.GET("/products", handlers.Product.GetProducts)
 		ppob.GET("/balance", handlers.Balance.GetBalance)
@@ -549,20 +565,20 @@ func setupRoutes(router *gin.Engine, handlers *Handlers, authMiddleware *middlew
 		ppob.GET("/transaction/:transactionId", handlers.Transaction.GetTransaction)
 	}
 
-	// Bank codes (protected with client API key)
-	router.GET("/v1/bank-codes", authMiddleware.Handle(), handlers.BankCode.GetBankCodes)
+	// Bank codes (protected with client API key + disbursement scope)
+	router.GET("/v1/bank-codes", authMiddleware.Handle(), middleware.RequireScope(middleware.ScopeDisbursement), handlers.BankCode.GetBankCodes)
 
 	transfer := router.Group("/v1/transfer")
-	transfer.Use(authMiddleware.Handle())
+	transfer.Use(authMiddleware.Handle(), middleware.RequireScope(middleware.ScopeDisbursement))
 	{
 		transfer.POST("/inquiry", handlers.Transfer.CreateInquiry)
 		transfer.POST("", handlers.Transfer.CreateTransfer)
 		transfer.GET("/:transferId", handlers.Transfer.GetTransfer)
 	}
 
-	// Payment client API (protected with client API key).
+	// Payment client API (protected with client API key + payment scope).
 	payment := router.Group("/v1/payment")
-	payment.Use(authMiddleware.Handle())
+	payment.Use(authMiddleware.Handle(), middleware.RequireScope(middleware.ScopePayment))
 	{
 		payment.GET("/methods", handlers.Payment.ListMethods)
 		payment.POST("/create", handlers.Payment.CreatePayment)

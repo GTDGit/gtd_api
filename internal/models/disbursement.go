@@ -24,6 +24,7 @@ const (
 	DisbursementProviderBNI     DisbursementProvider = "bni_direct"
 	DisbursementProviderMandiri DisbursementProvider = "mandiri_direct"
 	DisbursementProviderBNC     DisbursementProvider = "bnc_direct"
+	DisbursementProviderPakaiLink DisbursementProvider = "pakailink"
 )
 
 type TransferInquiry struct {

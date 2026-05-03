@@ -26,6 +26,10 @@ const (
 type NullableRawMessage json.RawMessage
 
 // Scan implements sql.Scanner interface for NULL-safe JSONB scanning.
+//
+// The []byte returned by database/sql drivers is owned by the driver and
+// may be reused on the next Scan call. We must copy it so subsequent rows
+// don't overwrite the bytes we hold a pointer to.
 func (n *NullableRawMessage) Scan(value interface{}) error {
 	if value == nil {
 		*n = nil
@@ -33,7 +37,9 @@ func (n *NullableRawMessage) Scan(value interface{}) error {
 	}
 	switch v := value.(type) {
 	case []byte:
-		*n = NullableRawMessage(v)
+		buf := make([]byte, len(v))
+		copy(buf, v)
+		*n = NullableRawMessage(buf)
 	case string:
 		*n = NullableRawMessage(v)
 	}

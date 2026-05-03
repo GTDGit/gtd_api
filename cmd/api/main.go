@@ -678,6 +678,10 @@ func setupRoutes(router *gin.Engine, handlers *Handlers, authMiddleware *middlew
 		admin.GET("/transfers/stats", handlers.AdminTransfer.Stats)
 		admin.GET("/transfers/:id", handlers.AdminTransfer.GetTransfer)
 		admin.GET("/transfers/:id/callbacks", handlers.AdminTransfer.ListCallbacks)
+
+		// Bank code admin (controls disbursement bank availability + VA support)
+		admin.GET("/bank-codes", handlers.BankCode.AdminListBankCodes)
+		admin.PUT("/bank-codes/:id", handlers.BankCode.AdminUpdateBankCode)
 	}
 }
 

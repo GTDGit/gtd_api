@@ -2,12 +2,37 @@ package repository
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jmoiron/sqlx"
 
 	"github.com/GTDGit/gtd_api/internal/models"
 )
+
+// TransferFilter is the admin-facing list filter for transfers.
+type TransferFilter struct {
+	Status       string
+	Type         string
+	Provider     string
+	BankCode     string
+	ClientID     int
+	IsSandbox    *bool
+	CreatedFrom  *time.Time
+	CreatedTo    *time.Time
+	Search       string
+}
+
+// TransferStats summarizes transfer aggregates for admin dashboards.
+type TransferStats struct {
+	Total           int   `db:"total" json:"total"`
+	TotalSuccess    int   `db:"total_success" json:"totalSuccess"`
+	TotalProcessing int   `db:"total_processing" json:"totalProcessing"`
+	TotalPending    int   `db:"total_pending" json:"totalPending"`
+	TotalFailed     int   `db:"total_failed" json:"totalFailed"`
+	TotalVolume     int64 `db:"total_volume" json:"totalVolume"`
+}
 
 type TransferRepository struct {
 	db *sqlx.DB
@@ -287,6 +312,134 @@ func (r *TransferRepository) UpdateTransferCallbackProcessed(
 
 	_, err := r.db.ExecContext(ctx, q, callbackID, isProcessed, processError)
 	return err
+}
+
+// transferColumns lists all transfer columns for SELECT queries.
+const transferColumns = `id, transfer_id, reference_id, client_id, is_sandbox, transfer_type, provider,
+		bank_code, bank_name, account_number, account_name, source_bank_code, source_account_number,
+		amount, fee, total_amount, status, failed_reason, failed_code, purpose_code, remark,
+		inquiry_id, provider_ref, provider_data, callback_sent, callback_sent_at, created_at,
+		completed_at, failed_at, updated_at`
+
+// GetTransferByID returns a single transfer by primary key.
+func (r *TransferRepository) GetTransferByID(ctx context.Context, id int) (*models.Transfer, error) {
+	q := `SELECT ` + transferColumns + ` FROM transfers WHERE id = $1 LIMIT 1`
+	var t models.Transfer
+	if err := r.db.GetContext(ctx, &t, q, id); err != nil {
+		return nil, err
+	}
+	return &t, nil
+}
+
+// ListTransfers returns transfers matching the filter plus the total count.
+func (r *TransferRepository) ListTransfers(ctx context.Context, f TransferFilter, limit, offset int) ([]models.Transfer, int, error) {
+	where := []string{"1=1"}
+	args := []any{}
+	idx := 1
+	add := func(clause string, val any) {
+		where = append(where, strings.ReplaceAll(clause, "?", fmt.Sprintf("$%d", idx)))
+		args = append(args, val)
+		idx++
+	}
+	if f.Status != "" {
+		add("status = ?", f.Status)
+	}
+	if f.Type != "" {
+		add("transfer_type = ?", f.Type)
+	}
+	if f.Provider != "" {
+		add("provider = ?", f.Provider)
+	}
+	if f.BankCode != "" {
+		add("bank_code = ?", f.BankCode)
+	}
+	if f.ClientID > 0 {
+		add("client_id = ?", f.ClientID)
+	}
+	if f.IsSandbox != nil {
+		add("is_sandbox = ?", *f.IsSandbox)
+	}
+	if f.CreatedFrom != nil {
+		add("created_at >= ?", *f.CreatedFrom)
+	}
+	if f.CreatedTo != nil {
+		add("created_at <= ?", *f.CreatedTo)
+	}
+	if f.Search != "" {
+		pattern := "%" + f.Search + "%"
+		where = append(where, fmt.Sprintf("(transfer_id ILIKE $%d OR reference_id ILIKE $%d OR account_number ILIKE $%d OR provider_ref ILIKE $%d)", idx, idx, idx, idx))
+		args = append(args, pattern)
+		idx++
+	}
+
+	whereClause := strings.Join(where, " AND ")
+	countQ := `SELECT COUNT(*) FROM transfers WHERE ` + whereClause
+	var total int
+	if err := r.db.GetContext(ctx, &total, countQ, args...); err != nil {
+		return nil, 0, err
+	}
+
+	q := `SELECT ` + transferColumns + ` FROM transfers WHERE ` + whereClause +
+		fmt.Sprintf(" ORDER BY created_at DESC LIMIT $%d OFFSET $%d", idx, idx+1)
+	args = append(args, limit, offset)
+
+	rows := []models.Transfer{}
+	if err := r.db.SelectContext(ctx, &rows, q, args...); err != nil {
+		return nil, 0, err
+	}
+	return rows, total, nil
+}
+
+// Stats returns aggregate counts and volume for the given filter.
+func (r *TransferRepository) Stats(ctx context.Context, f TransferFilter) (*TransferStats, error) {
+	where := []string{"1=1"}
+	args := []any{}
+	idx := 1
+	add := func(clause string, val any) {
+		where = append(where, strings.ReplaceAll(clause, "?", fmt.Sprintf("$%d", idx)))
+		args = append(args, val)
+		idx++
+	}
+	if f.ClientID > 0 {
+		add("client_id = ?", f.ClientID)
+	}
+	if f.IsSandbox != nil {
+		add("is_sandbox = ?", *f.IsSandbox)
+	}
+	if f.CreatedFrom != nil {
+		add("created_at >= ?", *f.CreatedFrom)
+	}
+	if f.CreatedTo != nil {
+		add("created_at <= ?", *f.CreatedTo)
+	}
+	q := `SELECT
+        COUNT(*) AS total,
+        COUNT(*) FILTER (WHERE status = 'Success') AS total_success,
+        COUNT(*) FILTER (WHERE status = 'Processing') AS total_processing,
+        COUNT(*) FILTER (WHERE status = 'Pending') AS total_pending,
+        COUNT(*) FILTER (WHERE status = 'Failed') AS total_failed,
+        COALESCE(SUM(total_amount) FILTER (WHERE status = 'Success'), 0) AS total_volume
+    FROM transfers WHERE ` + strings.Join(where, " AND ")
+	var s TransferStats
+	if err := r.db.GetContext(ctx, &s, q, args...); err != nil {
+		return nil, err
+	}
+	return &s, nil
+}
+
+// ListCallbacksByTransferID returns provider callbacks for the given transfer reference (transfer_id field).
+func (r *TransferRepository) ListCallbacksByTransferID(ctx context.Context, transferID string) ([]models.TransferCallback, error) {
+	const q = `
+		SELECT id, provider, provider_ref, headers, payload, signature, is_valid_signature,
+		       transfer_id, status, is_processed, processed_at, process_error, created_at
+		FROM transfer_callbacks
+		WHERE transfer_id = $1
+		ORDER BY created_at DESC`
+	rows := []models.TransferCallback{}
+	if err := r.db.SelectContext(ctx, &rows, q, transferID); err != nil {
+		return nil, err
+	}
+	return rows, nil
 }
 
 func (r *TransferRepository) UpdateTransferCallbackSignature(

@@ -373,6 +373,7 @@ func main() {
 	paymentSvc := service.NewPaymentService(paymentRepo, clientRepo, paymentRouter, paymentCallbackSvc)
 	paymentSvc.SetNotifier(sseNotifier)
 	adminPaymentSvc := service.NewAdminPaymentService(paymentRepo, clientRepo, paymentSvc, paymentCallbackSvc)
+	adminTransferSvc := service.NewAdminTransferService(transferRepo)
 
 	// Resolve webhook secrets for inbound signature verification.
 	pakailinkWebhookSecret := cfg.Payment.Pakailink.ClientSecret
@@ -419,7 +420,8 @@ func main() {
 			transferSvc,
 			pakailinkWebhookSecret,
 		),
-		AdminPayment: handler.NewAdminPaymentHandler(adminPaymentSvc),
+		AdminPayment:  handler.NewAdminPaymentHandler(adminPaymentSvc),
+		AdminTransfer: handler.NewAdminTransferHandler(adminTransferSvc),
 	}
 
 	// 8. Initialize middleware
@@ -532,6 +534,7 @@ type Handlers struct {
 	PaymentWebhook       *handler.PaymentWebhookHandler
 	DisbursementWebhook  *handler.DisbursementWebhookHandler
 	AdminPayment         *handler.AdminPaymentHandler
+	AdminTransfer        *handler.AdminTransferHandler
 }
 
 // setupRoutes registers all routes.
@@ -669,6 +672,12 @@ func setupRoutes(router *gin.Engine, handlers *Handlers, authMiddleware *middlew
 		// Payment method admin
 		admin.GET("/payment-methods", handlers.AdminPayment.ListMethods)
 		admin.PUT("/payment-methods/:id", handlers.AdminPayment.UpdateMethod)
+
+		// Disbursement transfer admin
+		admin.GET("/transfers", handlers.AdminTransfer.ListTransfers)
+		admin.GET("/transfers/stats", handlers.AdminTransfer.Stats)
+		admin.GET("/transfers/:id", handlers.AdminTransfer.GetTransfer)
+		admin.GET("/transfers/:id/callbacks", handlers.AdminTransfer.ListCallbacks)
 	}
 }
 

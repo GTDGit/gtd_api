@@ -9,83 +9,83 @@ ON CONFLICT (client_id) DO NOTHING;
 
 INSERT INTO payment_methods (type, code, name, provider, fee_type, fee_flat, fee_percent, min_amount, max_amount, expired_duration, display_order, is_active, payment_instruction) VALUES
 -- Virtual Account - Direct
-('VA', '002', 'BRI Virtual Account', 'bri_direct', 'flat', 4000, 0, 10000, 50000000, 86400, 2, true,
+('VA', '002', 'VA BRI', 'bri_direct', 'flat', 4000, 0, 10000, 50000000, 86400, 2, true,
 '{
   "atm": ["Masukkan kartu ATM dan PIN", "Pilih menu Transaksi Lain > Pembayaran > Lainnya", "Masukkan kode BRIVA (88908) + nomor VA", "Konfirmasi pembayaran"],
   "mobileBanking": ["Login ke BRI Mobile", "Pilih Mobile Banking BRI > Pembayaran > BRIVA", "Masukkan nomor VA", "Konfirmasi dengan PIN"],
   "internetBanking": ["Login ke Internet Banking BRI", "Pilih Pembayaran > BRIVA", "Masukkan nomor VA", "Konfirmasi dengan mToken"]
 }'::jsonb),
 
-('VA', '009', 'BNI Virtual Account', 'bni_direct', 'flat', 4000, 0, 10000, 50000000, 86400, 3, true,
+('VA', '009', 'VA BNI', 'bni_direct', 'flat', 4000, 0, 10000, 50000000, 86400, 3, true,
 '{
   "atm": ["Masukkan kartu ATM dan PIN", "Pilih menu Lainnya > Transfer > Rekening Tabungan", "Masukkan nomor VA", "Konfirmasi pembayaran"],
   "mobileBanking": ["Login ke BNI Mobile Banking", "Pilih Transfer > Virtual Account Billing", "Masukkan nomor VA", "Konfirmasi dengan PIN"],
   "internetBanking": ["Login ke BNI Internet Banking", "Pilih Transfer > Transfer ke BNI Virtual Account", "Masukkan nomor VA", "Konfirmasi dengan mToken"]
 }'::jsonb),
 
-('VA', '008', 'Mandiri Virtual Account', 'mandiri_direct', 'flat', 4000, 0, 10000, 50000000, 86400, 4, true,
+('VA', '008', 'VA MANDIRI', 'mandiri_direct', 'flat', 4000, 0, 10000, 50000000, 86400, 4, true,
 '{
   "atm": ["Masukkan kartu ATM dan PIN", "Pilih menu Bayar/Beli > Lainnya > Multi Payment", "Masukkan kode perusahaan (89661) + nomor VA", "Konfirmasi pembayaran"],
   "mobileBanking": ["Login ke Livin by Mandiri", "Pilih Bayar > Multipayment", "Masukkan kode perusahaan + nomor VA", "Konfirmasi dengan PIN"],
   "internetBanking": ["Login ke Mandiri Internet Banking", "Pilih Bayar > Multipayment", "Masukkan kode perusahaan + nomor VA", "Konfirmasi dengan MPIN"]
 }'::jsonb),
 
-('VA', '490', 'Bank Neo Virtual Account', 'bnc_direct', 'flat', 4000, 0, 10000, 50000000, 86400, 5, true,
+('VA', '490', 'VA NEO', 'bnc_direct', 'flat', 4000, 0, 10000, 50000000, 86400, 5, true,
 '{
   "mobileBanking": ["Login ke Bank Neo Mobile", "Pilih Transfer > Virtual Account", "Masukkan nomor VA", "Konfirmasi dengan PIN"],
   "internetBanking": ["Login ke Bank Neo Internet Banking", "Pilih Transfer > Virtual Account", "Masukkan nomor VA", "Konfirmasi"]
 }'::jsonb),
 
 -- Virtual Account - Via Pakailink
-('VA', '451', 'BSI Virtual Account', 'pakailink', 'flat', 4500, 0, 10000, 50000000, 86400, 6, true,
+('VA', '451', 'VA BSI', 'pakailink', 'flat', 4500, 0, 10000, 50000000, 86400, 6, true,
 '{
   "atm": ["Masukkan kartu ATM dan PIN", "Pilih menu Transfer", "Masukkan nomor VA", "Konfirmasi pembayaran"],
   "mobileBanking": ["Login ke BSI Mobile", "Pilih Transfer", "Masukkan nomor VA", "Konfirmasi dengan PIN"]
 }'::jsonb),
 
-('VA', '028', 'OCBC Virtual Account', 'pakailink', 'flat', 4500, 0, 10000, 50000000, 86400, 7, true,
+('VA', '028', 'VA OCBC', 'pakailink', 'flat', 4500, 0, 10000, 50000000, 86400, 7, true,
 '{
   "mobileBanking": ["Login ke OCBC Mobile", "Pilih Transfer", "Masukkan nomor VA", "Konfirmasi dengan PIN"],
   "internetBanking": ["Login ke OCBC Internet Banking", "Pilih Transfer", "Masukkan nomor VA", "Konfirmasi"]
 }'::jsonb),
 
-('VA', '022', 'CIMB Niaga Virtual Account', 'pakailink', 'flat', 4500, 0, 10000, 50000000, 86400, 8, true,
+('VA', '022', 'VA CIMB NIAGA', 'pakailink', 'flat', 4500, 0, 10000, 50000000, 86400, 8, true,
 '{
   "atm": ["Masukkan kartu ATM dan PIN", "Pilih menu Transfer", "Masukkan nomor VA", "Konfirmasi pembayaran"],
   "mobileBanking": ["Login ke Octo Mobile", "Pilih Transfer", "Masukkan nomor VA", "Konfirmasi dengan PIN"]
 }'::jsonb),
 
-('VA', '013', 'Permata Virtual Account', 'pakailink', 'flat', 4500, 0, 10000, 50000000, 86400, 9, true,
+('VA', '013', 'VA PERMATA', 'pakailink', 'flat', 4500, 0, 10000, 50000000, 86400, 9, true,
 '{
   "atm": ["Masukkan kartu ATM dan PIN", "Pilih menu Transaksi Lainnya > Pembayaran > Pembayaran Lainnya", "Masukkan nomor VA", "Konfirmasi pembayaran"],
   "mobileBanking": ["Login ke PermataMobile X", "Pilih Bayar Tagihan", "Masukkan nomor VA", "Konfirmasi dengan PIN"]
 }'::jsonb),
 
-('VA', '147', 'Bank Muamalat Virtual Account', 'pakailink', 'flat', 4500, 0, 10000, 50000000, 86400, 10, true,
+('VA', '147', 'VA MUAMALAT', 'pakailink', 'flat', 4500, 0, 10000, 50000000, 86400, 10, true,
 '{
   "atm": ["Masukkan kartu ATM dan PIN", "Pilih menu Transfer", "Masukkan nomor VA", "Konfirmasi pembayaran"],
   "mobileBanking": ["Login ke Muamalat DIN", "Pilih Transfer", "Masukkan nomor VA", "Konfirmasi dengan PIN"]
 }'::jsonb),
 
-('VA', '011', 'Danamon Virtual Account', 'pakailink', 'flat', 4500, 0, 10000, 50000000, 86400, 11, true,
+('VA', '011', 'VA DANAMON', 'pakailink', 'flat', 4500, 0, 10000, 50000000, 86400, 11, true,
 '{
   "atm": ["Masukkan kartu ATM dan PIN", "Pilih menu Transfer", "Masukkan nomor VA", "Konfirmasi pembayaran"],
   "mobileBanking": ["Login ke D-Bank Pro", "Pilih Transfer > Virtual Account", "Masukkan nomor VA", "Konfirmasi dengan PIN"]
 }'::jsonb),
 
-('VA', '016', 'Maybank Virtual Account', 'pakailink', 'flat', 4500, 0, 10000, 50000000, 86400, 12, true,
+('VA', '016', 'VA MAYBANK', 'pakailink', 'flat', 4500, 0, 10000, 50000000, 86400, 12, true,
 '{
   "atm": ["Masukkan kartu ATM dan PIN", "Pilih menu Transfer", "Masukkan nomor VA", "Konfirmasi pembayaran"],
   "mobileBanking": ["Login ke M2U ID", "Pilih Transfer > Virtual Account", "Masukkan nomor VA", "Konfirmasi dengan PIN"]
 }'::jsonb),
 
-('VA', '019', 'Panin Virtual Account', 'pakailink', 'flat', 4500, 0, 10000, 50000000, 86400, 13, true,
+('VA', '019', 'VA PANIN', 'pakailink', 'flat', 4500, 0, 10000, 50000000, 86400, 13, true,
 '{
   "atm": ["Masukkan kartu ATM dan PIN", "Pilih menu Transfer", "Masukkan nomor VA", "Konfirmasi pembayaran"],
   "mobileBanking": ["Login ke PaninMobile", "Pilih Transfer > Virtual Account", "Masukkan nomor VA", "Konfirmasi dengan PIN"]
 }'::jsonb),
 
-('VA', '153', 'Sinarmas Virtual Account', 'pakailink', 'flat', 4500, 0, 10000, 50000000, 86400, 14, true,
+('VA', '153', 'VA SINARMAS', 'pakailink', 'flat', 4500, 0, 10000, 50000000, 86400, 14, true,
 '{
   "atm": ["Masukkan kartu ATM dan PIN", "Pilih menu Transfer", "Masukkan nomor VA", "Konfirmasi pembayaran"],
   "mobileBanking": ["Login ke SimobiPlus", "Pilih Transfer > Virtual Account", "Masukkan nomor VA", "Konfirmasi dengan PIN"]

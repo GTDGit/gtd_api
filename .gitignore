@@ -40,6 +40,8 @@ vendor/
 .idea/
 .vscode/
 .qodo/
+.cursor/
+.kiro/
 *.swp
 *.swo
 *~

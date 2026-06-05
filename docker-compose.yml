@@ -172,38 +172,8 @@ services:
       - ./keys:/app/keys:ro
       - ./certs:/app/certs:ro
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_healthy
-    restart: unless-stopped
-    networks:
-      - gtd-network
-
-  postgres:
-    image: postgres:15-alpine
-    container_name: gtd-postgres
-    deploy:
-      resources:
-        limits:
-          cpus: '1.5'
-          memory: 3G
-        reservations:
-          cpus: '0.5'
-          memory: 1G
-    environment:
-      - POSTGRES_USER=${DB_USER}
-      - POSTGRES_PASSWORD=${DB_PASSWORD}
-      - POSTGRES_DB=${DB_NAME}
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
     restart: unless-stopped
     networks:
       - gtd-network
@@ -230,5 +200,4 @@ networks:
     driver: bridge
 
 volumes:
-  postgres_data:
   redis_data:

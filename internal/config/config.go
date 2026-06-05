@@ -83,12 +83,13 @@ type XenditConfig struct {
 
 // DatabaseConfig contains PostgreSQL connection parameters.
 type DatabaseConfig struct {
-	Host     string
-	Port     string
-	User     string
-	Password string
-	Name     string
-	SSLMode  string
+	Host        string
+	Port        string
+	User        string
+	Password    string
+	Name        string
+	SSLMode     string
+	SSLRootCert string
 }
 
 // RedisConfig contains Redis connection parameters.
@@ -230,12 +231,13 @@ func Load() (*Config, error) {
 
 	// Database
 	cfg.DB = DatabaseConfig{
-		Host:     getEnv("DB_HOST", ""),
-		Port:     getEnv("DB_PORT", "5432"),
-		User:     getEnv("DB_USER", ""),
-		Password: getEnv("DB_PASSWORD", ""),
-		Name:     getEnv("DB_NAME", ""),
-		SSLMode:  getEnv("DB_SSLMODE", "disable"),
+		Host:        getEnv("DB_HOST", ""),
+		Port:        getEnv("DB_PORT", "5432"),
+		User:        getEnv("DB_USER", ""),
+		Password:    getEnv("DB_PASSWORD", ""),
+		Name:        getEnv("DB_NAME", ""),
+		SSLMode:     getEnv("DB_SSLMODE", "disable"),
+		SSLRootCert: getEnv("DB_SSLROOTCERT", ""),
 	}
 
 	// Redis

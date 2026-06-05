@@ -59,3 +59,9 @@ func (r *RedisClient) Exists(ctx context.Context, key string) (bool, error) {
 func (r *RedisClient) Close() error {
 	return r.client.Close()
 }
+
+// Raw returns the underlying go-redis client so callers can use native
+// commands (e.g. Publish/Subscribe) not exposed by the wrapper.
+func (r *RedisClient) Raw() *redis.Client {
+	return r.client
+}

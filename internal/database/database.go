@@ -28,6 +28,13 @@ func Connect(cfg *appconfig.DatabaseConfig) (*sqlx.DB, error) {
         url.QueryEscape(cfg.User), url.QueryEscape(cfg.Password), cfg.Host, cfg.Port, cfg.Name, cfg.SSLMode,
     )
 
+    // When a CA bundle path is configured (e.g., for TLS-verified RDS
+    // connections), append it as the sslrootcert parameter. Leaving
+    // SSLRootCert empty preserves the prior DSN exactly.
+    if cfg.SSLRootCert != "" {
+        dsn += "&sslrootcert=" + url.QueryEscape(cfg.SSLRootCert)
+    }
+
     // Retry policy: up to 5 attempts, exponential backoff starting at 500ms.
     const (
         maxAttempts = 5

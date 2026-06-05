@@ -17,13 +17,14 @@ services:
       - PORT=${PORT}
       - ENV=${ENV}
       - BASE_URL=${BASE_URL}
-      # Database - hardcode host for Docker networking
-      - DB_HOST=postgres
-      - DB_PORT=5432
+      # Database - env-sourced for RDS connectivity (TLS over verify-full)
+      - DB_HOST=${DB_HOST}
+      - DB_PORT=${DB_PORT}
       - DB_USER=${DB_USER}
       - DB_PASSWORD=${DB_PASSWORD}
       - DB_NAME=${DB_NAME}
       - DB_SSLMODE=${DB_SSLMODE}
+      - DB_SSLROOTCERT=${DB_SSLROOTCERT}
       # Redis - hardcode host for Docker networking
       - REDIS_HOST=redis
       - REDIS_PORT=6379
@@ -169,6 +170,7 @@ services:
       - 1.1.1.1
     volumes:
       - ./keys:/app/keys:ro
+      - ./certs:/app/certs:ro
     depends_on:
       postgres:
         condition: service_healthy

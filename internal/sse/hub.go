@@ -99,6 +99,22 @@ func (h *Hub) Broadcast(event *TransactionEvent) {
 	}
 }
 
+// BroadcastRaw sends an already-serialized payload to all connected clients
+// without re-marshaling. Used to fan out events received from the Redis
+// pub/sub bridge. Non-blocking: drops message if client buffer is full.
+func (h *Hub) BroadcastRaw(data []byte) {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	for _, c := range h.clients {
+		select {
+		case c.Events <- data:
+		default:
+			log.Warn().Str("client_id", c.ID).Msg("SSE client buffer full, dropping event")
+		}
+	}
+}
+
 // ClientCount returns the number of connected clients.
 func (h *Hub) ClientCount() int {
 	h.mu.RLock()

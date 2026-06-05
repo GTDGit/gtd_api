@@ -94,7 +94,6 @@ func main() {
 	skuRepo := repository.NewSKURepository(db)
 	trxRepo := repository.NewTransactionRepository(db)
 	cbRepo := repository.NewCallbackRepository(db)
-	adminRepo := repository.NewAdminUserRepository(db)
 	bankCodeRepo := repository.NewBankCodeRepository(db)
 	transferRepo := repository.NewTransferRepository(db)
 	ppobProviderRepo := repository.NewPPOBProviderRepository(db)
@@ -253,12 +252,7 @@ func main() {
 
 	// 6. Initialize services
 	authSvc := service.NewAuthService(clientRepo)
-	adminAuthSvc := service.NewAdminAuthService(adminRepo)
-	clientSvc := service.NewClientService(clientRepo)
 	productSvc := service.NewProductService(productRepo, skuRepo)
-	productMasterRepo := repository.NewProductMasterRepository(db)
-	productMasterSvc := service.NewProductMasterService(productMasterRepo)
-	productMgmtSvc := service.NewProductManagementService(productRepo, skuRepo, productMasterSvc)
 	callbackSvc := service.NewCallbackService(clientRepo, cbRepo, trxRepo)
 	// syncSvc disabled - Digiflazz sync no longer needed
 	_ = service.NewSyncService // keep import alive
@@ -267,14 +261,12 @@ func main() {
 	// Wire up callback service to transaction service for immediate retry on webhook
 	callbackSvc.SetTransactionRetrier(trxSvc)
 
-	// Initialize SSE hub and notifier for real-time admin updates
-	sseHub := sse.NewHub()
-	sseNotifier := sse.NewHubNotifier(sseHub)
+	// Initialize Redis-publishing SSE notifier. Admin now lives in the Gateway
+	// process; the API publishes domain events to Redis and the Gateway fans
+	// them out to admin SSE clients.
+	sseNotifier := sse.NewRedisPublishNotifier(redisClient.Raw())
 	trxSvc.SetNotifier(sseNotifier)
 	callbackSvc.SetNotifier(sseNotifier)
-
-	// Initialize Admin Transaction service
-	adminTrxSvc := service.NewAdminTransactionService(trxRepo, cbRepo, productSvc, trxSvc, callbackSvc)
 
 	// Initialize Provider Router for multi-provider PPOB
 	providerRouter := service.NewProviderRouter(ppobProviderRepo)
@@ -372,8 +364,6 @@ func main() {
 	paymentCallbackSvc := service.NewPaymentCallbackService(paymentRepo, clientRepo)
 	paymentSvc := service.NewPaymentService(paymentRepo, clientRepo, paymentRouter, paymentCallbackSvc)
 	paymentSvc.SetNotifier(sseNotifier)
-	adminPaymentSvc := service.NewAdminPaymentService(paymentRepo, clientRepo, paymentSvc, paymentCallbackSvc)
-	adminTransferSvc := service.NewAdminTransferService(transferRepo)
 
 	// Resolve webhook secrets for inbound signature verification.
 	pakailinkWebhookSecret := cfg.Payment.Pakailink.ClientSecret
@@ -389,24 +379,17 @@ func main() {
 
 	// 7. Initialize handlers
 	handlers := &Handlers{
-		Health:            handler.NewHealthHandler(digiProd),
-		Product:           handler.NewProductHandler(productSvc),
-		Balance:           handler.NewBalanceHandler(digiProd),
-		Transaction:       handler.NewTransactionHandler(trxSvc, productSvc),
-		Webhook:           handler.NewWebhookHandler(callbackSvc, cfg.Digiflazz.WebhookSecret),
-		Client:            handler.NewClientHandler(clientSvc),
-		ProductManagement: handler.NewProductManagementHandler(productMgmtSvc),
-		ProductMaster:     handler.NewProductMasterHandler(productMasterSvc),
-		AdminTransaction:  handler.NewAdminTransactionHandler(adminTrxSvc),
-		Auth:              handler.NewAuthHandler(adminAuthSvc),
-		BankCode:          handler.NewBankCodeHandler(bankCodeRepo),
-		Transfer:          handler.NewTransferHandler(transferSvc),
-		BNCConnector:      handler.NewBNCConnectorHandler(bncConnectorSvc),
-		BRIConnector:      handler.NewBRIConnectorHandler(briConnectorSvc),
-		PPOBProvider:      handler.NewPPOBProviderHandler(ppobProviderRepo),
-		ProviderCallback:  handler.NewProviderCallbackHandler(providerCallbackSvc, cfg.Alterra.CallbackPublicKey),
-		SSE:               handler.NewSSEHandler(sseHub),
-		Payment:           handler.NewPaymentHandler(paymentSvc),
+		Health:           handler.NewHealthHandler(digiProd),
+		Product:          handler.NewProductHandler(productSvc),
+		Balance:          handler.NewBalanceHandler(digiProd),
+		Transaction:      handler.NewTransactionHandler(trxSvc, productSvc),
+		Webhook:          handler.NewWebhookHandler(callbackSvc, cfg.Digiflazz.WebhookSecret),
+		BankCode:         handler.NewBankCodeHandler(bankCodeRepo),
+		Transfer:         handler.NewTransferHandler(transferSvc),
+		BNCConnector:     handler.NewBNCConnectorHandler(bncConnectorSvc),
+		BRIConnector:     handler.NewBRIConnectorHandler(briConnectorSvc),
+		ProviderCallback: handler.NewProviderCallbackHandler(providerCallbackSvc, cfg.Alterra.CallbackPublicKey),
+		Payment:          handler.NewPaymentHandler(paymentSvc),
 		PaymentWebhook: handler.NewPaymentWebhookHandler(
 			paymentRepo,
 			paymentSvc,
@@ -420,13 +403,10 @@ func main() {
 			transferSvc,
 			pakailinkWebhookSecret,
 		),
-		AdminPayment:  handler.NewAdminPaymentHandler(adminPaymentSvc),
-		AdminTransfer: handler.NewAdminTransferHandler(adminTransferSvc),
 	}
 
 	// 8. Initialize middleware
 	authMw := middleware.NewAuthMiddleware(authSvc)
-	jwtMw := middleware.NewJWTMiddleware()
 
 	// 9. Setup router
 	if cfg.Env == "production" {
@@ -436,7 +416,7 @@ func main() {
 	router.Use(gin.Recovery())
 	router.Use(middleware.CORSMiddleware())
 	router.Use(middleware.LoggingMiddleware())
-	setupRoutes(router, handlers, authMw, jwtMw)
+	setupRoutes(router, handlers, authMw)
 
 	// 10. Create context for graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
@@ -513,32 +493,23 @@ func main() {
 
 // Handlers groups all HTTP handlers used by the server.
 type Handlers struct {
-	Health            *handler.HealthHandler
-	Product           *handler.ProductHandler
-	Balance           *handler.BalanceHandler
-	Transaction       *handler.TransactionHandler
-	Webhook           *handler.WebhookHandler
-	Client            *handler.ClientHandler
-	ProductManagement *handler.ProductManagementHandler
-	ProductMaster     *handler.ProductMasterHandler
-	AdminTransaction  *handler.AdminTransactionHandler
-	Auth              *handler.AuthHandler
-	BankCode          *handler.BankCodeHandler
-	Transfer          *handler.TransferHandler
-	BNCConnector      *handler.BNCConnectorHandler
-	BRIConnector      *handler.BRIConnectorHandler
-	PPOBProvider      *handler.PPOBProviderHandler
-	ProviderCallback  *handler.ProviderCallbackHandler
-	SSE               *handler.SSEHandler
-	Payment              *handler.PaymentHandler
-	PaymentWebhook       *handler.PaymentWebhookHandler
-	DisbursementWebhook  *handler.DisbursementWebhookHandler
-	AdminPayment         *handler.AdminPaymentHandler
-	AdminTransfer        *handler.AdminTransferHandler
+	Health              *handler.HealthHandler
+	Product             *handler.ProductHandler
+	Balance             *handler.BalanceHandler
+	Transaction         *handler.TransactionHandler
+	Webhook             *handler.WebhookHandler
+	BankCode            *handler.BankCodeHandler
+	Transfer            *handler.TransferHandler
+	BNCConnector        *handler.BNCConnectorHandler
+	BRIConnector        *handler.BRIConnectorHandler
+	ProviderCallback    *handler.ProviderCallbackHandler
+	Payment             *handler.PaymentHandler
+	PaymentWebhook      *handler.PaymentWebhookHandler
+	DisbursementWebhook *handler.DisbursementWebhookHandler
 }
 
 // setupRoutes registers all routes.
-func setupRoutes(router *gin.Engine, handlers *Handlers, authMiddleware *middleware.AuthMiddleware, jwtMiddleware *middleware.JWTMiddleware) {
+func setupRoutes(router *gin.Engine, handlers *Handlers, authMiddleware *middleware.AuthMiddleware) {
 	// Provider webhook endpoints
 	router.POST("/v1/webhook/digiflazz", handlers.Webhook.HandleDigiflazzCallback)
 	router.POST("/v1/webhook/kiosbank", handlers.ProviderCallback.HandleKiosbankCallback)
@@ -588,100 +559,6 @@ func setupRoutes(router *gin.Engine, handlers *Handlers, authMiddleware *middlew
 		payment.GET("/:paymentId", handlers.Payment.GetPayment)
 		payment.POST("/:paymentId/cancel", handlers.Payment.CancelPayment)
 		payment.POST("/:paymentId/refund", handlers.Payment.RefundPayment)
-	}
-
-	// Admin routes
-	admin := router.Group("/v1/admin")
-	admin.POST("/auth/login", handlers.Auth.Login)
-	admin.GET("/sse", handlers.SSE.Stream) // JWT via ?token= query param (EventSource can't set headers)
-	admin.Use(jwtMiddleware.Handle())
-	{
-		// Client Management
-		admin.POST("/clients", handlers.Client.CreateClient)
-		admin.GET("/clients", handlers.Client.ListClients)
-		admin.GET("/clients/:id", handlers.Client.GetClient)
-		admin.GET("/clients/by-client-id/:client_id", handlers.Client.GetClientByClientID)
-		admin.PUT("/clients/:id", handlers.Client.UpdateClient)
-		admin.POST("/clients/:id/regenerate", handlers.Client.RegenerateKeys)
-
-		// Product Management
-		admin.GET("/products", handlers.ProductManagement.ListProducts)
-		admin.GET("/products/categories", handlers.ProductManagement.GetCategories)
-		admin.GET("/products/brands", handlers.ProductManagement.GetBrands)
-		admin.GET("/products/variants", handlers.ProductManagement.GetVariants)
-		admin.POST("/products", handlers.ProductManagement.CreateProduct)
-		admin.GET("/products/:id", handlers.ProductManagement.GetProduct)
-		admin.PUT("/products/:id", handlers.ProductManagement.UpdateProduct)
-		admin.DELETE("/products/:id", handlers.ProductManagement.DeleteProduct)
-
-		// Product Master (categories, brands, variants) CRUD
-		admin.GET("/product-master/categories", handlers.ProductMaster.ListCategories)
-		admin.POST("/product-master/categories", handlers.ProductMaster.CreateCategory)
-		admin.PUT("/product-master/categories/:id", handlers.ProductMaster.UpdateCategory)
-		admin.DELETE("/product-master/categories/:id", handlers.ProductMaster.DeleteCategory)
-		admin.GET("/product-master/brands", handlers.ProductMaster.ListBrands)
-		admin.POST("/product-master/brands", handlers.ProductMaster.CreateBrand)
-		admin.PUT("/product-master/brands/:id", handlers.ProductMaster.UpdateBrand)
-		admin.DELETE("/product-master/brands/:id", handlers.ProductMaster.DeleteBrand)
-		admin.GET("/product-master/variants", handlers.ProductMaster.ListVariants)
-		admin.POST("/product-master/variants", handlers.ProductMaster.CreateVariant)
-		admin.PUT("/product-master/variants/:id", handlers.ProductMaster.UpdateVariant)
-		admin.DELETE("/product-master/variants/:id", handlers.ProductMaster.DeleteVariant)
-
-		// SKU Management
-		admin.POST("/products/:id/skus", handlers.ProductManagement.CreateSKU)
-		admin.GET("/products/:id/skus", handlers.ProductManagement.GetProductSKUs)
-		admin.GET("/skus/:id", handlers.ProductManagement.GetSKU)
-		admin.PUT("/skus/:id", handlers.ProductManagement.UpdateSKU)
-		admin.DELETE("/skus/:id", handlers.ProductManagement.DeleteSKU)
-
-		// Transaction Management (Admin)
-		admin.GET("/transactions", handlers.AdminTransaction.ListTransactions)
-		admin.GET("/transactions/stats", handlers.AdminTransaction.GetStats)
-		admin.GET("/transactions/:id", handlers.AdminTransaction.GetTransaction)
-		admin.GET("/transactions/:id/logs", handlers.AdminTransaction.GetTransactionLogs)
-		admin.POST("/transactions/:id/retry", handlers.AdminTransaction.ManualRetry)
-
-		// PPOB Provider Management
-		admin.GET("/ppob/providers", handlers.PPOBProvider.ListProviders)
-		admin.GET("/ppob/providers/:id", handlers.PPOBProvider.GetProvider)
-		admin.PUT("/ppob/providers/:id/status", handlers.PPOBProvider.UpdateProviderStatus)
-
-		// PPOB Provider SKU Management
-		admin.GET("/ppob/providers/:id/skus", handlers.PPOBProvider.ListProviderSKUs)
-		admin.POST("/ppob/providers/:id/skus", handlers.PPOBProvider.CreateProviderSKU)
-		admin.GET("/ppob/products/:productId/provider-skus", handlers.PPOBProvider.GetProviderSKUsByProduct)
-		admin.PUT("/ppob/skus/:id", handlers.PPOBProvider.UpdateProviderSKU)
-		admin.DELETE("/ppob/skus/:id", handlers.PPOBProvider.DeleteProviderSKU)
-
-		// PPOB Provider Health
-		admin.GET("/ppob/health", handlers.PPOBProvider.GetAllProviderHealthToday)
-		admin.GET("/ppob/providers/:id/health", handlers.PPOBProvider.GetProviderHealth)
-
-		// Payment admin
-		admin.GET("/payments", handlers.AdminPayment.ListPayments)
-		admin.GET("/payments/stats", handlers.AdminPayment.Stats)
-		admin.GET("/payments/:id", handlers.AdminPayment.GetPayment)
-		admin.GET("/payments/:id/logs", handlers.AdminPayment.GetPaymentLogs)
-		admin.GET("/payments/:id/callbacks", handlers.AdminPayment.GetPaymentCallbacks)
-		admin.GET("/payments/:id/callback-logs", handlers.AdminPayment.ListCallbackLogs)
-		admin.GET("/payments/:id/refunds", handlers.AdminPayment.ListRefunds)
-		admin.POST("/payments/:id/retry-callback", handlers.AdminPayment.RetryCallback)
-		admin.POST("/payments/:id/refund", handlers.AdminPayment.Refund)
-
-		// Payment method admin
-		admin.GET("/payment-methods", handlers.AdminPayment.ListMethods)
-		admin.PUT("/payment-methods/:id", handlers.AdminPayment.UpdateMethod)
-
-		// Disbursement transfer admin
-		admin.GET("/transfers", handlers.AdminTransfer.ListTransfers)
-		admin.GET("/transfers/stats", handlers.AdminTransfer.Stats)
-		admin.GET("/transfers/:id", handlers.AdminTransfer.GetTransfer)
-		admin.GET("/transfers/:id/callbacks", handlers.AdminTransfer.ListCallbacks)
-
-		// Bank code admin (controls disbursement bank availability + VA support)
-		admin.GET("/bank-codes", handlers.BankCode.AdminListBankCodes)
-		admin.PUT("/bank-codes/:id", handlers.BankCode.AdminUpdateBankCode)
 	}
 }
 

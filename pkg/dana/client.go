@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/rs/zerolog/log"
 )
 
 const (
@@ -243,7 +245,7 @@ func (c *Client) Refund(ctx context.Context, req RefundRequest) (*RefundResponse
 func (c *Client) doSNAPRequest(ctx context.Context, method, path string, body any, out any) (json.RawMessage, error) {
 	token, err := c.GetAccessToken(ctx)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("dana: get access token: %w", err)
 	}
 	bodyBytes, err := json.Marshal(body)
 	if err != nil {
@@ -270,13 +272,13 @@ func (c *Client) doSNAPRequest(ctx context.Context, method, path string, body an
 func (c *Client) doRequest(req *http.Request, out any) (json.RawMessage, error) {
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("dana: http: %w", err)
 	}
 	defer resp.Body.Close()
 
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("dana: read body: %w", err)
 	}
 	if out != nil && len(raw) > 0 {
 		if err := json.Unmarshal(raw, out); err != nil {
@@ -285,6 +287,13 @@ func (c *Client) doRequest(req *http.Request, out any) (json.RawMessage, error) 
 	}
 	code, msg := extractResponseStatus(raw)
 	if resp.StatusCode >= http.StatusBadRequest || !isSuccessCode(code) {
+		log.Debug().
+			Str("url", req.URL.String()).
+			Int("httpStatus", resp.StatusCode).
+			Str("responseCode", code).
+			Str("responseMessage", msg).
+			RawJSON("raw", raw).
+			Msg("dana: provider error response")
 		return raw, &APIError{
 			HTTPStatus:      resp.StatusCode,
 			ResponseCode:    code,

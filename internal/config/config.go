@@ -48,6 +48,8 @@ type PakailinkConfig struct {
 	PrivateKeyPEM  string
 	CallbackURL    string
 	TerminalID     string // QRIS: terminal ID for QRIS MPM generation
+	StoreID        string // QRIS: store ID (optional)
+	MerchantID     string // QRIS: merchant ID (optional)
 }
 
 type DanaConfig struct {
@@ -409,6 +411,8 @@ func Load() (*Config, error) {
 			PrivateKeyPEM:  getEnv("PAKAILINK_PRIVATE_KEY_PEM", ""),
 			CallbackURL:    getEnv("PAKAILINK_CALLBACK_URL", ""),
 			TerminalID:     getEnv("PAKAILINK_TERMINAL_ID", ""),
+			StoreID:        getEnv("PAKAILINK_STORE_ID", ""),
+			MerchantID:     getEnv("PAKAILINK_MERCHANT_ID", ""),
 		},
 		Dana: DanaConfig{
 			Env:             getEnv("DANA_ENV", "SANDBOX"),

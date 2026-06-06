@@ -101,6 +101,8 @@ type GenerateQRRequest struct {
 	PartnerReferenceNo string
 	Amount             int64
 	TerminalID         string
+	StoreID            string // optional but may be required by some accounts
+	MerchantID         string // optional merchant identifier
 	CallbackURL        string
 	ExpiredDate        string // ISO 8601 (optional)
 	MerchantName       string

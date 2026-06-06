@@ -350,6 +350,14 @@ func main() {
 			pakailinkAdapter.SetTerminalID(cfg.Payment.Pakailink.TerminalID)
 			log.Info().Str("terminalId", cfg.Payment.Pakailink.TerminalID).Msg("Pakailink QRIS terminal ID configured")
 		}
+		if cfg.Payment.Pakailink.StoreID != "" {
+			pakailinkAdapter.SetStoreID(cfg.Payment.Pakailink.StoreID)
+			log.Info().Str("storeId", cfg.Payment.Pakailink.StoreID).Msg("Pakailink QRIS store ID configured")
+		}
+		if cfg.Payment.Pakailink.MerchantID != "" {
+			pakailinkAdapter.SetMerchantID(cfg.Payment.Pakailink.MerchantID)
+			log.Info().Str("merchantId", cfg.Payment.Pakailink.MerchantID).Msg("Pakailink QRIS merchant ID configured")
+		}
 		paymentRouter.Register(pakailinkAdapter)
 		log.Info().Msg("Pakailink payment adapter registered")
 	}

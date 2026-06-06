@@ -16,6 +16,8 @@ type PakailinkProviderClient struct {
 	client      *pakailink.Client
 	callbackURL string
 	terminalID  string // QRIS: terminal ID registered in Pakailink portal
+	storeID     string // QRIS: store ID (optional)
+	merchantID  string // QRIS: merchant ID (optional)
 }
 
 func NewPakailinkProviderClient(client *pakailink.Client, callbackURL string) *PakailinkProviderClient {
@@ -23,9 +25,13 @@ func NewPakailinkProviderClient(client *pakailink.Client, callbackURL string) *P
 }
 
 // SetTerminalID sets the Pakailink terminal ID used for QRIS MPM generation.
-func (p *PakailinkProviderClient) SetTerminalID(id string) {
-	p.terminalID = id
-}
+func (p *PakailinkProviderClient) SetTerminalID(id string) { p.terminalID = id }
+
+// SetStoreID sets the Pakailink store ID used for QRIS MPM generation.
+func (p *PakailinkProviderClient) SetStoreID(id string) { p.storeID = id }
+
+// SetMerchantID sets the Pakailink merchant ID used for QRIS MPM generation.
+func (p *PakailinkProviderClient) SetMerchantID(id string) { p.merchantID = id }
 
 func (p *PakailinkProviderClient) Code() models.PaymentProvider {
 	return models.ProviderPakailink
@@ -89,6 +95,8 @@ func (p *PakailinkProviderClient) createQRIS(ctx context.Context, method *models
 		CallbackURL:        firstNonEmpty(req.CallbackURL, p.callbackURL),
 		ExpiredDate:        formatPakailinkExpiry(req.ExpiredAt),
 		TerminalID:         p.terminalID,
+		StoreID:            p.storeID,
+		MerchantID:         p.merchantID,
 	}
 	resp, err := p.client.GenerateQRMPM(ctx, qrReq)
 	if err != nil {

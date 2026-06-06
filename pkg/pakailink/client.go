@@ -199,6 +199,12 @@ func (c *Client) GenerateQRMPM(ctx context.Context, req GenerateQRRequest) (*Gen
 	if req.TerminalID != "" {
 		body["terminalId"] = req.TerminalID
 	}
+	if req.StoreID != "" {
+		body["storeId"] = req.StoreID
+	}
+	if req.MerchantID != "" {
+		body["merchantId"] = req.MerchantID
+	}
 	info := map[string]any{}
 	if req.CallbackURL != "" {
 		info["callbackUrl"] = req.CallbackURL

@@ -24,9 +24,6 @@ func (p *MidtransProviderClient) Code() models.PaymentProvider {
 }
 
 func (p *MidtransProviderClient) CreatePayment(ctx context.Context, method *models.PaymentMethod, req *PaymentCreateRequest) (*PaymentCreateResponse, error) {
-	if req.Type != models.PaymentTypeEwallet {
-		return nil, newPaymentError(400, "UNSUPPORTED_PAYMENT_TYPE", "Midtrans adapter only supports e-wallets", nil)
-	}
 	cust := &midtrans.CustomerDetails{
 		FirstName: firstNonEmpty(req.CustomerName, "Customer"),
 		Email:     req.CustomerEmail,
@@ -35,33 +32,61 @@ func (p *MidtransProviderClient) CreatePayment(ctx context.Context, method *mode
 	var resp *midtrans.ChargeResponse
 	var err error
 	code := strings.ToUpper(strings.TrimSpace(method.Code))
-	switch code {
-	case "GOPAY":
-		resp, err = p.client.ChargeGoPay(ctx, req.PartnerRef, req.TotalAmount, firstNonEmpty(req.CallbackURL, p.callbackURL), cust)
-	case "SHOPEEPAY":
-		resp, err = p.client.ChargeShopeePay(ctx, req.PartnerRef, req.TotalAmount, firstNonEmpty(req.CallbackURL, p.callbackURL), cust)
+
+	switch req.Type {
+	case models.PaymentTypeQRIS:
+		// QRIS via Midtrans uses GoPay QR code (MPM/CPM)
+		resp, err = p.client.ChargeGoPayQR(ctx, req.PartnerRef, req.TotalAmount, firstNonEmpty(req.CallbackURL, p.callbackURL), cust)
+		if err != nil {
+			return nil, mapMidtransError(err)
+		}
+		// The QR code URL is the "generate-qr-code" action
+		qrCodeURL := resp.Action("generate-qr-code")
+		norm := PaymentDetailNormalized{
+			Provider:            string(models.ProviderMidtrans),
+			ProviderReferenceNo: resp.TransactionID,
+			QRCodeURL:           qrCodeURL,
+			// QRString will be populated when the QR image URL is fetched,
+			// but we surface the URL here so the client can render it directly.
+		}
+		return &PaymentCreateResponse{
+			ProviderRef: resp.TransactionID,
+			Normalized:  norm,
+			RawResponse: resp.RawResponse,
+		}, nil
+
+	case models.PaymentTypeEwallet:
+		switch code {
+		case "GOPAY":
+			resp, err = p.client.ChargeGoPay(ctx, req.PartnerRef, req.TotalAmount, firstNonEmpty(req.CallbackURL, p.callbackURL), cust)
+		case "SHOPEEPAY":
+			resp, err = p.client.ChargeShopeePay(ctx, req.PartnerRef, req.TotalAmount, firstNonEmpty(req.CallbackURL, p.callbackURL), cust)
+		default:
+			return nil, newPaymentError(400, "UNSUPPORTED_PAYMENT_TYPE", "Unsupported e-wallet code for Midtrans: "+code, nil)
+		}
+		if err != nil {
+			return nil, mapMidtransError(err)
+		}
+		norm := PaymentDetailNormalized{
+			Provider:            string(models.ProviderMidtrans),
+			ProviderReferenceNo: resp.TransactionID,
+		}
+		switch code {
+		case "GOPAY":
+			norm.QRCodeURL = resp.Action("generate-qr-code")
+			norm.Deeplink = resp.Action("deeplink-redirect")
+		case "SHOPEEPAY":
+			norm.Deeplink = resp.Action("deeplink-redirect")
+		}
+		return &PaymentCreateResponse{
+			ProviderRef: resp.TransactionID,
+			Normalized:  norm,
+			RawResponse: resp.RawResponse,
+		}, nil
+
 	default:
-		return nil, newPaymentError(400, "UNSUPPORTED_PAYMENT_TYPE", "Unsupported e-wallet code for Midtrans: "+code, nil)
+		return nil, newPaymentError(400, "UNSUPPORTED_PAYMENT_TYPE", "Midtrans adapter supports QRIS and e-wallet payments only", nil)
 	}
-	if err != nil {
-		return nil, mapMidtransError(err)
-	}
-	norm := PaymentDetailNormalized{
-		Provider:            string(models.ProviderMidtrans),
-		ProviderReferenceNo: resp.TransactionID,
-	}
-	switch code {
-	case "GOPAY":
-		norm.QRCodeURL = resp.Action("generate-qr-code")
-		norm.Deeplink = resp.Action("deeplink-redirect")
-	case "SHOPEEPAY":
-		norm.Deeplink = resp.Action("deeplink-redirect")
-	}
-	return &PaymentCreateResponse{
-		ProviderRef: resp.TransactionID,
-		Normalized:  norm,
-		RawResponse: resp.RawResponse,
-	}, nil
 }
 
 func (p *MidtransProviderClient) InquiryPayment(ctx context.Context, payment *models.Payment) (*PaymentInquiryResult, error) {

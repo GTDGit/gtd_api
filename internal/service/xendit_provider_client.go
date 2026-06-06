@@ -24,9 +24,17 @@ func (p *XenditProviderClient) Code() models.PaymentProvider {
 }
 
 func (p *XenditProviderClient) CreatePayment(ctx context.Context, method *models.PaymentMethod, req *PaymentCreateRequest) (*PaymentCreateResponse, error) {
-	if req.Type != models.PaymentTypeRetail {
-		return nil, newPaymentError(400, "UNSUPPORTED_PAYMENT_TYPE", "Xendit adapter only supports retail payments", nil)
+	switch req.Type {
+	case models.PaymentTypeRetail:
+		return p.createRetail(ctx, method, req)
+	case models.PaymentTypeQRIS:
+		return p.createQRIS(ctx, method, req)
+	default:
+		return nil, newPaymentError(400, "UNSUPPORTED_PAYMENT_TYPE", "Xendit adapter supports retail and QRIS payments", nil)
 	}
+}
+
+func (p *XenditProviderClient) createRetail(ctx context.Context, method *models.PaymentMethod, req *PaymentCreateRequest) (*PaymentCreateResponse, error) {
 	channel := strings.ToUpper(strings.TrimSpace(method.Code))
 	create := xendit.PaymentRequestCreate{
 		ReferenceID:   req.PartnerRef,
@@ -53,6 +61,36 @@ func (p *XenditProviderClient) CreatePayment(ctx context.Context, method *models
 		Provider:            string(models.ProviderXendit),
 		RetailName:          retailName,
 		PaymentCode:         resp.ChannelProperties.PaymentCode,
+		ProviderReferenceNo: resp.PaymentRequestID,
+	}
+	return &PaymentCreateResponse{
+		ProviderRef: resp.PaymentRequestID,
+		Normalized:  norm,
+		RawResponse: resp.RawResponse,
+	}, nil
+}
+
+func (p *XenditProviderClient) createQRIS(ctx context.Context, method *models.PaymentMethod, req *PaymentCreateRequest) (*PaymentCreateResponse, error) {
+	create := xendit.PaymentRequestCreate{
+		ReferenceID:   req.PartnerRef,
+		Type:          "PAY",
+		Country:       "ID",
+		Currency:      "IDR",
+		ChannelCode:   "QRIS",
+		RequestAmount: req.TotalAmount,
+		ChannelProperties: xendit.PaymentRequestChannelProperties{
+			ExpiresAt: formatXenditExpiry(req.ExpiredAt),
+		},
+		Description: req.Description,
+	}
+	resp, err := p.client.CreatePaymentRequest(ctx, create)
+	if err != nil {
+		return nil, mapXenditError(err)
+	}
+	norm := PaymentDetailNormalized{
+		Provider:            string(models.ProviderXendit),
+		QRString:            resp.ChannelProperties.QRString,
+		QRImageURL:          resp.ChannelProperties.QRImageURL,
 		ProviderReferenceNo: resp.PaymentRequestID,
 	}
 	return &PaymentCreateResponse{

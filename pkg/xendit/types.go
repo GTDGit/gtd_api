@@ -39,6 +39,9 @@ type PaymentRequestChannelProperties struct {
 	PayerName   string `json:"payer_name,omitempty"`
 	ExpiresAt   string `json:"expires_at,omitempty"`
 	PaymentCode string `json:"payment_code,omitempty"`
+	// QRIS-specific fields returned by Xendit
+	QRString   string `json:"qr_string,omitempty"`
+	QRImageURL string `json:"qr_image_url,omitempty"`
 }
 
 type PaymentRequestCreate struct {

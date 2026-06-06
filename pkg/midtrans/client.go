@@ -96,6 +96,25 @@ func (c *Client) ChargeShopeePay(ctx context.Context, orderID string, grossAmoun
 	return c.Charge(ctx, req)
 }
 
+// ChargeGoPay QR builds a GoPay charge that returns a scannable QR string
+// (QRIS/GoPay QR). This is the same charge as GoPay deeplink but the caller
+// should use the "generate-qr-code" action URL to fetch the QR image/string.
+func (c *Client) ChargeGoPayQR(ctx context.Context, orderID string, grossAmount int64, callbackURL string, customer *CustomerDetails) (*ChargeResponse, error) {
+	req := ChargeRequest{
+		PaymentType: PaymentTypeGoPay,
+		TransactionDetails: TransactionDetails{
+			OrderID:     orderID,
+			GrossAmount: grossAmount,
+		},
+		GoPay: &GoPayOptions{
+			EnableCallback: true,
+			CallbackURL:    callbackURL,
+		},
+		CustomerDetails: customer,
+	}
+	return c.Charge(ctx, req)
+}
+
 // Status performs GET /v2/{order_id}/status.
 func (c *Client) Status(ctx context.Context, orderID string) (*StatusResponse, error) {
 	path := "/v2/" + orderID + "/status"

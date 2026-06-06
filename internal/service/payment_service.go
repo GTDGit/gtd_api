@@ -52,19 +52,56 @@ func newPaymentError(httpStatus int, code, message string, err error) *PaymentSe
 // Request/response DTOs
 // ----------------------------------------------------------------------------
 
+// PaymentMethodRequest is the nested paymentMethod object in the create request.
+type PaymentMethodRequest struct {
+	Type string `json:"type"`
+	Code string `json:"code"`
+}
+
+// CustomerRequest is the nested customer object in the create request.
+type CustomerRequest struct {
+	Name  string `json:"name,omitempty"`
+	Email string `json:"email,omitempty"`
+	Phone string `json:"phone,omitempty"`
+}
+
+// CreatePaymentRequest is the unified payment creation payload.
+// Supports both new nested format and legacy flat fields for backward compat.
 type CreatePaymentRequest struct {
-	ReferenceID   string          `json:"referenceId"`
-	PaymentType   string          `json:"paymentType"`
-	PaymentCode   string          `json:"paymentCode"`
-	Amount        int64           `json:"amount"`
-	ExpiredAt     string          `json:"expiredAt,omitempty"`
-	CustomerName  string          `json:"customerName,omitempty"`
-	CustomerEmail string          `json:"customerEmail,omitempty"`
-	CustomerPhone string          `json:"customerPhone,omitempty"`
-	Description   string          `json:"description,omitempty"`
-	CallbackURL   string          `json:"callbackUrl,omitempty"`
-	ReturnURL     string          `json:"returnUrl,omitempty"`
-	Metadata      json.RawMessage `json:"metadata,omitempty"`
+	ReferenceID string               `json:"referenceId"`
+	PaymentMethod *PaymentMethodRequest `json:"paymentMethod,omitempty"`
+	Customer    *CustomerRequest      `json:"customer,omitempty"`
+	Amount      int64                `json:"amount"`
+	Description string               `json:"description,omitempty"`
+	ExpiredAt   string               `json:"expiredAt,omitempty"`
+	CallbackURL string               `json:"callbackUrl,omitempty"`
+	ReturnURL   string               `json:"returnUrl,omitempty"`
+	Metadata    json.RawMessage      `json:"metadata,omitempty"`
+
+	// Legacy flat fields — kept for backward compatibility.
+	// If paymentMethod is set, these are ignored.
+	PaymentType   string `json:"paymentType,omitempty"`
+	PaymentCode   string `json:"paymentCode,omitempty"`
+	CustomerName  string `json:"customerName,omitempty"`
+	CustomerEmail string `json:"customerEmail,omitempty"`
+	CustomerPhone string `json:"customerPhone,omitempty"`
+}
+
+// resolvePaymentTypeCode resolves the payment type and code from either the
+// new nested paymentMethod field or the legacy flat fields.
+func (r *CreatePaymentRequest) resolvePaymentTypeCode() (paymentType, paymentCode string) {
+	if r.PaymentMethod != nil && r.PaymentMethod.Type != "" {
+		return r.PaymentMethod.Type, r.PaymentMethod.Code
+	}
+	return r.PaymentType, r.PaymentCode
+}
+
+// resolveCustomer returns customer fields from either nested or flat fields.
+func (r *CreatePaymentRequest) resolveCustomer() (name, email, phone string) {
+	if r.Customer != nil {
+		return r.Customer.Name, r.Customer.Email, r.Customer.Phone
+	}
+	return r.CustomerName, r.CustomerEmail, r.CustomerPhone
 }
 
 type CreateRefundRequest struct {
@@ -208,14 +245,20 @@ func (s *PaymentService) CreatePayment(ctx context.Context, req *CreatePaymentRe
 	}
 
 	req.ReferenceID = strings.TrimSpace(req.ReferenceID)
-	req.PaymentType = strings.ToUpper(strings.TrimSpace(req.PaymentType))
-	req.PaymentCode = strings.TrimSpace(req.PaymentCode)
+
+	// Resolve payment type/code from nested or flat fields.
+	rawType, rawCode := req.resolvePaymentTypeCode()
+	rawType = strings.ToUpper(strings.TrimSpace(rawType))
+	rawCode = strings.TrimSpace(rawCode)
+
+	// Resolve customer fields from nested or flat fields.
+	customerName, customerEmail, customerPhone := req.resolveCustomer()
 
 	if req.ReferenceID == "" {
 		return nil, newPaymentError(400, "MISSING_FIELD", "referenceId is required", nil)
 	}
-	if req.PaymentType == "" || req.PaymentCode == "" {
-		return nil, newPaymentError(400, "MISSING_FIELD", "paymentType and paymentCode are required", nil)
+	if rawType == "" || rawCode == "" {
+		return nil, newPaymentError(400, "MISSING_FIELD", "paymentMethod.type and paymentMethod.code are required", nil)
 	}
 	if req.Amount <= 0 {
 		return nil, newPaymentError(400, "INVALID_AMOUNT", "amount must be positive", nil)
@@ -228,7 +271,7 @@ func (s *PaymentService) CreatePayment(ctx context.Context, req *CreatePaymentRe
 		return nil, err
 	}
 
-	method, err := s.paymentRepo.GetMethodByTypeCode(ctx, models.PaymentType(req.PaymentType), req.PaymentCode)
+	method, err := s.paymentRepo.GetMethodByTypeCode(ctx, models.PaymentType(rawType), rawCode)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, newPaymentError(404, "PAYMENT_METHOD_NOT_FOUND", "Payment method not found", nil)
@@ -273,16 +316,16 @@ func (s *PaymentService) CreatePayment(ctx context.Context, req *CreatePaymentRe
 		ExpiredAt:       expiredAt,
 		Metadata:        metadata,
 	}
-	if req.CustomerName != "" {
-		v := req.CustomerName
+	if customerName != "" {
+		v := customerName
 		payment.CustomerName = &v
 	}
-	if req.CustomerEmail != "" {
-		v := req.CustomerEmail
+	if customerEmail != "" {
+		v := customerEmail
 		payment.CustomerEmail = &v
 	}
-	if req.CustomerPhone != "" {
-		v := req.CustomerPhone
+	if customerPhone != "" {
+		v := customerPhone
 		payment.CustomerPhone = &v
 	}
 	if req.Description != "" {
@@ -312,9 +355,9 @@ func (s *PaymentService) CreatePayment(ctx context.Context, req *CreatePaymentRe
 		TotalAmount:   totalAmount,
 		ExpiredAt:     expiredAt,
 		Description:   req.Description,
-		CustomerName:  req.CustomerName,
-		CustomerEmail: req.CustomerEmail,
-		CustomerPhone: req.CustomerPhone,
+		CustomerName:  customerName,
+		CustomerEmail: customerEmail,
+		CustomerPhone: customerPhone,
 		CallbackURL:   req.CallbackURL,
 		ReturnURL:     req.ReturnURL,
 	}

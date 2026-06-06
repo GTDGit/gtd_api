@@ -48,11 +48,12 @@ func (p *DanaProviderClient) createOrder(ctx context.Context, method *models.Pay
 		PartnerReferenceNo: req.PartnerRef,
 		Amount:             req.TotalAmount,
 		ValidUpTo:          formatDanaExpiry(req.ExpiredAt),
-		NotificationURL:    firstNonEmpty(req.CallbackURL, p.notificationURL),
-		ReturnURL:          firstNonEmpty(req.ReturnURL, p.returnURL),
-		PayMethod:          payMethod,
-		PayOption:          payOption,
-		OrderTitle:         firstNonEmpty(req.Description, method.Name),
+		// urlParams is mandatory: notification URL must always be set.
+		NotificationURL: firstNonEmpty(req.CallbackURL, p.notificationURL, "https://dev-api.gtd.co.id/v1/webhook/dana"),
+		ReturnURL:       firstNonEmpty(req.ReturnURL, p.returnURL),
+		PayMethod:       payMethod,
+		PayOption:       payOption,
+		OrderTitle:      firstNonEmpty(req.Description, method.Name),
 	}
 	// externalStoreId is required for QRIS — must be a registered store ID from DANA portal.
 	if p.externalStoreID != "" {

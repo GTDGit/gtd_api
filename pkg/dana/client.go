@@ -135,13 +135,16 @@ func (c *Client) CreateOrder(ctx context.Context, req CreateOrderRequest) (*Crea
 			"isDeeplink": "Y",
 		})
 	}
-	if req.NotificationURL != "" {
-		urls = append(urls, map[string]any{
-			"url":        req.NotificationURL,
-			"type":       "NOTIFICATION",
-			"isDeeplink": "N",
-		})
+	// NOTIFICATION url is mandatory per DANA docs
+	notifURL := req.NotificationURL
+	if notifURL == "" {
+		notifURL = "https://dev-api.gtd.co.id/v1/webhook/dana" // fallback
 	}
+	urls = append(urls, map[string]any{
+		"url":        notifURL,
+		"type":       "NOTIFICATION",
+		"isDeeplink": "N",
+	})
 
 	amount := Amount{Value: formatAmount(req.Amount), Currency: "IDR"}
 	payOption := map[string]any{

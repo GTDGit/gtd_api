@@ -63,7 +63,8 @@ type DanaConfig struct {
 	PrivateKeyPEM   string
 	CallbackURL     string
 	ReturnURL       string
-	ExternalStoreID string // QRIS: store ID from DANA Merchant Portal
+	ExternalStoreID string // QRIS Acquirer: store ID (required for QRIS)
+	TerminalID      string // QRIS Acquirer: terminal ID (optional)
 }
 
 type MidtransConfig struct {
@@ -426,6 +427,7 @@ func Load() (*Config, error) {
 			CallbackURL:     getEnv("DANA_CALLBACK_URL", ""),
 			ReturnURL:       getEnv("DANA_RETURN_URL", ""),
 			ExternalStoreID: getEnv("DANA_EXTERNAL_STORE_ID", ""),
+			TerminalID:      getEnv("DANA_TERMINAL_ID", ""),
 		},
 		Midtrans: MidtransConfig{
 			Env:           getEnv("MIDTRANS_ENV", "SANDBOX"),

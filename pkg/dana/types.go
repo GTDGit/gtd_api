@@ -146,3 +146,30 @@ type WebhookPayload struct {
 	AdditionalInfo             map[string]any `json:"additionalInfo,omitempty"`
 	RawBody                    []byte         `json:"-"`
 }
+
+// GenerateQRISRequest is the input for DANA QRIS Acquirer endpoint.
+type GenerateQRISRequest struct {
+	PartnerReferenceNo string // max 25 chars
+	StoreID            string // required: unique shop identifier
+	TerminalID         string // optional: terminal identifier
+	SubMerchantID      string // optional
+	Amount             int64
+	ValidityPeriod     string // ISO 8601 +07:00, optional (default 30 min)
+}
+
+// GenerateQRISResponse matches the DANA QRIS Acquirer generate response.
+type GenerateQRISResponse struct {
+	ResponseCode       string          `json:"responseCode"`
+	ResponseMessage    string          `json:"responseMessage"`
+	ReferenceNo        string          `json:"referenceNo"`
+	PartnerReferenceNo string          `json:"partnerReferenceNo"`
+	QRContent          string          `json:"qrContent"`   // QRIS string
+	QRUrl              string          `json:"qrUrl"`       // URL to QR image
+	QRImage            string          `json:"qrImage"`     // base64 QR image
+	RedirectURL        string          `json:"redirectUrl"`
+	MerchantName       string          `json:"merchantName"`
+	StoreID            string          `json:"storeId"`
+	TerminalID         string          `json:"terminalId"`
+	AdditionalInfo     map[string]any  `json:"additionalInfo,omitempty"`
+	RawResponse        json.RawMessage `json:"-"`
+}

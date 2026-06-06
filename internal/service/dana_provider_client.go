@@ -15,17 +15,22 @@ type DanaProviderClient struct {
 	client          *dana.Client
 	notificationURL string
 	returnURL       string
-	externalStoreID string // QRIS: store ID registered in DANA portal (optional)
+	storeID         string // QRIS Acquirer: store ID (required)
+	terminalID      string // QRIS Acquirer: terminal ID (optional)
 }
 
 func NewDanaProviderClient(client *dana.Client, notificationURL, returnURL string) *DanaProviderClient {
 	return &DanaProviderClient{client: client, notificationURL: notificationURL, returnURL: returnURL}
 }
 
-// SetExternalStoreID sets the DANA externalStoreId used for QRIS orders.
-// Obtain this from DANA Merchant Portal → Shops.
+// SetExternalStoreID sets the DANA store ID for QRIS Acquirer (externalStoreId).
 func (p *DanaProviderClient) SetExternalStoreID(id string) {
-	p.externalStoreID = id
+	p.storeID = id
+}
+
+// SetTerminalID sets the DANA terminal ID for QRIS Acquirer.
+func (p *DanaProviderClient) SetTerminalID(id string) {
+	p.terminalID = id
 }
 
 func (p *DanaProviderClient) Code() models.PaymentProvider {
@@ -37,10 +42,49 @@ func (p *DanaProviderClient) CreatePayment(ctx context.Context, method *models.P
 	case models.PaymentTypeEwallet:
 		return p.createOrder(ctx, method, req, dana.PayMethodBalance, "")
 	case models.PaymentTypeQRIS:
-		return p.createOrder(ctx, method, req, dana.PayMethodNetworkPay, dana.PayOptionQRIS)
+		// Use DANA QRIS Acquirer API (/v1.0/qr/qr-mpm-generate.htm)
+		return p.createQRIS(ctx, method, req)
 	default:
 		return nil, newPaymentError(400, "UNSUPPORTED_PAYMENT_TYPE", "DANA does not support this payment type", nil)
 	}
+}
+
+func (p *DanaProviderClient) createQRIS(ctx context.Context, method *models.PaymentMethod, req *PaymentCreateRequest) (*PaymentCreateResponse, error) {
+	// partnerReferenceNo max 25 chars per DANA QRIS docs
+	refNo := req.PartnerRef
+	if len(refNo) > 25 {
+		refNo = refNo[:25]
+	}
+
+	storeID := p.storeID
+	if storeID == "" {
+		return nil, newPaymentError(400, "MISSING_CONFIG", "DANA QRIS requires DANA_EXTERNAL_STORE_ID to be configured", nil)
+	}
+
+	qrisReq := dana.GenerateQRISRequest{
+		PartnerReferenceNo: refNo,
+		StoreID:            storeID,
+		TerminalID:         p.terminalID,
+		Amount:             req.TotalAmount,
+		ValidityPeriod:     formatDanaExpiry(req.ExpiredAt),
+	}
+
+	resp, err := p.client.GenerateQRIS(ctx, qrisReq)
+	if err != nil {
+		return nil, mapDanaError(err)
+	}
+
+	norm := PaymentDetailNormalized{
+		Provider:            string(models.ProviderDanaDirect),
+		ProviderReferenceNo: resp.ReferenceNo,
+		QRString:            resp.QRContent,
+		QRImageURL:          resp.QRUrl,
+	}
+	return &PaymentCreateResponse{
+		ProviderRef: resp.ReferenceNo,
+		Normalized:  norm,
+		RawResponse: resp.RawResponse,
+	}, nil
 }
 
 func (p *DanaProviderClient) createOrder(ctx context.Context, method *models.PaymentMethod, req *PaymentCreateRequest, payMethod, payOption string) (*PaymentCreateResponse, error) {
@@ -54,10 +98,6 @@ func (p *DanaProviderClient) createOrder(ctx context.Context, method *models.Pay
 		PayMethod:       payMethod,
 		PayOption:       payOption,
 		OrderTitle:      firstNonEmpty(req.Description, method.Name),
-	}
-	// externalStoreId is required for QRIS — must be a registered store ID from DANA portal.
-	if p.externalStoreID != "" {
-		order.ExternalStoreID = p.externalStoreID
 	}
 	resp, err := p.client.CreateOrder(ctx, order)
 	if err != nil {

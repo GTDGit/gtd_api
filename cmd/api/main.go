@@ -365,7 +365,11 @@ func main() {
 		danaAdapter := service.NewDanaProviderClient(danaClient, cfg.Payment.Dana.CallbackURL, cfg.Payment.Dana.ReturnURL)
 		if cfg.Payment.Dana.ExternalStoreID != "" {
 			danaAdapter.SetExternalStoreID(cfg.Payment.Dana.ExternalStoreID)
-			log.Info().Str("externalStoreId", cfg.Payment.Dana.ExternalStoreID).Msg("DANA external store ID configured")
+			log.Info().Str("storeId", cfg.Payment.Dana.ExternalStoreID).Msg("DANA QRIS store ID configured")
+		}
+		if cfg.Payment.Dana.TerminalID != "" {
+			danaAdapter.SetTerminalID(cfg.Payment.Dana.TerminalID)
+			log.Info().Str("terminalId", cfg.Payment.Dana.TerminalID).Msg("DANA QRIS terminal ID configured")
 		}
 		paymentRouter.Register(danaAdapter)
 		log.Info().Msg("DANA payment adapter registered")

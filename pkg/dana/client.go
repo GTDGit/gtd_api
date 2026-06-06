@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"crypto/rsa"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -16,12 +18,17 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// sha256_sum and encodeHex are thin wrappers to avoid direct import usage confusion.
+func sha256_sum(b []byte) [32]byte { return sha256.Sum256(b) }
+func encodeHex(b []byte) string    { return hex.EncodeToString(b) }
+
 const (
-	TokenPath       = "/v1.0/access-token/b2b.htm"
-	CreateOrderPath = "/payment-gateway/v1.0/debit/payment-host-to-host.htm"
-	InquiryPath     = "/payment-gateway/v1.0/debit/status.htm"
-	CancelPath      = "/payment-gateway/v1.0/debit/cancel.htm"
-	RefundPath      = "/payment-gateway/v1.0/debit/refund.htm"
+	TokenPath         = "/v1.0/access-token/b2b.htm"
+	CreateOrderPath   = "/payment-gateway/v1.0/debit/payment-host-to-host.htm"
+	InquiryPath       = "/payment-gateway/v1.0/debit/status.htm"
+	CancelPath        = "/payment-gateway/v1.0/debit/cancel.htm"
+	RefundPath        = "/payment-gateway/v1.0/debit/refund.htm"
+	GenerateQRISPath  = "/v1.0/qr/qr-mpm-generate.htm"  // QRIS Acquirer endpoint
 
 	DefaultChannelID = "95221"
 	ServiceCodeDebit = "54"
@@ -191,6 +198,94 @@ func (c *Client) CreateOrder(ctx context.Context, req CreateOrderRequest) (*Crea
 	}
 	resp.RawResponse = raw
 	return &resp, nil
+}
+
+// GenerateQRIS creates a QRIS MPM using DANA QRIS Acquirer API.
+// Uses asymmetric signature (no access token) per DANA QRIS docs.
+// Returns qrContent (QRIS string) directly in the response.
+func (c *Client) GenerateQRIS(ctx context.Context, req GenerateQRISRequest) (*GenerateQRISResponse, error) {
+	wib := time.FixedZone("WIB", 7*3600)
+
+	validityPeriod := req.ValidityPeriod
+	if validityPeriod == "" {
+		validityPeriod = time.Now().In(wib).Add(30 * time.Minute).Format("2006-01-02T15:04:05+07:00")
+	}
+
+	body := map[string]any{
+		"merchantId":         c.cfg.MerchantID,
+		"storeId":            req.StoreID,
+		"partnerReferenceNo": req.PartnerReferenceNo,
+		"amount": Amount{
+			Value:    formatAmount(req.Amount),
+			Currency: "IDR",
+		},
+		"validityPeriod": validityPeriod,
+		"additionalInfo": map[string]any{
+			"envInfo": map[string]any{
+				"sourcePlatform":    "IPG",
+				"terminalType":      "SYSTEM",
+				"orderTerminalType": "SYSTEM",
+			},
+		},
+	}
+	if req.TerminalID != "" {
+		body["terminalId"] = req.TerminalID
+	}
+	if req.SubMerchantID != "" {
+		body["subMerchantId"] = req.SubMerchantID
+	}
+
+	var resp GenerateQRISResponse
+	raw, err := c.doAsymmetricRequest(ctx, http.MethodPost, GenerateQRISPath, body, &resp)
+	if err != nil {
+		return nil, err
+	}
+	resp.RawResponse = raw
+	return &resp, nil
+}
+
+// doAsymmetricRequest signs the request with RSA private key (no access token needed).
+// QRIS Acquirer uses asymmetric signature per DANA docs.
+// StringToSign = HTTPMethod + ":" + Path + ":" + LowerCase(HexEncode(SHA256(MinifiedBody))) + ":" + X-TIMESTAMP
+func (c *Client) doAsymmetricRequest(ctx context.Context, method, path string, body any, out any) (json.RawMessage, error) {
+	bodyBytes, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	ts := formatTimestamp(time.Now())
+
+	bodyHash := sha256_sum(minifyJSON(bodyBytes))
+	stringToSign := strings.Join([]string{
+		method,
+		path,
+		strings.ToLower(encodeHex(bodyHash[:])),
+		ts,
+	}, ":")
+	sig, err := signAsymmetricDirect(stringToSign, c.privateKey)
+	if err != nil {
+		return nil, fmt.Errorf("dana: asymmetric sign: %w", err)
+	}
+
+	externalID := strconv.FormatInt(time.Now().UnixNano(), 10)
+
+	log.Debug().
+		Str("method", method).
+		Str("path", path).
+		RawJSON("body", bodyBytes).
+		Msg("dana: asymmetric QRIS request")
+
+	req, err := http.NewRequestWithContext(ctx, method, c.cfg.BaseURL+path, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-TIMESTAMP", ts)
+	req.Header.Set("X-SIGNATURE", sig)
+	req.Header.Set("X-PARTNER-ID", c.cfg.PartnerID)
+	req.Header.Set("X-EXTERNAL-ID", externalID)
+	req.Header.Set("CHANNEL-ID", c.cfg.ChannelID)
+
+	return c.doRequest(req, out)
 }
 
 func (c *Client) InquiryOrder(ctx context.Context, partnerReferenceNo string) (*InquiryOrderResponse, error) {

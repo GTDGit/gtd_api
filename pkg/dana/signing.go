@@ -28,6 +28,17 @@ func signAsymmetric(clientID, timestamp string, key *rsa.PrivateKey) (string, er
 	return base64.StdEncoding.EncodeToString(sig), nil
 }
 
+// signAsymmetricDirect signs an arbitrary string with the private key.
+// Used for transactional QRIS endpoints that require asymmetric signature.
+func signAsymmetricDirect(stringToSign string, key *rsa.PrivateKey) (string, error) {
+	hashed := sha256.Sum256([]byte(stringToSign))
+	sig, err := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, hashed[:])
+	if err != nil {
+		return "", err
+	}
+	return base64.StdEncoding.EncodeToString(sig), nil
+}
+
 // signSymmetric returns Base64(HMAC-SHA512(<method>:<path>:<token>:<hex(sha256(body))>:<ts>, secret)).
 func signSymmetric(method, path, accessToken string, body []byte, timestamp, clientSecret string) string {
 	bodyHash := sha256.Sum256(minifyJSON(body))

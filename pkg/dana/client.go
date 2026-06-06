@@ -261,6 +261,12 @@ func (c *Client) doSNAPRequest(ctx context.Context, method, path string, body an
 	sig := signSymmetric(method, path, token, bodyBytes, ts, c.cfg.ClientSecret)
 	externalID := strconv.FormatInt(time.Now().UnixNano(), 10)
 
+	log.Debug().
+		Str("method", method).
+		Str("path", path).
+		RawJSON("body", bodyBytes).
+		Msg("dana: outgoing request")
+
 	req, err := http.NewRequestWithContext(ctx, method, c.cfg.BaseURL+path, bytes.NewReader(bodyBytes))
 	if err != nil {
 		return nil, err

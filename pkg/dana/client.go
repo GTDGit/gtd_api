@@ -159,7 +159,6 @@ func (c *Client) CreateOrder(ctx context.Context, req CreateOrderRequest) (*Crea
 		"partnerReferenceNo": req.PartnerReferenceNo,
 		"merchantId":         req.MerchantID,
 		"amount":             amount,
-		"validUpTo":          req.ValidUpTo,
 		"urlParams":          urls,
 		"payOptionDetails":   []any{payOption},
 		"additionalInfo": map[string]any{
@@ -173,6 +172,13 @@ func (c *Client) CreateOrder(ctx context.Context, req CreateOrderRequest) (*Crea
 				"terminalType":   "SYSTEM",
 			},
 		},
+	}
+	if req.ValidUpTo != "" {
+		body["validUpTo"] = req.ValidUpTo
+	} else {
+		// Default to 30 minutes from now if not specified
+		wib := time.FixedZone("WIB", 7*3600)
+		body["validUpTo"] = time.Now().In(wib).Add(30 * time.Minute).Format("2006-01-02T15:04:05+07:00")
 	}
 	if req.ExternalStoreID != "" {
 		body["externalStoreId"] = req.ExternalStoreID

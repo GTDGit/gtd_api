@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/rs/zerolog/log"
 )
 
 const (
@@ -283,6 +285,13 @@ func (c *Client) doRequest(req *http.Request, out any) (json.RawMessage, error) 
 
 	code, msg := extractResponseStatus(raw)
 	if resp.StatusCode >= http.StatusBadRequest || !isSuccessCode(code) {
+		log.Debug().
+			Str("url", req.URL.String()).
+			Int("httpStatus", resp.StatusCode).
+			Str("responseCode", code).
+			Str("responseMessage", msg).
+			RawJSON("raw", raw).
+			Msg("pakailink: provider error response")
 		return raw, &APIError{
 			HTTPStatus:      resp.StatusCode,
 			ResponseCode:    code,

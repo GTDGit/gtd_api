@@ -96,23 +96,27 @@ func (c *Client) ChargeShopeePay(ctx context.Context, orderID string, grossAmoun
 	return c.Charge(ctx, req)
 }
 
-// ChargeGoPay QR builds a GoPay charge that returns a scannable QR string
-// (QRIS/GoPay QR). This is the same charge as GoPay deeplink but the caller
-// should use the "generate-qr-code" action URL to fetch the QR image/string.
-func (c *Client) ChargeGoPayQR(ctx context.Context, orderID string, grossAmount int64, callbackURL string, customer *CustomerDetails) (*ChargeResponse, error) {
+// ChargeQRIS creates a national QRIS transaction — returns qr_string directly.
+// acquirer: "gopay" (default) or "airpay shopee"
+func (c *Client) ChargeQRIS(ctx context.Context, orderID string, grossAmount int64, acquirer string, cust *CustomerDetails) (*ChargeResponse, error) {
+	if acquirer == "" {
+		acquirer = "gopay"
+	}
 	req := ChargeRequest{
-		PaymentType: PaymentTypeGoPay,
+		PaymentType: PaymentTypeQRIS,
 		TransactionDetails: TransactionDetails{
 			OrderID:     orderID,
 			GrossAmount: grossAmount,
 		},
-		GoPay: &GoPayOptions{
-			EnableCallback: true,
-			CallbackURL:    callbackURL,
-		},
-		CustomerDetails: customer,
+		QRIS:            &QRISOptions{Acquirer: acquirer},
+		CustomerDetails: cust,
 	}
 	return c.Charge(ctx, req)
+}
+
+// ChargeGoPayQR is kept for backward-compat; use ChargeQRIS for universal QRIS.
+func (c *Client) ChargeGoPayQR(ctx context.Context, orderID string, grossAmount int64, callbackURL string, customer *CustomerDetails) (*ChargeResponse, error) {
+	return c.ChargeQRIS(ctx, orderID, grossAmount, "gopay", customer)
 }
 
 // Status performs GET /v2/{order_id}/status.

@@ -23,6 +23,7 @@ func (e *APIError) Error() string {
 const (
 	PaymentTypeGoPay     = "gopay"
 	PaymentTypeShopeePay = "shopeepay"
+	PaymentTypeQRIS      = "qris" // National QRIS — returns qr_string directly
 
 	StatusPending    = "pending"
 	StatusSettlement = "settlement"
@@ -63,6 +64,11 @@ type ShopeePayOptions struct {
 	CallbackURL string `json:"callback_url"`
 }
 
+// QRISOptions sets the acquirer for Midtrans national QRIS.
+type QRISOptions struct {
+	Acquirer string `json:"acquirer,omitempty"` // "gopay" (default), "airpay shopee", etc.
+}
+
 type ChargeRequest struct {
 	PaymentType        string              `json:"payment_type"`
 	TransactionDetails TransactionDetails  `json:"transaction_details"`
@@ -70,6 +76,7 @@ type ChargeRequest struct {
 	ItemDetails        []ItemDetail        `json:"item_details,omitempty"`
 	GoPay              *GoPayOptions       `json:"gopay,omitempty"`
 	ShopeePay          *ShopeePayOptions   `json:"shopeepay,omitempty"`
+	QRIS               *QRISOptions        `json:"qris,omitempty"`
 	CustomExpiry       *CustomExpiry       `json:"custom_expiry,omitempty"`
 }
 
@@ -90,11 +97,17 @@ type ChargeResponse struct {
 	StatusMessage     string          `json:"status_message"`
 	TransactionID     string          `json:"transaction_id"`
 	OrderID           string          `json:"order_id"`
+	MerchantID        string          `json:"merchant_id,omitempty"`
 	GrossAmount       string          `json:"gross_amount"`
+	Currency          string          `json:"currency,omitempty"`
 	PaymentType       string          `json:"payment_type"`
 	TransactionTime   string          `json:"transaction_time"`
 	TransactionStatus string          `json:"transaction_status"`
 	FraudStatus       string          `json:"fraud_status,omitempty"`
+	Acquirer          string          `json:"acquirer,omitempty"`
+	// QRIS native: returned directly in response body
+	QRString          string          `json:"qr_string,omitempty"`
+	ExpiryTime        string          `json:"expiry_time,omitempty"`
 	Actions           []Action        `json:"actions,omitempty"`
 	SettlementTime    string          `json:"settlement_time,omitempty"`
 	RawResponse       json.RawMessage `json:"-"`

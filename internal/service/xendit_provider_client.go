@@ -87,9 +87,16 @@ func (p *XenditProviderClient) createQRIS(ctx context.Context, method *models.Pa
 	if err != nil {
 		return nil, mapXenditError(err)
 	}
+
+	// Xendit returns QR string in actions[].value where descriptor=QR_STRING
+	qrString := resp.ChannelProperties.QRString
+	if qrString == "" {
+		qrString = extractXenditQRString(resp.Actions)
+	}
+
 	norm := PaymentDetailNormalized{
 		Provider:            string(models.ProviderXendit),
-		QRString:            resp.ChannelProperties.QRString,
+		QRString:            qrString,
 		QRImageURL:          resp.ChannelProperties.QRImageURL,
 		ProviderReferenceNo: resp.PaymentRequestID,
 	}
@@ -98,6 +105,24 @@ func (p *XenditProviderClient) createQRIS(ctx context.Context, method *models.Pa
 		Normalized:  norm,
 		RawResponse: resp.RawResponse,
 	}, nil
+}
+
+// extractXenditQRString pulls the QR string from Xendit's actions array.
+// Xendit returns: actions:[{"descriptor":"QR_STRING","type":"PRESENT_TO_CUSTOMER","value":"00020101..."}]
+func extractXenditQRString(actions []any) string {
+	for _, a := range actions {
+		m, ok := a.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		descriptor, _ := m["descriptor"].(string)
+		typ, _ := m["type"].(string)
+		val, _ := m["value"].(string)
+		if (descriptor == "QR_STRING" || typ == "PRESENT_TO_CUSTOMER") && val != "" {
+			return val
+		}
+	}
+	return ""
 }
 
 func (p *XenditProviderClient) InquiryPayment(ctx context.Context, payment *models.Payment) (*PaymentInquiryResult, error) {

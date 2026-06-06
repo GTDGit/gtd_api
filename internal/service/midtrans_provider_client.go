@@ -35,19 +35,16 @@ func (p *MidtransProviderClient) CreatePayment(ctx context.Context, method *mode
 
 	switch req.Type {
 	case models.PaymentTypeQRIS:
-		// QRIS via Midtrans uses GoPay QR code (MPM/CPM)
-		resp, err = p.client.ChargeGoPayQR(ctx, req.PartnerRef, req.TotalAmount, firstNonEmpty(req.CallbackURL, p.callbackURL), cust)
+		// Use native QRIS — returns qr_string directly in response body
+		resp, err = p.client.ChargeQRIS(ctx, req.PartnerRef, req.TotalAmount, "gopay", cust)
 		if err != nil {
 			return nil, mapMidtransError(err)
 		}
-		// The QR code URL is the "generate-qr-code" action
-		qrCodeURL := resp.Action("generate-qr-code")
 		norm := PaymentDetailNormalized{
 			Provider:            string(models.ProviderMidtrans),
 			ProviderReferenceNo: resp.TransactionID,
-			QRCodeURL:           qrCodeURL,
-			// QRString will be populated when the QR image URL is fetched,
-			// but we surface the URL here so the client can render it directly.
+			QRString:            resp.QRString,
+			QRCodeURL:           resp.Action("generate-qr-code"),
 		}
 		return &PaymentCreateResponse{
 			ProviderRef: resp.TransactionID,

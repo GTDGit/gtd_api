@@ -315,6 +315,9 @@ func (s *PaymentService) CreatePayment(ctx context.Context, req *CreatePaymentRe
 		Status:          models.PaymentStatusPending,
 		ExpiredAt:       expiredAt,
 		Metadata:        metadata,
+		// payment_detail has NOT NULL constraint with default '{}' in DB.
+		// Set explicitly so Go driver does not send NULL.
+		PaymentDetail: models.NullableRawMessage(`{}`),
 	}
 	if customerName != "" {
 		v := customerName

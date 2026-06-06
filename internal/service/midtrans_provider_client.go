@@ -44,7 +44,6 @@ func (p *MidtransProviderClient) CreatePayment(ctx context.Context, method *mode
 			Provider:            string(models.ProviderMidtrans),
 			ProviderReferenceNo: resp.TransactionID,
 			QRString:            resp.QRString,
-			QRCodeURL:           resp.Action("generate-qr-code"),
 		}
 		return &PaymentCreateResponse{
 			ProviderRef: resp.TransactionID,

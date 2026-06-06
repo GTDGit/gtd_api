@@ -164,9 +164,8 @@ func (c *Client) CreateOrder(ctx context.Context, req CreateOrderRequest) (*Crea
 			},
 			"mcc": req.MCC,
 			"envInfo": map[string]any{
-				"sourcePlatform":    "IPG",
-				"terminalType":      "SYSTEM",
-				"orderTerminalType": "WEB",
+				"sourcePlatform": "IPG",
+				"terminalType":   "SYSTEM",
 			},
 		},
 	}

@@ -15,10 +15,17 @@ type DanaProviderClient struct {
 	client          *dana.Client
 	notificationURL string
 	returnURL       string
+	externalStoreID string // QRIS: store ID registered in DANA portal (optional)
 }
 
 func NewDanaProviderClient(client *dana.Client, notificationURL, returnURL string) *DanaProviderClient {
 	return &DanaProviderClient{client: client, notificationURL: notificationURL, returnURL: returnURL}
+}
+
+// SetExternalStoreID sets the DANA externalStoreId used for QRIS orders.
+// Obtain this from DANA Merchant Portal → Shops.
+func (p *DanaProviderClient) SetExternalStoreID(id string) {
+	p.externalStoreID = id
 }
 
 func (p *DanaProviderClient) Code() models.PaymentProvider {
@@ -39,7 +46,6 @@ func (p *DanaProviderClient) CreatePayment(ctx context.Context, method *models.P
 func (p *DanaProviderClient) createOrder(ctx context.Context, method *models.PaymentMethod, req *PaymentCreateRequest, payMethod, payOption string) (*PaymentCreateResponse, error) {
 	order := dana.CreateOrderRequest{
 		PartnerReferenceNo: req.PartnerRef,
-		ExternalStoreID:    req.PartnerRef,
 		Amount:             req.TotalAmount,
 		ValidUpTo:          formatDanaExpiry(req.ExpiredAt),
 		NotificationURL:    firstNonEmpty(req.CallbackURL, p.notificationURL),
@@ -47,6 +53,10 @@ func (p *DanaProviderClient) createOrder(ctx context.Context, method *models.Pay
 		PayMethod:          payMethod,
 		PayOption:          payOption,
 		OrderTitle:         firstNonEmpty(req.Description, method.Name),
+	}
+	// externalStoreId is required for QRIS — must be a registered store ID from DANA portal.
+	if p.externalStoreID != "" {
+		order.ExternalStoreID = p.externalStoreID
 	}
 	resp, err := p.client.CreateOrder(ctx, order)
 	if err != nil {

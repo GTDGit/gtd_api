@@ -15,10 +15,16 @@ import (
 type PakailinkProviderClient struct {
 	client      *pakailink.Client
 	callbackURL string
+	terminalID  string // QRIS: terminal ID registered in Pakailink portal
 }
 
 func NewPakailinkProviderClient(client *pakailink.Client, callbackURL string) *PakailinkProviderClient {
 	return &PakailinkProviderClient{client: client, callbackURL: callbackURL}
+}
+
+// SetTerminalID sets the Pakailink terminal ID used for QRIS MPM generation.
+func (p *PakailinkProviderClient) SetTerminalID(id string) {
+	p.terminalID = id
 }
 
 func (p *PakailinkProviderClient) Code() models.PaymentProvider {
@@ -70,13 +76,19 @@ func (p *PakailinkProviderClient) createVA(ctx context.Context, method *models.P
 }
 
 func (p *PakailinkProviderClient) createQRIS(ctx context.Context, method *models.PaymentMethod, req *PaymentCreateRequest) (*PaymentCreateResponse, error) {
+	// partnerReferenceNo max 25 chars for QRIS per Pakailink docs
+	refNo := req.PartnerRef
+	if len(refNo) > 25 {
+		refNo = refNo[:25]
+	}
 	qrReq := pakailink.GenerateQRRequest{
-		PartnerReferenceNo: req.PartnerRef,
+		PartnerReferenceNo: refNo,
 		Amount:             req.TotalAmount,
 		MerchantName:       firstNonEmpty(req.CustomerName, "GTD Gateway"),
 		Description:        req.Description,
 		CallbackURL:        firstNonEmpty(req.CallbackURL, p.callbackURL),
 		ExpiredDate:        formatPakailinkExpiry(req.ExpiredAt),
+		TerminalID:         p.terminalID,
 	}
 	resp, err := p.client.GenerateQRMPM(ctx, qrReq)
 	if err != nil {

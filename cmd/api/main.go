@@ -345,11 +345,21 @@ func main() {
 	// 6b. Payment module wiring
 	paymentRouter := service.NewPaymentProviderRouter()
 	if pakailinkClient != nil {
-		paymentRouter.Register(service.NewPakailinkProviderClient(pakailinkClient, cfg.Payment.Pakailink.CallbackURL))
+		pakailinkAdapter := service.NewPakailinkProviderClient(pakailinkClient, cfg.Payment.Pakailink.CallbackURL)
+		if cfg.Payment.Pakailink.TerminalID != "" {
+			pakailinkAdapter.SetTerminalID(cfg.Payment.Pakailink.TerminalID)
+			log.Info().Str("terminalId", cfg.Payment.Pakailink.TerminalID).Msg("Pakailink QRIS terminal ID configured")
+		}
+		paymentRouter.Register(pakailinkAdapter)
 		log.Info().Msg("Pakailink payment adapter registered")
 	}
 	if danaClient != nil {
-		paymentRouter.Register(service.NewDanaProviderClient(danaClient, cfg.Payment.Dana.CallbackURL, cfg.Payment.Dana.ReturnURL))
+		danaAdapter := service.NewDanaProviderClient(danaClient, cfg.Payment.Dana.CallbackURL, cfg.Payment.Dana.ReturnURL)
+		if cfg.Payment.Dana.ExternalStoreID != "" {
+			danaAdapter.SetExternalStoreID(cfg.Payment.Dana.ExternalStoreID)
+			log.Info().Str("externalStoreId", cfg.Payment.Dana.ExternalStoreID).Msg("DANA external store ID configured")
+		}
+		paymentRouter.Register(danaAdapter)
 		log.Info().Msg("DANA payment adapter registered")
 	}
 	if midtransClient != nil {

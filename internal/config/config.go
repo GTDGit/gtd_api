@@ -47,19 +47,21 @@ type PakailinkConfig struct {
 	PrivateKeyPath string
 	PrivateKeyPEM  string
 	CallbackURL    string
+	TerminalID     string // QRIS: terminal ID for QRIS MPM generation
 }
 
 type DanaConfig struct {
-	Env            string
-	BaseURL        string
-	MerchantID     string
-	ClientID       string
-	ClientSecret   string
-	PartnerID      string
-	PrivateKeyPath string
-	PrivateKeyPEM  string
-	CallbackURL    string
-	ReturnURL      string
+	Env             string
+	BaseURL         string
+	MerchantID      string
+	ClientID        string
+	ClientSecret    string
+	PartnerID       string
+	PrivateKeyPath  string
+	PrivateKeyPEM   string
+	CallbackURL     string
+	ReturnURL       string
+	ExternalStoreID string // QRIS: store ID from DANA Merchant Portal
 }
 
 type MidtransConfig struct {
@@ -406,18 +408,20 @@ func Load() (*Config, error) {
 			PrivateKeyPath: getEnv("PAKAILINK_PRIVATE_KEY_PATH", ""),
 			PrivateKeyPEM:  getEnv("PAKAILINK_PRIVATE_KEY_PEM", ""),
 			CallbackURL:    getEnv("PAKAILINK_CALLBACK_URL", ""),
+			TerminalID:     getEnv("PAKAILINK_TERMINAL_ID", ""),
 		},
 		Dana: DanaConfig{
-			Env:            getEnv("DANA_ENV", "SANDBOX"),
-			BaseURL:        getEnv("DANA_BASE_URL", ""),
-			MerchantID:     getEnv("DANA_MERCHANT_ID", ""),
-			ClientID:       getEnv("DANA_CLIENT_ID", ""),
-			ClientSecret:   getEnv("DANA_CLIENT_SECRET", ""),
-			PartnerID:      getEnv("DANA_PARTNER_ID", ""),
-			PrivateKeyPath: getEnv("DANA_PRIVATE_KEY_PATH", ""),
-			PrivateKeyPEM:  getEnv("DANA_PRIVATE_KEY_PEM", ""),
-			CallbackURL:    getEnv("DANA_CALLBACK_URL", ""),
-			ReturnURL:      getEnv("DANA_RETURN_URL", ""),
+			Env:             getEnv("DANA_ENV", "SANDBOX"),
+			BaseURL:         getEnv("DANA_BASE_URL", ""),
+			MerchantID:      getEnv("DANA_MERCHANT_ID", ""),
+			ClientID:        getEnv("DANA_CLIENT_ID", ""),
+			ClientSecret:    getEnv("DANA_CLIENT_SECRET", ""),
+			PartnerID:       getEnv("DANA_PARTNER_ID", ""),
+			PrivateKeyPath:  getEnv("DANA_PRIVATE_KEY_PATH", ""),
+			PrivateKeyPEM:   getEnv("DANA_PRIVATE_KEY_PEM", ""),
+			CallbackURL:     getEnv("DANA_CALLBACK_URL", ""),
+			ReturnURL:       getEnv("DANA_RETURN_URL", ""),
+			ExternalStoreID: getEnv("DANA_EXTERNAL_STORE_ID", ""),
 		},
 		Midtrans: MidtransConfig{
 			Env:           getEnv("MIDTRANS_ENV", "SANDBOX"),

@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	"github.com/rs/zerolog/log"
 
 	"github.com/GTDGit/gtd_api/internal/middleware"
 	"github.com/GTDGit/gtd_api/internal/service"
@@ -109,5 +110,6 @@ func (h *PaymentHandler) handleError(c *gin.Context, err error) {
 		utils.Error(c, pe.HTTPStatus, pe.Code, pe.Message)
 		return
 	}
+	log.Error().Err(err).Str("path", c.FullPath()).Msg("payment: unhandled error")
 	utils.Error(c, http.StatusInternalServerError, "INTERNAL_ERROR", "Internal server error")
 }

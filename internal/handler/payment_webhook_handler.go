@@ -52,8 +52,9 @@ func NewPaymentWebhookHandler(
 // ---------------------------------------------------------------------------
 
 // HandlePakailink handles both VA and QRIS callbacks from Pakailink.
-// VA callbacks use responseCode 2002500, QRIS callbacks use 2005200.
-// Settlement callbacks are ACK-only (no state change).
+// HandlePakailink handles both VA and QRIS callbacks from Pakailink.
+// callbackType "payment" → validate and process the payment.
+// callbackType "settlement" → ACK only, no state change.
 func (h *PaymentWebhookHandler) HandlePakailink(c *gin.Context) {
 	body, cb, ok := h.persistRawCallback(c, models.ProviderPakailink)
 	if !ok {
@@ -79,32 +80,17 @@ func (h *PaymentWebhookHandler) HandlePakailink(c *gin.Context) {
 		return
 	}
 	data := payload.ResolveTransactionData()
-	partnerRef := strings.TrimSpace(data.PartnerReferenceNo)
 	callbackType := strings.ToLower(strings.TrimSpace(data.CallbackType))
 
-	// Detect whether this is a QRIS callback by serviceCode or callbackType.
-	// QRIS QR MPM callbacks use serviceCode 52; VA use serviceCode 25/35.
-	isQRIS := false
-	if sc, ok := data.AdditionalInfo["serviceCode"].(string); ok {
-		isQRIS = sc == "52"
-	}
-	if !isQRIS {
-		// Fall back to checking if "qr" is mentioned in callback type
-		isQRIS = strings.Contains(callbackType, "qr") || strings.Contains(callbackType, "settlement")
-	}
-
-	// Settlement callback: ACK only.
+	// settlement → ACK only, no processing.
 	if callbackType == "settlement" {
 		_ = h.paymentRepo.UpdatePaymentCallbackProcessed(c.Request.Context(), cb.ID, true, nil)
-		// QRIS settlement: responseCode 2005200; VA settlement: 2002500
-		if isQRIS {
-			respondSNAP(c, http.StatusOK, "2005200", "Successful")
-		} else {
-			respondSNAP(c, http.StatusOK, "2002500", "Successful")
-		}
+		respondSNAP(c, http.StatusOK, "2005200", "Successful")
 		return
 	}
 
+	// payment (or any other type) → process.
+	partnerRef := strings.TrimSpace(data.PartnerReferenceNo)
 	event := service.PaymentWebhookEvent{
 		Status:     mapPakailinkFlagStatus(data.PaymentFlagStatus),
 		PaidAmount: parseAmountString(data.PaidAmount.Value),
@@ -116,12 +102,7 @@ func (h *PaymentWebhookHandler) HandlePakailink(c *gin.Context) {
 		return
 	}
 	_ = h.paymentRepo.UpdatePaymentCallbackProcessed(c.Request.Context(), cb.ID, true, nil)
-
-	if isQRIS {
-		respondSNAP(c, http.StatusOK, "2005200", "Successful")
-	} else {
-		respondSNAP(c, http.StatusOK, "2002500", "Successful")
-	}
+	respondSNAP(c, http.StatusOK, "2005200", "Successful")
 }
 
 // ---------------------------------------------------------------------------

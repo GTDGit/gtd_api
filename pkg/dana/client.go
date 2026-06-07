@@ -172,11 +172,13 @@ func (c *Client) CreateOrder(ctx context.Context, req CreateOrderRequest) (*Crea
 			"order": map[string]any{
 				"orderTitle": firstNonEmpty(req.OrderTitle, req.PartnerReferenceNo),
 				"scenario":   req.OrderScenario,
+				"buyer":      map[string]any{},
 			},
 			"mcc": req.MCC,
 			"envInfo": map[string]any{
-				"sourcePlatform": "IPG",
-				"terminalType":   "SYSTEM",
+				"sourcePlatform":    "IPG",
+				"terminalType":      "SYSTEM",
+				"orderTerminalType": "SYSTEM",
 			},
 		},
 	}

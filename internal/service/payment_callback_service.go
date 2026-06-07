@@ -222,51 +222,67 @@ func genPaymentRequestID() string {
 }
 
 // buildPaymentCallbackPayload renders the merchant-facing webhook body.
+// All timestamps are formatted as WIB (UTC+7) without nanoseconds: 2006-01-02T15:04:05+07:00
 func buildPaymentCallbackPayload(p *models.Payment, event string) []byte {
 	type data struct {
-		PaymentID       string          `json:"paymentId"`
-		ReferenceID     string          `json:"referenceId"`
-		Type            string          `json:"type"`
-		Status          string          `json:"status"`
-		PaymentCode     string          `json:"paymentCode,omitempty"`
-		Provider        string          `json:"provider,omitempty"`
-		Amount          int64           `json:"amount"`
-		Fee             int64           `json:"fee"`
-		TotalAmount     int64           `json:"totalAmount"`
-		CustomerName    *string         `json:"customerName,omitempty"`
-		PaymentDetail   json.RawMessage `json:"paymentDetail,omitempty"`
-		ProviderRef     *string         `json:"providerRef,omitempty"`
-		PaidAt          *time.Time      `json:"paidAt,omitempty"`
-		CancelledAt     *time.Time      `json:"cancelledAt,omitempty"`
-		ExpiredAt       time.Time       `json:"expiredAt"`
-		CreatedAt       time.Time       `json:"createdAt"`
+		PaymentID     string          `json:"paymentId"`
+		ReferenceID   string          `json:"referenceId"`
+		Type          string          `json:"type"`
+		Status        string          `json:"status"`
+		PaymentCode   string          `json:"paymentCode,omitempty"`
+		Provider      string          `json:"provider,omitempty"`
+		Amount        int64           `json:"amount"`
+		Fee           int64           `json:"fee"`
+		TotalAmount   int64           `json:"totalAmount"`
+		CustomerName  *string         `json:"customerName,omitempty"`
+		PaymentDetail json.RawMessage `json:"paymentDetail,omitempty"`
+		ProviderRef   *string         `json:"providerRef,omitempty"`
+		PaidAt        string          `json:"paidAt,omitempty"`
+		CancelledAt   string          `json:"cancelledAt,omitempty"`
+		ExpiredAt     string          `json:"expiredAt"`
+		CreatedAt     string          `json:"createdAt"`
 	}
 	type envelope struct {
-		Event     string    `json:"event"`
-		Data      data      `json:"data"`
-		Timestamp time.Time `json:"timestamp"`
+		Event     string `json:"event"`
+		Data      data   `json:"data"`
+		Timestamp string `json:"timestamp"`
+	}
+
+	fmtWIB := func(t time.Time) string {
+		if t.IsZero() {
+			return ""
+		}
+		return t.In(time.FixedZone("WIB", 7*3600)).Format("2006-01-02T15:04:05+07:00")
+	}
+	fmtWIBPtr := func(t *time.Time) string {
+		if t == nil {
+			return ""
+		}
+		return fmtWIB(*t)
+	}
+
+	d := data{
+		PaymentID:     p.PaymentID,
+		ReferenceID:   p.ReferenceID,
+		Type:          string(p.PaymentType),
+		Status:        string(p.Status),
+		PaymentCode:   p.PaymentCode,
+		Provider:      string(p.Provider),
+		Amount:        p.Amount,
+		Fee:           p.Fee,
+		TotalAmount:   p.TotalAmount,
+		CustomerName:  p.CustomerName,
+		PaymentDetail: json.RawMessage(p.PaymentDetail),
+		ProviderRef:   p.ProviderRef,
+		PaidAt:        fmtWIBPtr(p.PaidAt),
+		CancelledAt:   fmtWIBPtr(p.CancelledAt),
+		ExpiredAt:     fmtWIB(p.ExpiredAt),
+		CreatedAt:     fmtWIB(p.CreatedAt),
 	}
 	out := envelope{
-		Event: event,
-		Data: data{
-			PaymentID:     p.PaymentID,
-			ReferenceID:   p.ReferenceID,
-			Type:          string(p.PaymentType),
-			Status:        string(p.Status),
-			PaymentCode:   p.PaymentCode,
-			Provider:      string(p.Provider),
-			Amount:        p.Amount,
-			Fee:           p.Fee,
-			TotalAmount:   p.TotalAmount,
-			CustomerName:  p.CustomerName,
-			PaymentDetail: json.RawMessage(p.PaymentDetail),
-			ProviderRef:   p.ProviderRef,
-			PaidAt:        p.PaidAt,
-			CancelledAt:   p.CancelledAt,
-			ExpiredAt:     p.ExpiredAt,
-			CreatedAt:     p.CreatedAt,
-		},
-		Timestamp: time.Now().UTC(),
+		Event:     event,
+		Data:      d,
+		Timestamp: fmtWIB(time.Now()),
 	}
 	b, _ := json.Marshal(out)
 	return b

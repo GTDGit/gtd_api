@@ -628,6 +628,11 @@ func (s *PaymentService) ExpirePendingPayments(ctx context.Context, limit int) e
 
 // ApplyWebhook processes an authenticated provider webhook. The provider
 // layer is responsible for verifying signatures before calling this.
+//
+// Flow: receive webhook → call provider status API to validate → apply result.
+// The webhook payload status is used as a hint; the inquiry result is authoritative.
+// If inquiry fails (provider unreachable), we fall back to the webhook status so
+// payments are not silently dropped.
 func (s *PaymentService) ApplyWebhook(ctx context.Context, provider models.PaymentProvider, partnerRef string, event PaymentWebhookEvent) error {
 	p, err := s.paymentRepo.GetByPaymentID(ctx, partnerRef)
 	if err != nil {
@@ -646,22 +651,48 @@ func (s *PaymentService) ApplyWebhook(ctx context.Context, provider models.Payme
 		return nil
 	}
 
-	prevStatus := p.Status
-	p.Status = event.Status
-	now := time.Now()
-	if event.Status == models.PaymentStatusPaid && p.PaidAt == nil {
-		p.PaidAt = &now
-	}
-	if event.Status == models.PaymentStatusCancelled && p.CancelledAt == nil {
-		p.CancelledAt = &now
+	// Store the webhook payload before inquiry so it's always recorded.
+	if len(event.RawPayload) > 0 {
+		p.ProviderData = mergeProviderData(p.ProviderData, "webhook", event.RawPayload)
 	}
 	if event.ProviderRef != "" {
 		v := event.ProviderRef
 		p.ProviderRef = &v
 	}
-	if len(event.RawPayload) > 0 {
-		p.ProviderData = mergeProviderData(p.ProviderData, "webhook", event.RawPayload)
+
+	// Validate via provider status API (authoritative source of truth).
+	// On success use the inquiry result; on any error fall back to webhook payload status.
+	confirmedStatus := event.Status
+	if providerClient, routeErr := s.router.Get(p.Provider); routeErr == nil {
+		if result, inquiryErr := providerClient.InquiryPayment(ctx, p); inquiryErr == nil && result != nil {
+			if result.Status != "" {
+				confirmedStatus = result.Status
+			}
+			if result.ProviderRef != "" {
+				v := result.ProviderRef
+				p.ProviderRef = &v
+			}
+			if len(result.RawResponse) > 0 {
+				p.ProviderData = mergeProviderData(p.ProviderData, "inquiry", result.RawResponse)
+			}
+		} else if inquiryErr != nil {
+			log.Warn().Err(inquiryErr).
+				Str("provider", string(p.Provider)).
+				Str("paymentId", p.PaymentID).
+				Msg("payment webhook: inquiry validation failed, falling back to webhook status")
+		}
 	}
+
+	prevStatus := p.Status
+	p.Status = confirmedStatus
+	now := time.Now()
+	if confirmedStatus == models.PaymentStatusPaid && p.PaidAt == nil {
+		p.PaidAt = &now
+	}
+	if confirmedStatus == models.PaymentStatusCancelled && p.CancelledAt == nil {
+		p.CancelledAt = &now
+	}
+
 	if err := s.paymentRepo.UpdatePayment(ctx, p); err != nil {
 		return err
 	}

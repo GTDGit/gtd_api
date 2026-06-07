@@ -42,9 +42,8 @@ func (p *DanaProviderClient) CreatePayment(ctx context.Context, method *models.P
 	case models.PaymentTypeEwallet:
 		return p.createOrder(ctx, method, req, dana.PayMethodBalance, "")
 	case models.PaymentTypeQRIS:
-		// Use Gapura Custom Checkout with NETWORK_PAY + QRIS option.
-		// Returns paymentCode (QRIS string) in additionalInfo.
-		return p.createOrder(ctx, method, req, dana.PayMethodNetworkPay, dana.PayOptionQRIS)
+		// Use DANA QRIS Acquirer (/v1.0/qr/qr-mpm-generate.htm) — returns qrContent directly.
+		return p.createQRIS(ctx, method, req)
 	default:
 		return nil, newPaymentError(400, "UNSUPPORTED_PAYMENT_TYPE", "DANA does not support this payment type", nil)
 	}
@@ -93,14 +92,12 @@ func (p *DanaProviderClient) createOrder(ctx context.Context, method *models.Pay
 		PartnerReferenceNo: req.PartnerRef,
 		Amount:             req.TotalAmount,
 		ValidUpTo:          formatDanaExpiry(req.ExpiredAt),
-		// urlParams is mandatory: notification URL must always be set.
-		NotificationURL: firstNonEmpty(req.CallbackURL, p.notificationURL, "https://dev-api.gtd.co.id/v1/webhook/dana"),
-		ReturnURL:       firstNonEmpty(req.ReturnURL, p.returnURL),
-		PayMethod:       payMethod,
-		PayOption:       payOption,
-		OrderTitle:      firstNonEmpty(req.Description, method.Name),
+		NotificationURL:    firstNonEmpty(req.CallbackURL, p.notificationURL, "https://dev-api.gtd.co.id/v1/webhook/dana"),
+		ReturnURL:          firstNonEmpty(req.ReturnURL, p.returnURL),
+		PayMethod:          payMethod,
+		PayOption:          payOption,
+		OrderTitle:         firstNonEmpty(req.Description, method.Name),
 	}
-	// externalStoreId is required for QRIS Custom Checkout per DANA docs.
 	if p.storeID != "" {
 		order.ExternalStoreID = p.storeID
 	}

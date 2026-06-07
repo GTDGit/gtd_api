@@ -51,6 +51,9 @@ func NewPaymentWebhookHandler(
 // settlement type is ACK-only (no state change, no client callback).
 // ---------------------------------------------------------------------------
 
+// HandlePakailink handles both VA and QRIS callbacks from Pakailink.
+// VA callbacks use responseCode 2002500, QRIS callbacks use 2005200.
+// Settlement callbacks are ACK-only (no state change).
 func (h *PaymentWebhookHandler) HandlePakailink(c *gin.Context) {
 	body, cb, ok := h.persistRawCallback(c, models.ProviderPakailink)
 	if !ok {
@@ -79,10 +82,26 @@ func (h *PaymentWebhookHandler) HandlePakailink(c *gin.Context) {
 	partnerRef := strings.TrimSpace(data.PartnerReferenceNo)
 	callbackType := strings.ToLower(strings.TrimSpace(data.CallbackType))
 
+	// Detect whether this is a QRIS callback by serviceCode or callbackType.
+	// QRIS QR MPM callbacks use serviceCode 52; VA use serviceCode 25/35.
+	isQRIS := false
+	if sc, ok := data.AdditionalInfo["serviceCode"].(string); ok {
+		isQRIS = sc == "52"
+	}
+	if !isQRIS {
+		// Fall back to checking if "qr" is mentioned in callback type
+		isQRIS = strings.Contains(callbackType, "qr") || strings.Contains(callbackType, "settlement")
+	}
+
 	// Settlement callback: ACK only.
 	if callbackType == "settlement" {
 		_ = h.paymentRepo.UpdatePaymentCallbackProcessed(c.Request.Context(), cb.ID, true, nil)
-		respondSNAP(c, http.StatusOK, "2002500", "Successful")
+		// QRIS settlement: responseCode 2005200; VA settlement: 2002500
+		if isQRIS {
+			respondSNAP(c, http.StatusOK, "2005200", "Successful")
+		} else {
+			respondSNAP(c, http.StatusOK, "2002500", "Successful")
+		}
 		return
 	}
 
@@ -97,7 +116,12 @@ func (h *PaymentWebhookHandler) HandlePakailink(c *gin.Context) {
 		return
 	}
 	_ = h.paymentRepo.UpdatePaymentCallbackProcessed(c.Request.Context(), cb.ID, true, nil)
-	respondSNAP(c, http.StatusOK, "2002500", "Successful")
+
+	if isQRIS {
+		respondSNAP(c, http.StatusOK, "2005200", "Successful")
+	} else {
+		respondSNAP(c, http.StatusOK, "2002500", "Successful")
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -118,6 +142,10 @@ type danaWebhookAmount struct {
 	Currency string `json:"currency"`
 }
 
+// HandleDANA handles DANA payment notifications (Finish Notify).
+// Accepts both Gapura Custom Checkout (latestTransactionStatus codes)
+// and QRIS Acquirer webhooks.
+// Response format is SNAP: {"responseCode":"2005600","responseMessage":"Successful"}
 func (h *PaymentWebhookHandler) HandleDANA(c *gin.Context) {
 	body, cb, ok := h.persistRawCallback(c, models.ProviderDanaDirect)
 	if !ok {
@@ -148,11 +176,13 @@ func (h *PaymentWebhookHandler) HandleDANA(c *gin.Context) {
 	}
 	if err := h.paymentSvc.ApplyWebhook(c.Request.Context(), models.ProviderDanaDirect, strings.TrimSpace(p.OriginalPartnerReferenceNo), event); err != nil {
 		h.markCallbackError(c.Request.Context(), cb.ID, err.Error())
-		respondSNAP(c, http.StatusInternalServerError, "5000001", "Processing error")
+		// DANA expects 5005601 for internal server errors
+		respondSNAP(c, http.StatusInternalServerError, "5005601", "Internal Server Error")
 		return
 	}
 	_ = h.paymentRepo.UpdatePaymentCallbackProcessed(c.Request.Context(), cb.ID, true, nil)
-	respondSNAP(c, http.StatusOK, "2002500", "Successful")
+	// DANA Finish Notify response code: 2005600
+	respondSNAP(c, http.StatusOK, "2005600", "Successful")
 }
 
 // ---------------------------------------------------------------------------
@@ -364,7 +394,18 @@ func mapPakailinkFlagStatus(code string) models.PaymentStatus {
 }
 
 func mapDanaWebhookStatus(code string) models.PaymentStatus {
-	switch strings.ToUpper(strings.TrimSpace(code)) {
+	// DANA Finish Notify: latestTransactionStatus codes
+	// "00" = Success/Paid, "05" = Cancelled/Closed
+	switch strings.TrimSpace(code) {
+	case "00":
+		return models.PaymentStatusPaid
+	case "05":
+		return models.PaymentStatusCancelled
+	case "06":
+		return models.PaymentStatusFailed
+	case "07":
+		return models.PaymentStatusExpired
+	// Legacy string codes (from older DANA integration)
 	case "SUCCESS", "PAID":
 		return models.PaymentStatusPaid
 	case "CANCELLED", "CLOSED":

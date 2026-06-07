@@ -42,8 +42,9 @@ func (p *DanaProviderClient) CreatePayment(ctx context.Context, method *models.P
 	case models.PaymentTypeEwallet:
 		return p.createOrder(ctx, method, req, dana.PayMethodBalance, "")
 	case models.PaymentTypeQRIS:
-		// Use DANA QRIS Acquirer API (/v1.0/qr/qr-mpm-generate.htm)
-		return p.createQRIS(ctx, method, req)
+		// Use Gapura Custom Checkout with NETWORK_PAY + QRIS option.
+		// Returns paymentCode (QRIS string) in additionalInfo.
+		return p.createOrder(ctx, method, req, dana.PayMethodNetworkPay, dana.PayOptionQRIS)
 	default:
 		return nil, newPaymentError(400, "UNSUPPORTED_PAYMENT_TYPE", "DANA does not support this payment type", nil)
 	}
@@ -99,6 +100,10 @@ func (p *DanaProviderClient) createOrder(ctx context.Context, method *models.Pay
 		PayOption:       payOption,
 		OrderTitle:      firstNonEmpty(req.Description, method.Name),
 	}
+	// externalStoreId is required for QRIS Custom Checkout per DANA docs.
+	if p.storeID != "" {
+		order.ExternalStoreID = p.storeID
+	}
 	resp, err := p.client.CreateOrder(ctx, order)
 	if err != nil {
 		return nil, mapDanaError(err)
@@ -108,6 +113,7 @@ func (p *DanaProviderClient) createOrder(ctx context.Context, method *models.Pay
 		ProviderReferenceNo: resp.ReferenceNo,
 	}
 	if req.Type == models.PaymentTypeQRIS {
+		// Gapura Custom Checkout QRIS: QR string in additionalInfo.paymentCode
 		norm.QRString = resp.PaymentCode()
 	} else {
 		norm.CheckoutURL = resp.CheckoutURL

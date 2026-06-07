@@ -134,9 +134,51 @@ type InquiryQRResponse struct {
 }
 
 // WebhookPayload is the combined shape covering VA payment + QRIS MPM notifications.
+// VA callbacks wrap fields in transactionData; QRIS callbacks send fields flat at the root.
 type WebhookPayload struct {
+	// VA-style: wrapped in transactionData
 	TransactionData WebhookTransactionData `json:"transactionData"`
-	RawBody         []byte                 `json:"-"`
+
+	// QRIS-style: flat at root (these mirror WebhookTransactionData fields)
+	ResponseCode               string         `json:"responseCode"`
+	ResponseMessage            string         `json:"responseMessage"`
+	OriginalPartnerReferenceNo string         `json:"originalPartnerReferenceNo"`
+	OriginalReferenceNo        string         `json:"originalReferenceNo"`
+	CallbackType               string         `json:"callbackType"`
+	LatestTransactionStatus    string         `json:"latestTransactionStatus"`
+	TransactionStatusDesc      string         `json:"transactionStatusDesc"`
+	ServiceCode                string         `json:"serviceCode"` // "52" for QRIS
+	Amount                     Amount         `json:"amount"`
+	AdditionalInfo             map[string]any `json:"additionalInfo,omitempty"`
+
+	RawBody []byte `json:"-"`
+}
+
+// ResolveTransactionData returns a unified WebhookTransactionData regardless of
+// whether the payload used the VA-wrapper format or the flat QRIS format.
+func (p *WebhookPayload) ResolveTransactionData() WebhookTransactionData {
+	// If the VA wrapper has the partner ref filled, use it.
+	if p.TransactionData.PartnerReferenceNo != "" || p.TransactionData.PaymentFlagStatus != "" {
+		return p.TransactionData
+	}
+	// Fall back to the flat QRIS fields.
+	// Map latestTransactionStatus → paymentFlagStatus for unified processing.
+	// Inject serviceCode into additionalInfo so the QRIS detection in the handler works.
+	ai := p.AdditionalInfo
+	if ai == nil {
+		ai = map[string]any{}
+	}
+	if p.ServiceCode != "" {
+		ai["serviceCode"] = p.ServiceCode
+	}
+	return WebhookTransactionData{
+		PartnerReferenceNo:  p.OriginalPartnerReferenceNo,
+		OriginalReferenceNo: p.OriginalReferenceNo,
+		CallbackType:        p.CallbackType,
+		PaymentFlagStatus:   p.LatestTransactionStatus,
+		PaidAmount:          p.Amount,
+		AdditionalInfo:      ai,
+	}
 }
 
 type WebhookTransactionData struct {

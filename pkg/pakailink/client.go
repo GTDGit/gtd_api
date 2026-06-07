@@ -21,8 +21,8 @@ const (
 	CreateVAPath       = "/snap/v1.0/transfer-va/create-va"
 	InquiryVAPath      = "/snap/v1.0/transfer-va/create-va-status"
 	DeleteVAPath       = "/snap/v1.0/transfer-va/delete-va"
-	GenerateQRPath     = "/snap/v1.0/qr/qr-mpm-generate"
-	InquiryQRPath      = "/snap/v1.0/qr/qr-mpm-query"
+	GenerateQRPath  = "/snap/v1.0/qr/qr-mpm-generate"
+	InquiryQRPath   = "/snap/v1.0/qr/qr-mpm-status"
 
 	DefaultChannelID = "95221"
 

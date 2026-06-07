@@ -78,7 +78,7 @@ func (h *PaymentWebhookHandler) HandlePakailink(c *gin.Context) {
 		respondSNAP(c, http.StatusBadRequest, "4000001", "Invalid request body")
 		return
 	}
-	data := payload.TransactionData
+	data := payload.ResolveTransactionData()
 	partnerRef := strings.TrimSpace(data.PartnerReferenceNo)
 	callbackType := strings.ToLower(strings.TrimSpace(data.CallbackType))
 

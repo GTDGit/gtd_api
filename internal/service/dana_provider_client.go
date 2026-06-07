@@ -23,12 +23,12 @@ func NewDanaProviderClient(client *dana.Client, notificationURL, returnURL strin
 	return &DanaProviderClient{client: client, notificationURL: notificationURL, returnURL: returnURL}
 }
 
-// SetExternalStoreID sets the DANA store ID for QRIS Acquirer (externalStoreId).
+// SetExternalStoreID sets the DANA store ID required for QRIS Custom Checkout (externalStoreId).
 func (p *DanaProviderClient) SetExternalStoreID(id string) {
 	p.storeID = id
 }
 
-// SetTerminalID sets the DANA terminal ID for QRIS Acquirer.
+// SetTerminalID sets the DANA terminal ID (reserved for future use).
 func (p *DanaProviderClient) SetTerminalID(id string) {
 	p.terminalID = id
 }
@@ -42,61 +42,37 @@ func (p *DanaProviderClient) CreatePayment(ctx context.Context, method *models.P
 	case models.PaymentTypeEwallet:
 		return p.createOrder(ctx, method, req, dana.PayMethodBalance, "")
 	case models.PaymentTypeQRIS:
-		// Use DANA QRIS Acquirer (/v1.0/qr/qr-mpm-generate.htm) — returns qrContent directly.
-		return p.createQRIS(ctx, method, req)
+		// Use DANA Gapura Custom Checkout with NETWORK_PAY + NETWORK_PAY_PG_QRIS.
+		// Returns qrContent in additionalInfo.paymentCode.
+		return p.createOrder(ctx, method, req, dana.PayMethodNetworkPay, dana.PayOptionQRIS)
 	default:
 		return nil, newPaymentError(400, "UNSUPPORTED_PAYMENT_TYPE", "DANA does not support this payment type", nil)
 	}
 }
 
-func (p *DanaProviderClient) createQRIS(ctx context.Context, method *models.PaymentMethod, req *PaymentCreateRequest) (*PaymentCreateResponse, error) {
-	// partnerReferenceNo max 25 chars per DANA QRIS docs
-	refNo := req.PartnerRef
-	if len(refNo) > 25 {
-		refNo = refNo[:25]
-	}
-
-	storeID := p.storeID
-	if storeID == "" {
-		return nil, newPaymentError(400, "MISSING_CONFIG", "DANA QRIS requires DANA_EXTERNAL_STORE_ID to be configured", nil)
-	}
-
-	qrisReq := dana.GenerateQRISRequest{
-		PartnerReferenceNo: refNo,
-		StoreID:            storeID,
-		TerminalID:         p.terminalID,
-		Amount:             req.TotalAmount,
-		ValidityPeriod:     formatDanaExpiry(req.ExpiredAt),
-	}
-
-	resp, err := p.client.GenerateQRIS(ctx, qrisReq)
-	if err != nil {
-		return nil, mapDanaError(err)
-	}
-
-	norm := PaymentDetailNormalized{
-		Provider:            string(models.ProviderDanaDirect),
-		ProviderReferenceNo: resp.ReferenceNo,
-		QRString:            resp.QRContent,
-		QRImageURL:          resp.QRUrl,
-	}
-	return &PaymentCreateResponse{
-		ProviderRef: resp.ReferenceNo,
-		Normalized:  norm,
-		RawResponse: resp.RawResponse,
-	}, nil
-}
-
 func (p *DanaProviderClient) createOrder(ctx context.Context, method *models.PaymentMethod, req *PaymentCreateRequest, payMethod, payOption string) (*PaymentCreateResponse, error) {
+	partnerRef := req.PartnerRef
+	// QRIS via Custom Checkout has max 25 chars for partnerReferenceNo per DANA docs.
+	if payOption == dana.PayOptionQRIS && len(partnerRef) > 25 {
+		partnerRef = partnerRef[:25]
+	}
+
 	order := dana.CreateOrderRequest{
-		PartnerReferenceNo: req.PartnerRef,
+		PartnerReferenceNo: partnerRef,
 		Amount:             req.TotalAmount,
 		ValidUpTo:          formatDanaExpiry(req.ExpiredAt),
 		NotificationURL:    firstNonEmpty(req.CallbackURL, p.notificationURL, "https://dev-api.gtd.co.id/v1/webhook/dana"),
-		ReturnURL:          firstNonEmpty(req.ReturnURL, p.returnURL),
-		PayMethod:          payMethod,
-		PayOption:          payOption,
-		OrderTitle:         firstNonEmpty(req.Description, method.Name),
+		// For QRIS (server-to-server) there is no user redirect; pass empty so
+		// pkg/dana will substitute a safe placeholder URL for the mandatory PAY_RETURN field.
+		ReturnURL: func() string {
+			if payOption == dana.PayOptionQRIS {
+				return ""
+			}
+			return firstNonEmpty(req.ReturnURL, p.returnURL)
+		}(),
+		PayMethod:   payMethod,
+		PayOption:   payOption,
+		OrderTitle:  firstNonEmpty(req.Description, method.Name),
 	}
 	if p.storeID != "" {
 		order.ExternalStoreID = p.storeID

@@ -23,15 +23,16 @@ func sha256_sum(b []byte) [32]byte { return sha256.Sum256(b) }
 func encodeHex(b []byte) string    { return hex.EncodeToString(b) }
 
 const (
-	TokenPath         = "/v1.0/access-token/b2b.htm"
-	CreateOrderPath   = "/payment-gateway/v1.0/debit/payment-host-to-host.htm"
-	InquiryPath       = "/payment-gateway/v1.0/debit/status.htm"
-	CancelPath        = "/payment-gateway/v1.0/debit/cancel.htm"
-	RefundPath        = "/payment-gateway/v1.0/debit/refund.htm"
-	GenerateQRISPath  = "/v1.0/qr/qr-mpm-generate.htm"  // QRIS Acquirer endpoint
+	TokenPath        = "/v1.0/access-token/b2b.htm"
+	CreateOrderPath  = "/payment-gateway/v1.0/debit/payment-host-to-host.htm"
+	InquiryPath      = "/payment-gateway/v1.0/debit/status.htm"
+	CancelPath       = "/payment-gateway/v1.0/debit/cancel.htm"
+	RefundPath       = "/payment-gateway/v1.0/debit/refund.htm"
+	GenerateQRISPath = "/v1.0/qr/qr-mpm-generate.htm" // QRIS Acquirer endpoint (unused after switch to Custom Checkout)
 
 	DefaultChannelID = "95221"
-	ServiceCodeDebit = "54"
+	ServiceCodeDebit = "54" // Create Order (payment-host-to-host)
+	ServiceCodeQuery = "55" // Query Payment (status)
 )
 
 type Config struct {
@@ -136,13 +137,19 @@ func (c *Client) CreateOrder(ctx context.Context, req CreateOrderRequest) (*Crea
 		req.MerchantID = c.cfg.MerchantID
 	}
 
-	urls := []map[string]any{}
-	if req.ReturnURL != "" {
-		urls = append(urls, map[string]any{
-			"url":        req.ReturnURL,
+	// PAY_RETURN is mandatory per DANA docs for all pay methods.
+	// For QRIS / server-to-server flows the caller may pass an empty ReturnURL;
+	// in that case we use a safe placeholder so DANA's format check passes.
+	returnURL := req.ReturnURL
+	if returnURL == "" {
+		returnURL = "https://dev-api.gtd.co.id/payment/return"
+	}
+	urls := []map[string]any{
+		{
+			"url":        returnURL,
 			"type":       "PAY_RETURN",
-			"isDeeplink": "Y",
-		})
+			"isDeeplink": "N",
+		},
 	}
 	// NOTIFICATION url is mandatory per DANA docs
 	notifURL := req.NotificationURL
@@ -294,10 +301,10 @@ func (c *Client) InquiryOrder(ctx context.Context, partnerReferenceNo string) (*
 	body := map[string]any{
 		"originalPartnerReferenceNo": partnerReferenceNo,
 		"merchantId":                 c.cfg.MerchantID,
-		"serviceCode":                ServiceCodeDebit,
+		"serviceCode":                ServiceCodeQuery, // "55" for Query Payment per DANA docs
 	}
 	var resp InquiryOrderResponse
-	raw, err := c.doSNAPRequest(ctx, http.MethodPost, InquiryPath, body, &resp)
+	raw, err := c.doAsymmetricRequest(ctx, http.MethodPost, InquiryPath, body, &resp)
 	if err != nil {
 		return nil, err
 	}

@@ -192,7 +192,7 @@ func (c *Client) CreateOrder(ctx context.Context, req CreateOrderRequest) (*Crea
 	}
 
 	var resp CreateOrderResponse
-	raw, err := c.doSNAPRequest(ctx, http.MethodPost, CreateOrderPath, body, &resp)
+	raw, err := c.doAsymmetricRequest(ctx, http.MethodPost, CreateOrderPath, body, &resp)
 	if err != nil {
 		return nil, err
 	}

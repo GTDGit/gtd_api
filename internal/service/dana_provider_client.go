@@ -40,13 +40,33 @@ func (p *DanaProviderClient) Code() models.PaymentProvider {
 func (p *DanaProviderClient) CreatePayment(ctx context.Context, method *models.PaymentMethod, req *PaymentCreateRequest) (*PaymentCreateResponse, error) {
 	switch req.Type {
 	case models.PaymentTypeEwallet:
-		return p.createOrder(ctx, method, req, dana.PayMethodBalance, "")
+		payMethod, payOption := danaEwalletMethodOption(method.Code)
+		return p.createOrder(ctx, method, req, payMethod, payOption)
 	case models.PaymentTypeQRIS:
 		// Use DANA Gapura Custom Checkout with NETWORK_PAY + NETWORK_PAY_PG_QRIS.
 		// Returns qrContent in additionalInfo.paymentCode.
 		return p.createOrder(ctx, method, req, dana.PayMethodNetworkPay, dana.PayOptionQRIS)
 	default:
 		return nil, newPaymentError(400, "UNSUPPORTED_PAYMENT_TYPE", "DANA does not support this payment type", nil)
+	}
+}
+
+// danaEwalletMethodOption maps a payment method code to the DANA payMethod/payOption pair.
+// PAYDANA uses DANA's own balance (BALANCE). Other wallets go through NETWORK_PAY.
+func danaEwalletMethodOption(code string) (payMethod, payOption string) {
+	switch strings.ToUpper(code) {
+	case "PAYDANA":
+		return dana.PayMethodBalance, ""
+	case "PAYGOPAY":
+		return dana.PayMethodNetworkPay, dana.PayOptionGoPay
+	case "PAYOVO":
+		return dana.PayMethodNetworkPay, dana.PayOptionOVO
+	case "PAYSHOPEE":
+		return dana.PayMethodNetworkPay, dana.PayOptionShopeePay
+	case "PAYLINKAJA":
+		return dana.PayMethodNetworkPay, dana.PayOptionLinkAja
+	default:
+		return dana.PayMethodBalance, ""
 	}
 }
 

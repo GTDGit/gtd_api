@@ -29,8 +29,10 @@ func (p *XenditProviderClient) CreatePayment(ctx context.Context, method *models
 		return p.createRetail(ctx, method, req)
 	case models.PaymentTypeQRIS:
 		return p.createQRIS(ctx, method, req)
+	case models.PaymentTypeEwallet:
+		return p.createEwallet(ctx, method, req)
 	default:
-		return nil, newPaymentError(400, "UNSUPPORTED_PAYMENT_TYPE", "Xendit adapter supports retail and QRIS payments", nil)
+		return nil, newPaymentError(400, "UNSUPPORTED_PAYMENT_TYPE", "Xendit adapter supports retail, QRIS, and e-wallet payments", nil)
 	}
 }
 
@@ -105,6 +107,80 @@ func (p *XenditProviderClient) createQRIS(ctx context.Context, method *models.Pa
 		Normalized:  norm,
 		RawResponse: resp.RawResponse,
 	}, nil
+}
+
+func (p *XenditProviderClient) createEwallet(ctx context.Context, method *models.PaymentMethod, req *PaymentCreateRequest) (*PaymentCreateResponse, error) {
+	channelCode := xenditEwalletChannelCode(method.Code)
+	if channelCode == "" {
+		return nil, newPaymentError(400, "UNSUPPORTED_PAYMENT_TYPE", "Unsupported ewallet code for Xendit: "+method.Code, nil)
+	}
+	props := xendit.PaymentRequestChannelProperties{
+		ExpiresAt: formatXenditExpiry(req.ExpiredAt),
+	}
+	if req.CustomerPhone != "" {
+		props.MobileNumber = req.CustomerPhone
+	}
+	if req.ReturnURL != "" {
+		props.SuccessReturnURL = req.ReturnURL
+		props.FailureReturnURL = req.ReturnURL
+		props.CancelReturnURL = req.ReturnURL
+	}
+	create := xendit.PaymentRequestCreate{
+		ReferenceID:       req.PartnerRef,
+		Type:              "PAY",
+		Country:           "ID",
+		Currency:          "IDR",
+		ChannelCode:       channelCode,
+		RequestAmount:     req.TotalAmount,
+		ChannelProperties: props,
+		Description:       req.Description,
+	}
+	resp, err := p.client.CreatePaymentRequest(ctx, create)
+	if err != nil {
+		return nil, mapXenditError(err)
+	}
+	norm := PaymentDetailNormalized{
+		Provider:            string(models.ProviderXendit),
+		ProviderReferenceNo: resp.PaymentRequestID,
+	}
+	// Xendit returns deeplink/checkout URL in actions array
+	for _, a := range resp.Actions {
+		m, ok := a.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		typ, _ := m["type"].(string)
+		url, _ := m["url"].(string)
+		if url == "" {
+			continue
+		}
+		switch strings.ToUpper(typ) {
+		case "WEB", "DESKTOP_WEB":
+			norm.CheckoutURL = url
+		case "MOBILE", "MOBILE_DEEPLINK", "APP":
+			norm.Deeplink = url
+		}
+	}
+	return &PaymentCreateResponse{
+		ProviderRef: resp.PaymentRequestID,
+		Normalized:  norm,
+		RawResponse: resp.RawResponse,
+	}, nil
+}
+
+// xenditEwalletChannelCode maps a payment method code to a Xendit channel code.
+// GoPay is not supported by Xendit — returns "" so routing falls through to Midtrans/DANA.
+func xenditEwalletChannelCode(code string) string {
+	switch strings.ToUpper(code) {
+	case "PAYOVO":
+		return "OVO"
+	case "PAYSHOPEE":
+		return "SHOPEEPAY"
+	case "PAYLINKAJA":
+		return "LINKAJA"
+	default:
+		return ""
+	}
 }
 
 // extractXenditQRString pulls the QR string from Xendit's actions array.

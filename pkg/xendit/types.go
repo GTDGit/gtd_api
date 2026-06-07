@@ -42,6 +42,11 @@ type PaymentRequestChannelProperties struct {
 	// QRIS-specific fields returned by Xendit
 	QRString   string `json:"qr_string,omitempty"`
 	QRImageURL string `json:"qr_image_url,omitempty"`
+	// Ewallet-specific fields
+	MobileNumber    string `json:"mobile_number,omitempty"`     // OVO requires phone number
+	SuccessReturnURL string `json:"success_return_url,omitempty"` // Redirect URL on success
+	FailureReturnURL string `json:"failure_return_url,omitempty"` // Redirect URL on failure
+	CancelReturnURL  string `json:"cancel_return_url,omitempty"`  // Redirect URL on cancel
 }
 
 type PaymentRequestCreate struct {

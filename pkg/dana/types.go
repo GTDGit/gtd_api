@@ -41,6 +41,7 @@ const (
 	PayOptionOVO        = "NETWORK_PAY_PG_OVO"
 	PayOptionGoPay      = "NETWORK_PAY_PG_GOPAY"
 	PayOptionShopeePay  = "NETWORK_PAY_PG_SPAY"
+	PayOptionLinkAja    = "NETWORK_PAY_PG_LINKAJA"
 
 	StatusSuccess   = "00"
 	StatusCancelled = "05"

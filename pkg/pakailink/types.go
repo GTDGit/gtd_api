@@ -133,6 +133,53 @@ type InquiryQRResponse struct {
 	RawResponse                json.RawMessage `json:"-"`
 }
 
+// EmoneyRequest is the input for Pakailink e-money payment.
+type EmoneyRequest struct {
+	PartnerReferenceNo string
+	CustomerID         string
+	CustomerName       string
+	CustomerPhone      string
+	CustomerEmail      string
+	TotalAmount        int64
+	ProductCode        string // PAYDANA, PAYGOPAY, PAYLINKAJA, PAYOVO, PAYSHOPEE
+	EmoneyPhone        string // phone linked to the e-wallet
+	BillTitle          string
+	CallbackURL        string
+	ExpiredDate        string // ISO 8601 +07:00 optional
+}
+
+type EmoneyResponse struct {
+	ResponseCode    string          `json:"responseCode"`
+	ResponseMessage string          `json:"responseMessage"`
+	EmoneyData      EmoneyData      `json:"emoneyData"`
+	RawResponse     json.RawMessage `json:"-"`
+}
+
+type EmoneyData struct {
+	PartnerReferenceNo string         `json:"partnerReferenceNo"`
+	ReferenceNo        string         `json:"referenceNo"`
+	CustomerID         string         `json:"customerId"`
+	CustomerName       string         `json:"customerName"`
+	CustomerPhone      string         `json:"customerPhone,omitempty"`
+	CustomerEmail      string         `json:"customerEmail,omitempty"`
+	PaymentCode        string         `json:"paymentCode,omitempty"`
+	TotalAmount        Amount         `json:"totalAmount"`
+	ExpiredDate        string         `json:"expiredDate,omitempty"`
+	AdditionalInfo     map[string]any `json:"additionalInfo,omitempty"`
+}
+
+type InquiryEmoneyResponse struct {
+	ResponseCode               string          `json:"responseCode"`
+	ResponseMessage            string          `json:"responseMessage"`
+	OriginalPartnerReferenceNo string          `json:"originalPartnerReferenceNo"`
+	OriginalReferenceNo        string          `json:"originalReferenceNo,omitempty"`
+	LatestTransactionStatus    string          `json:"latestTransactionStatus"`
+	TransactionStatusDesc      string          `json:"transactionStatusDesc,omitempty"`
+	Amount                     Amount          `json:"amount,omitempty"`
+	AdditionalInfo             map[string]any  `json:"additionalInfo,omitempty"`
+	RawResponse                json.RawMessage `json:"-"`
+}
+
 // WebhookPayload is the combined shape covering VA payment + QRIS MPM notifications.
 // VA callbacks wrap fields in transactionData; QRIS callbacks send fields flat at the root.
 type WebhookPayload struct {

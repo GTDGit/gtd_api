@@ -43,6 +43,8 @@ func (p *PakailinkProviderClient) CreatePayment(ctx context.Context, method *mod
 		return p.createVA(ctx, method, req)
 	case models.PaymentTypeQRIS:
 		return p.createQRIS(ctx, method, req)
+	case models.PaymentTypeEwallet:
+		return p.createEmoney(ctx, method, req)
 	default:
 		return nil, newPaymentError(400, "UNSUPPORTED_PAYMENT_TYPE", "Pakailink does not support this payment type", nil)
 	}
@@ -125,6 +127,51 @@ func (p *PakailinkProviderClient) createQRIS(ctx context.Context, method *models
 	}, nil
 }
 
+func (p *PakailinkProviderClient) createEmoney(ctx context.Context, method *models.PaymentMethod, req *PaymentCreateRequest) (*PaymentCreateResponse, error) {
+	// partnerReferenceNo max 40 chars per Pakailink emoney docs
+	refNo := req.PartnerRef
+	if len(refNo) > 40 {
+		refNo = refNo[:40]
+	}
+	// emoneyPhone is mandatory — use CustomerPhone (Pakailink will reject if empty)
+	phone := firstNonEmpty(req.CustomerPhone, req.CustomerEmail)
+	emoneyReq := pakailink.EmoneyRequest{
+		PartnerReferenceNo: refNo,
+		CustomerID:         refNo,
+		CustomerName:       firstNonEmpty(req.CustomerName, "Customer"),
+		CustomerPhone:      req.CustomerPhone,
+		CustomerEmail:      req.CustomerEmail,
+		TotalAmount:        req.TotalAmount,
+		ProductCode:        strings.ToUpper(method.Code), // PAYDANA, PAYGOPAY, etc.
+		EmoneyPhone:        phone,
+		BillTitle:          firstNonEmpty(req.Description, method.Name, method.Code),
+		CallbackURL:        firstNonEmpty(req.CallbackURL, p.callbackURL),
+		ExpiredDate:        formatPakailinkExpiry(req.ExpiredAt),
+	}
+	resp, err := p.client.CreateEmoney(ctx, emoneyReq)
+	if err != nil {
+		return nil, mapPakailinkError(err)
+	}
+	// urlPayment is the redirect/deeplink URL for the customer
+	urlPayment := ""
+	if resp.EmoneyData.AdditionalInfo != nil {
+		if v, ok := resp.EmoneyData.AdditionalInfo["urlPayment"].(string); ok {
+			urlPayment = v
+		}
+	}
+	norm := PaymentDetailNormalized{
+		Provider:            string(models.ProviderPakailink),
+		ProviderReferenceNo: resp.EmoneyData.ReferenceNo,
+		CheckoutURL:         urlPayment,
+		Deeplink:            urlPayment,
+	}
+	return &PaymentCreateResponse{
+		ProviderRef: resp.EmoneyData.ReferenceNo,
+		Normalized:  norm,
+		RawResponse: resp.RawResponse,
+	}, nil
+}
+
 func (p *PakailinkProviderClient) InquiryPayment(ctx context.Context, payment *models.Payment) (*PaymentInquiryResult, error) {
 	switch payment.PaymentType {
 	case models.PaymentTypeVA:
@@ -142,6 +189,19 @@ func (p *PakailinkProviderClient) InquiryPayment(ctx context.Context, payment *m
 		}, nil
 	case models.PaymentTypeQRIS:
 		resp, err := p.client.InquiryQR(ctx, payment.PaymentID)
+		if err != nil {
+			return nil, mapPakailinkError(err)
+		}
+		status := mapPakailinkTransactionStatus(resp.LatestTransactionStatus)
+		amount, _ := pakailink.ParseWebhookAmount(resp.Amount)
+		return &PaymentInquiryResult{
+			Status:      status,
+			ProviderRef: firstNonEmpty(resp.OriginalReferenceNo, resp.OriginalPartnerReferenceNo),
+			PaidAmount:  amount,
+			RawResponse: resp.RawResponse,
+		}, nil
+	case models.PaymentTypeEwallet:
+		resp, err := p.client.InquiryEmoney(ctx, payment.PaymentID)
 		if err != nil {
 			return nil, mapPakailinkError(err)
 		}

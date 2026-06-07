@@ -53,9 +53,9 @@ func (p *MidtransProviderClient) CreatePayment(ctx context.Context, method *mode
 
 	case models.PaymentTypeEwallet:
 		switch code {
-		case "GOPAY":
+		case "GOPAY", "PAYGOPAY":
 			resp, err = p.client.ChargeGoPay(ctx, req.PartnerRef, req.TotalAmount, firstNonEmpty(req.CallbackURL, p.callbackURL), cust)
-		case "SHOPEEPAY":
+		case "SHOPEEPAY", "PAYSHOPEE":
 			resp, err = p.client.ChargeShopeePay(ctx, req.PartnerRef, req.TotalAmount, firstNonEmpty(req.CallbackURL, p.callbackURL), cust)
 		default:
 			return nil, newPaymentError(400, "UNSUPPORTED_PAYMENT_TYPE", "Unsupported e-wallet code for Midtrans: "+code, nil)
@@ -68,10 +68,10 @@ func (p *MidtransProviderClient) CreatePayment(ctx context.Context, method *mode
 			ProviderReferenceNo: resp.TransactionID,
 		}
 		switch code {
-		case "GOPAY":
+		case "GOPAY", "PAYGOPAY":
 			norm.QRCodeURL = resp.Action("generate-qr-code")
 			norm.Deeplink = resp.Action("deeplink-redirect")
-		case "SHOPEEPAY":
+		case "SHOPEEPAY", "PAYSHOPEE":
 			norm.Deeplink = resp.Action("deeplink-redirect")
 		}
 		return &PaymentCreateResponse{

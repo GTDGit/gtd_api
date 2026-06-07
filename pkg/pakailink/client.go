@@ -21,8 +21,10 @@ const (
 	CreateVAPath       = "/snap/v1.0/transfer-va/create-va"
 	InquiryVAPath      = "/snap/v1.0/transfer-va/create-va-status"
 	DeleteVAPath       = "/snap/v1.0/transfer-va/delete-va"
-	GenerateQRPath  = "/snap/v1.0/qr/qr-mpm-generate"
-	InquiryQRPath   = "/snap/v1.0/qr/qr-mpm-status"
+	GenerateQRPath   = "/snap/v1.0/qr/qr-mpm-generate"
+	InquiryQRPath    = "/snap/v1.0/qr/qr-mpm-status"
+	CreateEmoneyPath = "/snap/v1.0/payment/emoney"
+	InquiryEmoneyPath = "/snap/v1.0/payment/emoney-status"
 
 	DefaultChannelID = "95221"
 
@@ -236,6 +238,53 @@ func (c *Client) InquiryQR(ctx context.Context, partnerReferenceNo string) (*Inq
 	body := map[string]any{"originalPartnerReferenceNo": partnerReferenceNo}
 	var resp InquiryQRResponse
 	raw, err := c.doSNAPRequest(ctx, http.MethodPost, InquiryQRPath, body, &resp)
+	if err != nil {
+		return nil, err
+	}
+	resp.RawResponse = raw
+	return &resp, nil
+}
+
+// CreateEmoney initiates a Pakailink e-money payment.
+func (c *Client) CreateEmoney(ctx context.Context, req EmoneyRequest) (*EmoneyResponse, error) {
+	body := map[string]any{
+		"partnerReferenceNo": req.PartnerReferenceNo,
+		"customerId":         req.CustomerID,
+		"customerName":       req.CustomerName,
+		"totalAmount": Amount{
+			Value:    formatAmount(req.TotalAmount),
+			Currency: "IDR",
+		},
+		"additionalInfo": map[string]any{
+			"productCode": req.ProductCode,
+			"emoneyPhone": req.EmoneyPhone,
+			"billTitle":   req.BillTitle,
+			"callbackUrl": req.CallbackURL,
+		},
+	}
+	if req.CustomerPhone != "" {
+		body["customerPhone"] = req.CustomerPhone
+	}
+	if req.CustomerEmail != "" {
+		body["customerEmail"] = req.CustomerEmail
+	}
+	if req.ExpiredDate != "" {
+		body["expiredDate"] = req.ExpiredDate
+	}
+	var resp EmoneyResponse
+	raw, err := c.doSNAPRequest(ctx, http.MethodPost, CreateEmoneyPath, body, &resp)
+	if err != nil {
+		return nil, err
+	}
+	resp.RawResponse = raw
+	return &resp, nil
+}
+
+// InquiryEmoney queries the status of a Pakailink e-money transaction.
+func (c *Client) InquiryEmoney(ctx context.Context, partnerReferenceNo string) (*InquiryEmoneyResponse, error) {
+	body := map[string]any{"originalPartnerReferenceNo": partnerReferenceNo}
+	var resp InquiryEmoneyResponse
+	raw, err := c.doSNAPRequest(ctx, http.MethodPost, InquiryEmoneyPath, body, &resp)
 	if err != nil {
 		return nil, err
 	}

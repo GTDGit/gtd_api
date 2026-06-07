@@ -327,11 +327,10 @@ func (h *PaymentWebhookHandler) markCallbackError(ctx context.Context, id int, m
 }
 
 func respondSNAP(c *gin.Context, httpStatus int, code, message string) {
-	wib := time.FixedZone("WIB", 7*3600)
 	c.JSON(httpStatus, gin.H{
 		"responseCode":    code,
 		"responseMessage": message,
-		"timestamp":       time.Now().In(wib).Format("2006-01-02T15:04:05+07:00"),
+		"timestamp":       time.Now().UTC().Format("2006-01-02T15:04:05") + "+07:00",
 	})
 }
 

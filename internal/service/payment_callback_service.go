@@ -252,7 +252,7 @@ func buildPaymentCallbackPayload(p *models.Payment, event string) []byte {
 		if t.IsZero() {
 			return ""
 		}
-		return t.In(time.FixedZone("WIB", 7*3600)).Format("2006-01-02T15:04:05+07:00")
+		return t.UTC().Format("2006-01-02T15:04:05") + "+07:00"
 	}
 	fmtWIBPtr := func(t *time.Time) string {
 		if t == nil {

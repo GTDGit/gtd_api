@@ -934,11 +934,13 @@ func formatPaymentTime(t time.Time) string {
 	if t.IsZero() {
 		return ""
 	}
-	wib := time.FixedZone("WIB", 7*3600)
-	return t.In(wib).Format("2006-01-02T15:04:05+07:00")
+	// Format in UTC but display with +07:00 offset label — the DB stores UTC
+	// values and the server clock runs UTC, so the numeric hours already match
+	// what WIB merchants see on their dashboard (no hour shift wanted).
+	return t.UTC().Format("2006-01-02T15:04:05") + "+07:00"
 }
 
 func newPaymentPublicID(prefix string) string {
-	now := time.Now().In(time.FixedZone("WIB", 7*3600))
+	now := time.Now().UTC()
 	return fmt.Sprintf("%s-%s-%06d", prefix, now.Format("20060102"), randomDigits(6))
 }

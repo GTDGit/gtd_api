@@ -1,0 +1,1 @@
+-- Rollback 000048: no-op (provider changes are not critical to reverse)

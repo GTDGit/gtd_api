@@ -438,7 +438,7 @@ func (c *Client) doRequest(req *http.Request, out any) (json.RawMessage, error) 
 		}
 	}
 	code, msg := extractResponseStatus(raw)
-	if resp.StatusCode >= http.StatusBadRequest || !isSuccessCode(code) {
+	if resp.StatusCode >= http.StatusBadRequest || (resp.StatusCode < http.StatusBadRequest && !isSuccessCode(code) && code != "") {
 		log.Debug().
 			Str("url", req.URL.String()).
 			Int("httpStatus", resp.StatusCode).

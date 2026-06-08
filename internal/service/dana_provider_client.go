@@ -121,6 +121,22 @@ func (p *DanaProviderClient) createOrder(ctx context.Context, method *models.Pay
 }
 
 func (p *DanaProviderClient) InquiryPayment(ctx context.Context, payment *models.Payment) (*PaymentInquiryResult, error) {
+	// CPM uses a different inquiry endpoint (serviceCode=60, /rest/v1.1/debit/status)
+	if payment.PaymentCode == "CPM" {
+		resp, err := p.client.InquiryCPMOrder(ctx, payment.PaymentID)
+		if err != nil {
+			return nil, mapDanaError(err)
+		}
+		status := mapDanaTransactionStatus(resp.LatestTransactionStatus)
+		amount, _ := dana.ParseWebhookAmount(resp.Amount)
+		return &PaymentInquiryResult{
+			Status:      status,
+			ProviderRef: resp.OriginalReferenceNo,
+			PaidAmount:  amount,
+			RawResponse: resp.RawResponse,
+		}, nil
+	}
+	// MPM / e-wallet uses Gapura PG status endpoint (serviceCode=55)
 	resp, err := p.client.InquiryOrder(ctx, payment.PaymentID)
 	if err != nil {
 		return nil, mapDanaError(err)
@@ -156,17 +172,18 @@ func (p *DanaProviderClient) createCPMQRIS(ctx context.Context, method *models.P
 	if storeID == "" {
 		return nil, newPaymentError(400, "MISSING_CONFIG", "DANA CPM QRIS requires DANA_EXTERNAL_STORE_ID to be configured", nil)
 	}
-	// ScanData (customer QR) must be provided — it comes from the customer's DANA app scan.
-	scanData := req.ScanData
-	if scanData == "" {
-		return nil, newPaymentError(400, "MISSING_FIELD", "scanData (customer QR code) is required for CPM QRIS", nil)
+	// QRContent is the QR string scanned from the customer's DANA app.
+	qrContent := req.ScanData
+	if qrContent == "" {
+		return nil, newPaymentError(400, "MISSING_FIELD", "scanData (QR content from customer's DANA app) is required for CPM QRIS", nil)
 	}
 	cpmReq := dana.CPMPaymentRequest{
 		PartnerReferenceNo: refNo,
+		QRContent:          qrContent,
+		Amount:             req.TotalAmount,
 		StoreID:            storeID,
 		TerminalID:         p.terminalID,
-		Amount:             req.TotalAmount,
-		ScanData:           scanData,
+		Title:              firstNonEmpty(req.Description, method.Name),
 		ValidityPeriod:     formatDanaExpiry(req.ExpiredAt),
 		NotificationURL:    firstNonEmpty(req.CallbackURL, p.notificationURL, "https://dev-api.gtd.co.id/v1/webhook/dana"),
 	}
@@ -175,7 +192,7 @@ func (p *DanaProviderClient) createCPMQRIS(ctx context.Context, method *models.P
 		return nil, mapDanaError(err)
 	}
 	norm := PaymentDetailNormalized{
-		QRString: scanData, // Echo back the scan data as the QR content
+		QRString: qrContent, // Echo back — CPM doesn't generate a new QR
 	}
 	return &PaymentCreateResponse{
 		ProviderRef: resp.ReferenceNo,

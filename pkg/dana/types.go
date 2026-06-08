@@ -159,14 +159,20 @@ type GenerateQRISRequest struct {
 }
 
 // CPMPaymentRequest is the input for DANA QRIS Acquirer CPM (Consumer Presented Mode) endpoint.
+// The merchant scans the customer's QR code from their DANA app and submits it here.
 type CPMPaymentRequest struct {
-	PartnerReferenceNo string
-	StoreID            string
-	TerminalID         string
+	PartnerReferenceNo string // max 25 chars
+	QRContent          string // QR string scanned from customer's DANA app (was scanData)
 	Amount             int64
-	ScanData           string // QR content from customer's DANA app
-	ValidityPeriod     string // ISO 8601 +07:00
-	NotificationURL    string
+	StoreID            string // externalStoreId (optional)
+	TerminalID         string // optional
+	Title              string // brief description (mandatory per docs, defaults to partnerReferenceNo)
+	ValidityPeriod     string // expiryTime ISO 8601 +07:00, optional (default 5 min)
+	MCC                string // merchant category code, default "5732"
+	ProductCode        string // default "51051000100000000040"
+	DeviceID           string // scanner deviceId, default "GTD-TERMINAL-001"
+	DeviceIP           string // scanner deviceIp, default "127.0.0.1"
+	NotificationURL    string // notifyUrl in additionalInfo
 }
 
 // CPMPaymentResponse is the response from the DANA QRIS Acquirer CPM endpoint.

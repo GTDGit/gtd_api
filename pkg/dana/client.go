@@ -29,11 +29,13 @@ const (
 	CancelPath       = "/payment-gateway/v1.0/debit/cancel.htm"
 	RefundPath       = "/payment-gateway/v1.0/debit/refund.htm"
 	GenerateQRISPath = "/v1.0/qr/qr-mpm-generate.htm" // QRIS Acquirer endpoint (unused after switch to Custom Checkout)
-	CPMPaymentPath   = "/v1.0/qr/qr-mpm-payment.htm"  // QRIS Acquirer CPM endpoint
+	CPMPaymentPath    = "/v1.0/qr/qr-cpm-payment.htm"  // QRIS Acquirer CPM endpoint
+	CPMInquiryPath    = "/rest/v1.1/debit/status"       // QRIS Acquirer CPM query (serviceCode=60)
 
 	DefaultChannelID = "95221"
-	ServiceCodeDebit = "54" // Create Order (payment-host-to-host)
-	ServiceCodeQuery = "55" // Query Payment (status)
+	ServiceCodeDebit    = "54" // Create Order (payment-host-to-host)
+	ServiceCodeQuery    = "55" // Query Payment (Gapura PG / QRIS MPM status)
+	ServiceCodeCPMQuery = "60" // Query Payment (QRIS CPM Acquirer status)
 )
 
 type Config struct {
@@ -299,33 +301,82 @@ func (c *Client) doAsymmetricRequest(ctx context.Context, method, path string, b
 }
 
 // CPMPayment processes a QRIS CPM (Consumer Presented Mode) payment.
-// The merchant scans the customer's QR code from their DANA app.
+// The merchant scans the customer's QR code (qrContent) from their DANA app.
+// Endpoint: POST /v1.0/qr/qr-cpm-payment.htm
 // Uses asymmetric signature per DANA QRIS Acquirer docs.
 func (c *Client) CPMPayment(ctx context.Context, req CPMPaymentRequest) (*CPMPaymentResponse, error) {
 	wib := time.FixedZone("WIB", 7*3600)
-	validityPeriod := req.ValidityPeriod
-	if validityPeriod == "" {
-		validityPeriod = time.Now().In(wib).Add(30 * time.Minute).Format("2006-01-02T15:04:05+07:00")
+	expiryTime := req.ValidityPeriod
+	if expiryTime == "" {
+		expiryTime = time.Now().In(wib).Add(5 * time.Minute).Format("2006-01-02T15:04:05+07:00")
+	}
+	mcc := req.MCC
+	if mcc == "" {
+		mcc = "5732"
+	}
+	productCode := req.ProductCode
+	if productCode == "" {
+		productCode = "51051000100000000040" // default QRIS product code
+	}
+	deviceID := req.DeviceID
+	if deviceID == "" {
+		deviceID = "GTD-TERMINAL-001"
+	}
+	deviceIP := req.DeviceIP
+	if deviceIP == "" {
+		deviceIP = "127.0.0.1"
 	}
 	body := map[string]any{
-		"merchantId":         c.cfg.MerchantID,
-		"storeId":            req.StoreID,
 		"partnerReferenceNo": req.PartnerReferenceNo,
+		"qrContent":          req.QRContent, // scanned QR string from customer's DANA app
 		"amount": Amount{
 			Value:    formatAmount(req.Amount),
 			Currency: "IDR",
 		},
-		"scanData":       req.ScanData,
-		"validityPeriod": validityPeriod,
-		"additionalInfo": map[string]any{
-			"notificationUrl": req.NotificationURL,
+		"merchantId": c.cfg.MerchantID,
+		"title":      firstNonEmpty(req.Title, req.PartnerReferenceNo),
+		"expiryTime": expiryTime,
+		"scannerInfo": map[string]any{
+			"deviceId": deviceID,
+			"deviceIp": deviceIP,
 		},
+		"additionalInfo": map[string]any{
+			"qrContentType": "BAR_CODE",
+			"mcc":           mcc,
+			"productCode":   productCode,
+			"notifyUrl":     req.NotificationURL,
+			"envInfo": map[string]any{
+				"sourcePlatform":    "IPG",
+				"terminalType":      "SYSTEM",
+				"orderTerminalType": "SYSTEM",
+			},
+		},
+	}
+	if req.StoreID != "" {
+		body["externalStoreId"] = req.StoreID
 	}
 	if req.TerminalID != "" {
 		body["terminalId"] = req.TerminalID
 	}
 	var resp CPMPaymentResponse
 	raw, err := c.doAsymmetricRequest(ctx, http.MethodPost, CPMPaymentPath, body, &resp)
+	if err != nil {
+		return nil, err
+	}
+	resp.RawResponse = raw
+	return &resp, nil
+}
+
+// InquiryCPMOrder queries the status of a QRIS CPM transaction.
+// Uses serviceCode "60" (CPM Acquirer) instead of "55" (Gapura PG).
+func (c *Client) InquiryCPMOrder(ctx context.Context, partnerReferenceNo string) (*InquiryOrderResponse, error) {
+	body := map[string]any{
+		"originalPartnerReferenceNo": partnerReferenceNo,
+		"merchantId":                 c.cfg.MerchantID,
+		"serviceCode":                ServiceCodeCPMQuery, // "60" for QRIS CPM Acquirer
+	}
+	var resp InquiryOrderResponse
+	raw, err := c.doAsymmetricRequest(ctx, http.MethodPost, CPMInquiryPath, body, &resp)
 	if err != nil {
 		return nil, err
 	}
@@ -438,7 +489,7 @@ func (c *Client) doRequest(req *http.Request, out any) (json.RawMessage, error) 
 		}
 	}
 	code, msg := extractResponseStatus(raw)
-	if resp.StatusCode >= http.StatusBadRequest || (resp.StatusCode < http.StatusBadRequest && !isSuccessCode(code) && code != "") {
+	if resp.StatusCode >= http.StatusBadRequest || !isSuccessCode(code) {
 		log.Debug().
 			Str("url", req.URL.String()).
 			Int("httpStatus", resp.StatusCode).

@@ -43,7 +43,10 @@ func (p *DanaProviderClient) CreatePayment(ctx context.Context, method *models.P
 		payMethod, payOption := danaEwalletMethodOption(method.Code)
 		return p.createOrder(ctx, method, req, payMethod, payOption)
 	case models.PaymentTypeQRIS:
-		// Use DANA Gapura Custom Checkout with NETWORK_PAY + NETWORK_PAY_PG_QRIS.
+		if strings.ToUpper(strings.TrimSpace(method.Code)) == "CPM" {
+			return p.createCPMQRIS(ctx, method, req)
+		}
+		// MPM: Use DANA Gapura Custom Checkout with NETWORK_PAY + NETWORK_PAY_PG_QRIS.
 		// Returns qrContent in additionalInfo.paymentCode.
 		return p.createOrder(ctx, method, req, dana.PayMethodNetworkPay, dana.PayOptionQRIS)
 	default:
@@ -101,10 +104,7 @@ func (p *DanaProviderClient) createOrder(ctx context.Context, method *models.Pay
 	if err != nil {
 		return nil, mapDanaError(err)
 	}
-	norm := PaymentDetailNormalized{
-		Provider:            string(models.ProviderDanaDirect),
-		ProviderReferenceNo: resp.ReferenceNo,
-	}
+	norm := PaymentDetailNormalized{}
 	if req.Type == models.PaymentTypeQRIS {
 		// Gapura Custom Checkout QRIS: QR string in additionalInfo.paymentCode
 		norm.QRString = resp.PaymentCode()
@@ -164,6 +164,43 @@ func (p *DanaProviderClient) RefundPayment(ctx context.Context, payment *models.
 	return &PaymentRefundResult{
 		ProviderRef: resp.RefundNo,
 		Succeeded:   true,
+		RawResponse: resp.RawResponse,
+	}, nil
+}
+
+func (p *DanaProviderClient) createCPMQRIS(ctx context.Context, method *models.PaymentMethod, req *PaymentCreateRequest) (*PaymentCreateResponse, error) {
+	refNo := req.PartnerRef
+	if len(refNo) > 25 {
+		refNo = refNo[:25]
+	}
+	storeID := p.storeID
+	if storeID == "" {
+		return nil, newPaymentError(400, "MISSING_CONFIG", "DANA CPM QRIS requires DANA_EXTERNAL_STORE_ID to be configured", nil)
+	}
+	// ScanData (customer QR) must be provided — it comes from the customer's DANA app scan.
+	scanData := req.ScanData
+	if scanData == "" {
+		return nil, newPaymentError(400, "MISSING_FIELD", "scanData (customer QR code) is required for CPM QRIS", nil)
+	}
+	cpmReq := dana.CPMPaymentRequest{
+		PartnerReferenceNo: refNo,
+		StoreID:            storeID,
+		TerminalID:         p.terminalID,
+		Amount:             req.TotalAmount,
+		ScanData:           scanData,
+		ValidityPeriod:     formatDanaExpiry(req.ExpiredAt),
+		NotificationURL:    firstNonEmpty(req.CallbackURL, p.notificationURL, "https://dev-api.gtd.co.id/v1/webhook/dana"),
+	}
+	resp, err := p.client.CPMPayment(ctx, cpmReq)
+	if err != nil {
+		return nil, mapDanaError(err)
+	}
+	norm := PaymentDetailNormalized{
+		QRString: scanData, // Echo back the scan data as the QR content
+	}
+	return &PaymentCreateResponse{
+		ProviderRef: resp.ReferenceNo,
+		Normalized:  norm,
 		RawResponse: resp.RawResponse,
 	}, nil
 }

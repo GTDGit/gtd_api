@@ -13,7 +13,7 @@ type PaymentCreateRequest struct {
 	Type           models.PaymentType
 	Code           string
 	BankCode       string // VA bank code, e.g. "014", "451"
-	PartnerRef     string // public PaymentID (PAY-…)
+	PartnerRef     string // public PaymentID (UUID)
 	Amount         int64
 	Fee            int64
 	TotalAmount    int64
@@ -24,29 +24,27 @@ type PaymentCreateRequest struct {
 	CustomerPhone  string
 	CallbackURL    string
 	ReturnURL      string
+	ScanData       string // CPM QRIS: QR code content scanned from customer's app
 	Metadata       map[string]any
 }
 
 // PaymentDetailNormalized is the union shape copied into payment.payment_detail.
 type PaymentDetailNormalized struct {
 	// VA
-	BankCode            string `json:"bankCode,omitempty"`
-	BankName            string `json:"bankName,omitempty"`
-	VANumber            string `json:"vaNumber,omitempty"`
-	AccountName         string `json:"accountName,omitempty"`
+	BankCode    string `json:"bankCode,omitempty"`
+	BankName    string `json:"bankName,omitempty"`
+	VANumber    string `json:"vaNumber,omitempty"`
+	AccountName string `json:"accountName,omitempty"`
 	// EWALLET/QRIS
-	CheckoutURL string `json:"checkoutUrl,omitempty"`
+	CheckoutURL  string `json:"checkoutUrl,omitempty"`
 	MobileWebURL string `json:"mobileWebUrl,omitempty"`
-	Deeplink    string `json:"deeplink,omitempty"`
-	QRCodeURL   string `json:"qrCodeUrl,omitempty"`
-	QRString    string `json:"qrString,omitempty"`
-	QRImageURL  string `json:"qrImageUrl,omitempty"`
+	Deeplink     string `json:"deeplink,omitempty"`
+	QRCodeURL    string `json:"qrCodeUrl,omitempty"`
+	QRString     string `json:"qrString,omitempty"`
+	QRImageURL   string `json:"qrImageUrl,omitempty"`
 	// RETAIL
 	RetailName  string `json:"retailName,omitempty"`
 	PaymentCode string `json:"paymentCode,omitempty"`
-	// Shared
-	ProviderReferenceNo string `json:"providerReferenceNo,omitempty"`
-	Provider            string `json:"provider,omitempty"`
 }
 
 // PaymentCreateResponse is returned by all provider adapters.

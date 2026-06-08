@@ -41,9 +41,7 @@ func (p *MidtransProviderClient) CreatePayment(ctx context.Context, method *mode
 			return nil, mapMidtransError(err)
 		}
 		norm := PaymentDetailNormalized{
-			Provider:            string(models.ProviderMidtrans),
-			ProviderReferenceNo: resp.TransactionID,
-			QRString:            resp.QRString,
+			QRString: resp.QRString,
 		}
 		return &PaymentCreateResponse{
 			ProviderRef: resp.TransactionID,
@@ -63,10 +61,7 @@ func (p *MidtransProviderClient) CreatePayment(ctx context.Context, method *mode
 		if err != nil {
 			return nil, mapMidtransError(err)
 		}
-		norm := PaymentDetailNormalized{
-			Provider:            string(models.ProviderMidtrans),
-			ProviderReferenceNo: resp.TransactionID,
-		}
+		norm := PaymentDetailNormalized{}
 		switch code {
 		case "GOPAY", "PAYGOPAY":
 			norm.QRCodeURL = resp.Action("generate-qr-code")

@@ -158,6 +158,28 @@ type GenerateQRISRequest struct {
 	ValidityPeriod     string // ISO 8601 +07:00, optional (default 30 min)
 }
 
+// CPMPaymentRequest is the input for DANA QRIS Acquirer CPM (Consumer Presented Mode) endpoint.
+type CPMPaymentRequest struct {
+	PartnerReferenceNo string
+	StoreID            string
+	TerminalID         string
+	Amount             int64
+	ScanData           string // QR content from customer's DANA app
+	ValidityPeriod     string // ISO 8601 +07:00
+	NotificationURL    string
+}
+
+// CPMPaymentResponse is the response from the DANA QRIS Acquirer CPM endpoint.
+type CPMPaymentResponse struct {
+	ResponseCode       string          `json:"responseCode"`
+	ResponseMessage    string          `json:"responseMessage"`
+	ReferenceNo        string          `json:"referenceNo"`
+	PartnerReferenceNo string          `json:"partnerReferenceNo"`
+	Amount             Amount          `json:"amount,omitempty"`
+	AdditionalInfo     map[string]any  `json:"additionalInfo,omitempty"`
+	RawResponse        json.RawMessage `json:"-"`
+}
+
 // GenerateQRISResponse matches the DANA QRIS Acquirer generate response.
 type GenerateQRISResponse struct {
 	ResponseCode       string          `json:"responseCode"`

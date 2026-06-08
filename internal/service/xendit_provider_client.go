@@ -60,10 +60,8 @@ func (p *XenditProviderClient) createRetail(ctx context.Context, method *models.
 		retailName = channel
 	}
 	norm := PaymentDetailNormalized{
-		Provider:            string(models.ProviderXendit),
-		RetailName:          retailName,
-		PaymentCode:         resp.ChannelProperties.PaymentCode,
-		ProviderReferenceNo: resp.PaymentRequestID,
+		RetailName:  retailName,
+		PaymentCode: resp.ChannelProperties.PaymentCode,
 	}
 	return &PaymentCreateResponse{
 		ProviderRef: resp.PaymentRequestID,
@@ -97,10 +95,8 @@ func (p *XenditProviderClient) createQRIS(ctx context.Context, method *models.Pa
 	}
 
 	norm := PaymentDetailNormalized{
-		Provider:            string(models.ProviderXendit),
-		QRString:            qrString,
-		QRImageURL:          resp.ChannelProperties.QRImageURL,
-		ProviderReferenceNo: resp.PaymentRequestID,
+		QRString:   qrString,
+		QRImageURL: resp.ChannelProperties.QRImageURL,
 	}
 	return &PaymentCreateResponse{
 		ProviderRef: resp.PaymentRequestID,
@@ -139,10 +135,7 @@ func (p *XenditProviderClient) createEwallet(ctx context.Context, method *models
 	if err != nil {
 		return nil, mapXenditError(err)
 	}
-	norm := PaymentDetailNormalized{
-		Provider:            string(models.ProviderXendit),
-		ProviderReferenceNo: resp.PaymentRequestID,
-	}
+	norm := PaymentDetailNormalized{}
 	// Xendit returns deeplink/checkout URL in actions array
 	for _, a := range resp.Actions {
 		m, ok := a.(map[string]interface{})
@@ -178,6 +171,8 @@ func xenditEwalletChannelCode(code string) string {
 		return "SHOPEEPAY"
 	case "PAYLINKAJA":
 		return "LINKAJA"
+	case "ASTRAPAY":
+		return "ASTRAPAY"
 	default:
 		return ""
 	}

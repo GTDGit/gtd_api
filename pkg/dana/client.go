@@ -29,6 +29,7 @@ const (
 	CancelPath       = "/payment-gateway/v1.0/debit/cancel.htm"
 	RefundPath       = "/payment-gateway/v1.0/debit/refund.htm"
 	GenerateQRISPath = "/v1.0/qr/qr-mpm-generate.htm" // QRIS Acquirer endpoint (unused after switch to Custom Checkout)
+	CPMPaymentPath   = "/v1.0/qr/qr-mpm-payment.htm"  // QRIS Acquirer CPM endpoint
 
 	DefaultChannelID = "95221"
 	ServiceCodeDebit = "54" // Create Order (payment-host-to-host)
@@ -295,6 +296,41 @@ func (c *Client) doAsymmetricRequest(ctx context.Context, method, path string, b
 	req.Header.Set("CHANNEL-ID", c.cfg.ChannelID)
 
 	return c.doRequest(req, out)
+}
+
+// CPMPayment processes a QRIS CPM (Consumer Presented Mode) payment.
+// The merchant scans the customer's QR code from their DANA app.
+// Uses asymmetric signature per DANA QRIS Acquirer docs.
+func (c *Client) CPMPayment(ctx context.Context, req CPMPaymentRequest) (*CPMPaymentResponse, error) {
+	wib := time.FixedZone("WIB", 7*3600)
+	validityPeriod := req.ValidityPeriod
+	if validityPeriod == "" {
+		validityPeriod = time.Now().In(wib).Add(30 * time.Minute).Format("2006-01-02T15:04:05+07:00")
+	}
+	body := map[string]any{
+		"merchantId":         c.cfg.MerchantID,
+		"storeId":            req.StoreID,
+		"partnerReferenceNo": req.PartnerReferenceNo,
+		"amount": Amount{
+			Value:    formatAmount(req.Amount),
+			Currency: "IDR",
+		},
+		"scanData":       req.ScanData,
+		"validityPeriod": validityPeriod,
+		"additionalInfo": map[string]any{
+			"notificationUrl": req.NotificationURL,
+		},
+	}
+	if req.TerminalID != "" {
+		body["terminalId"] = req.TerminalID
+	}
+	var resp CPMPaymentResponse
+	raw, err := c.doAsymmetricRequest(ctx, http.MethodPost, CPMPaymentPath, body, &resp)
+	if err != nil {
+		return nil, err
+	}
+	resp.RawResponse = raw
+	return &resp, nil
 }
 
 func (c *Client) InquiryOrder(ctx context.Context, partnerReferenceNo string) (*InquiryOrderResponse, error) {

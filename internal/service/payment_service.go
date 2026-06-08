@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 
 	"github.com/GTDGit/gtd_api/internal/models"
@@ -72,6 +73,8 @@ type CreatePaymentRequest struct {
 	PaymentMethod *PaymentMethodRequest `json:"paymentMethod,omitempty"`
 	Customer    *CustomerRequest      `json:"customer,omitempty"`
 	Amount      int64                `json:"amount"`
+	FeePaidBy   string               `json:"feePaidBy,omitempty"` // "merchant" (default) or "customer"
+	ScanData    string               `json:"scanData,omitempty"`  // CPM QRIS: QR code from customer's app
 	Description string               `json:"description,omitempty"`
 	ExpiredAt   string               `json:"expiredAt,omitempty"`
 	CallbackURL string               `json:"callbackUrl,omitempty"`
@@ -109,20 +112,29 @@ type CreateRefundRequest struct {
 	Reason string `json:"reason"`
 }
 
+// PaymentMethodResponse is the nested paymentMethod object in the response.
+type PaymentMethodResponse struct {
+	Type string `json:"type"`
+	Code string `json:"code"`
+}
+
+// AmountResponse is the nested amount object in the response.
+type AmountResponse struct {
+	Subtotal int64 `json:"subtotal"` // original amount before fee
+	Fee      int64 `json:"fee"`
+	Total    int64 `json:"total"` // subtotal + fee
+}
+
 // PaymentResponse is the shape returned on create/get endpoints.
 type PaymentResponse struct {
-	PaymentID          string          `json:"paymentId"`
+	ID                 string          `json:"id"`
 	ReferenceID        string          `json:"referenceId"`
-	PaymentType        string          `json:"paymentType"`
-	PaymentCode        string          `json:"paymentCode"`
-	Provider           string          `json:"provider"`
-	Amount             int64           `json:"amount"`
-	Fee                int64           `json:"fee"`
-	TotalAmount        int64           `json:"totalAmount"`
+	PaymentMethod      PaymentMethodResponse `json:"paymentMethod"`
+	Amount             AmountResponse  `json:"amount"`
+	FeePaidBy          string          `json:"feePaidBy"`
 	Status             string          `json:"status"`
 	PaymentDetail      json.RawMessage `json:"paymentDetail,omitempty"`
 	PaymentInstruction json.RawMessage `json:"paymentInstruction,omitempty"`
-	ProviderRef        string          `json:"providerRef,omitempty"`
 	CustomerName       string          `json:"customerName,omitempty"`
 	CustomerEmail      string          `json:"customerEmail,omitempty"`
 	CustomerPhone      string          `json:"customerPhone,omitempty"`
@@ -299,7 +311,15 @@ func (s *PaymentService) CreatePayment(ctx context.Context, req *CreatePaymentRe
 	totalAmount := req.Amount + fee
 	expiredAt := resolveExpiredAt(req.ExpiredAt, method.ExpiredDuration)
 
+	// Resolve feePaidBy
+	feePaidBy := strings.ToLower(strings.TrimSpace(req.FeePaidBy))
+	if feePaidBy == "" {
+		feePaidBy = "merchant"
+	}
+
 	metadata := models.NullableRawMessage(req.Metadata)
+	// Store feePaidBy in metadata for retrieval in buildResponse
+	metadata = mergeFeePaidByMetadata(metadata, feePaidBy)
 
 	payment := &models.Payment{
 		ReferenceID:     req.ReferenceID,
@@ -363,6 +383,7 @@ func (s *PaymentService) CreatePayment(ctx context.Context, req *CreatePaymentRe
 		CustomerPhone: customerPhone,
 		CallbackURL:   req.CallbackURL,
 		ReturnURL:     req.ReturnURL,
+		ScanData:      req.ScanData,
 	}
 	start := time.Now()
 	providerResp, providerErr := provider.CreatePayment(ctx, method, providerReq)
@@ -725,7 +746,7 @@ type PaymentWebhookEvent struct {
 func (s *PaymentService) createPaymentWithGeneratedID(ctx context.Context, p *models.Payment) error {
 	var lastErr error
 	for i := 0; i < 5; i++ {
-		p.PaymentID = newPaymentPublicID("PAY")
+		p.PaymentID = newPaymentPublicID("")
 		lastErr = s.paymentRepo.CreatePayment(ctx, p)
 		if lastErr == nil {
 			return nil
@@ -743,7 +764,7 @@ func (s *PaymentService) createPaymentWithGeneratedID(ctx context.Context, p *mo
 func (s *PaymentService) createRefundWithGeneratedID(ctx context.Context, r *models.Refund) error {
 	var lastErr error
 	for i := 0; i < 5; i++ {
-		r.RefundID = newPaymentPublicID("REF")
+		r.RefundID = newPaymentPublicID("")
 		lastErr = s.paymentRepo.CreateRefund(ctx, r)
 		if lastErr == nil {
 			return nil
@@ -829,22 +850,23 @@ func (s *PaymentService) EnqueueCallback(ctx context.Context, p *models.Payment,
 
 func (s *PaymentService) buildResponse(p *models.Payment) *PaymentResponse {
 	resp := &PaymentResponse{
-		PaymentID:          p.PaymentID,
-		ReferenceID:        p.ReferenceID,
-		PaymentType:        string(p.PaymentType),
-		PaymentCode:        p.PaymentCode,
-		Provider:           string(p.Provider),
-		Amount:             p.Amount,
-		Fee:                p.Fee,
-		TotalAmount:        p.TotalAmount,
+		ID:          p.PaymentID,
+		ReferenceID: p.ReferenceID,
+		PaymentMethod: PaymentMethodResponse{
+			Type: string(p.PaymentType),
+			Code: p.PaymentCode,
+		},
+		Amount: AmountResponse{
+			Subtotal: p.Amount,
+			Fee:      p.Fee,
+			Total:    p.TotalAmount,
+		},
+		FeePaidBy:          extractFeePaidByFromMetadata(p.Metadata),
 		Status:             string(p.Status),
 		PaymentDetail:      json.RawMessage(p.PaymentDetail),
 		PaymentInstruction: json.RawMessage(p.PaymentInstruction),
 		ExpiredAt:          formatPaymentTime(p.ExpiredAt),
 		CreatedAt:          formatPaymentTime(p.CreatedAt),
-	}
-	if p.ProviderRef != nil {
-		resp.ProviderRef = *p.ProviderRef
 	}
 	if p.CustomerName != nil {
 		resp.CustomerName = *p.CustomerName
@@ -940,7 +962,35 @@ func formatPaymentTime(t time.Time) string {
 	return t.UTC().Format("2006-01-02T15:04:05") + "+07:00"
 }
 
-func newPaymentPublicID(prefix string) string {
-	now := time.Now().UTC()
-	return fmt.Sprintf("%s-%s-%06d", prefix, now.Format("20060102"), randomDigits(6))
+func newPaymentPublicID(_ string) string {
+	return uuid.New().String()
+}
+
+// mergeFeePaidByMetadata stores feePaidBy into the metadata JSON blob.
+func mergeFeePaidByMetadata(m models.NullableRawMessage, feePaidBy string) models.NullableRawMessage {
+	merged := map[string]any{}
+	if len(m) > 0 {
+		_ = json.Unmarshal(m, &merged)
+	}
+	merged["_feePaidBy"] = feePaidBy
+	raw, err := json.Marshal(merged)
+	if err != nil {
+		return m
+	}
+	return models.NullableRawMessage(raw)
+}
+
+// extractFeePaidByFromMetadata reads feePaidBy from the metadata JSON blob.
+func extractFeePaidByFromMetadata(m models.NullableRawMessage) string {
+	if len(m) == 0 {
+		return "merchant"
+	}
+	var meta map[string]any
+	if err := json.Unmarshal(m, &meta); err != nil {
+		return "merchant"
+	}
+	if v, ok := meta["_feePaidBy"].(string); ok && v != "" {
+		return v
+	}
+	return "merchant"
 }

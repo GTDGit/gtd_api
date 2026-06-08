@@ -27,7 +27,7 @@ func (h *PaymentHandler) ListMethods(c *gin.Context) {
 		h.handleError(c, err)
 		return
 	}
-	utils.Success(c, http.StatusOK, "Payment methods retrieved", resp)
+	utils.Success(c, http.StatusOK, "Successfully", resp)
 }
 
 // CreatePayment creates a pending payment and calls the provider.
@@ -47,7 +47,7 @@ func (h *PaymentHandler) CreatePayment(c *gin.Context) {
 		h.handleError(c, err)
 		return
 	}
-	utils.Success(c, http.StatusCreated, "Payment created", resp)
+	utils.Success(c, http.StatusCreated, "Successfully", resp)
 }
 
 // GetPayment returns a single payment, refreshing from the provider if stale.
@@ -62,7 +62,7 @@ func (h *PaymentHandler) GetPayment(c *gin.Context) {
 		h.handleError(c, err)
 		return
 	}
-	utils.Success(c, http.StatusOK, "Payment retrieved", resp)
+	utils.Success(c, http.StatusOK, "Successfully", resp)
 }
 
 // CancelPayment cancels a pending payment.
@@ -81,7 +81,7 @@ func (h *PaymentHandler) CancelPayment(c *gin.Context) {
 		h.handleError(c, err)
 		return
 	}
-	utils.Success(c, http.StatusOK, "Payment cancelled", resp)
+	utils.Success(c, http.StatusOK, "Successfully", resp)
 }
 
 // RefundPayment issues a refund against a paid payment.
@@ -101,7 +101,7 @@ func (h *PaymentHandler) RefundPayment(c *gin.Context) {
 		h.handleError(c, err)
 		return
 	}
-	utils.Success(c, http.StatusCreated, "Refund submitted", refund)
+	utils.Success(c, http.StatusCreated, "Successfully", refund)
 }
 
 func (h *PaymentHandler) handleError(c *gin.Context, err error) {

@@ -69,12 +69,10 @@ func (p *PakailinkProviderClient) createVA(ctx context.Context, method *models.P
 		return nil, mapPakailinkError(err)
 	}
 	norm := PaymentDetailNormalized{
-		BankCode:            bankCode,
-		BankName:            method.Name,
-		VANumber:            resp.VirtualAccountData.VirtualAccountNo,
-		AccountName:         resp.VirtualAccountData.VirtualAccountName,
-		ProviderReferenceNo: resp.VirtualAccountData.PartnerReferenceNo,
-		Provider:            string(models.ProviderPakailink),
+		BankCode:    bankCode,
+		BankName:    method.Name,
+		VANumber:    resp.VirtualAccountData.VirtualAccountNo,
+		AccountName: resp.VirtualAccountData.VirtualAccountName,
 	}
 	return &PaymentCreateResponse{
 		ProviderRef: resp.VirtualAccountData.PartnerReferenceNo,
@@ -115,10 +113,8 @@ func (p *PakailinkProviderClient) createQRIS(ctx context.Context, method *models
 		qrImage = v
 	}
 	norm := PaymentDetailNormalized{
-		QRString:            qrString,
-		QRImageURL:          qrImage,
-		ProviderReferenceNo: firstNonEmpty(resp.ReferenceNo, resp.PartnerReferenceNo),
-		Provider:            string(models.ProviderPakailink),
+		QRString:   qrString,
+		QRImageURL: qrImage,
 	}
 	return &PaymentCreateResponse{
 		ProviderRef: firstNonEmpty(resp.ReferenceNo, resp.PartnerReferenceNo),
@@ -160,10 +156,8 @@ func (p *PakailinkProviderClient) createEmoney(ctx context.Context, method *mode
 		}
 	}
 	norm := PaymentDetailNormalized{
-		Provider:            string(models.ProviderPakailink),
-		ProviderReferenceNo: resp.EmoneyData.ReferenceNo,
-		CheckoutURL:         urlPayment,
-		Deeplink:            urlPayment,
+		CheckoutURL: urlPayment,
+		Deeplink:    urlPayment,
 	}
 	return &PaymentCreateResponse{
 		ProviderRef: resp.EmoneyData.ReferenceNo,

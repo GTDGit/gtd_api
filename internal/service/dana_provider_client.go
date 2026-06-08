@@ -147,27 +147,6 @@ func (p *DanaProviderClient) CancelPayment(ctx context.Context, payment *models.
 	return &PaymentCancelResult{Cancelled: true, RawResponse: resp.RawResponse}, nil
 }
 
-func (p *DanaProviderClient) RefundPayment(ctx context.Context, payment *models.Payment, refund *models.Refund) (*PaymentRefundResult, error) {
-	req := dana.RefundRequest{
-		OriginalPartnerReference: payment.PaymentID,
-		PartnerRefundNo:          refund.RefundID,
-		RefundAmount:             refund.Amount,
-		Reason:                   firstNonEmpty(refund.Reason, "Refund"),
-	}
-	if payment.ProviderRef != nil {
-		req.OriginalReferenceNo = *payment.ProviderRef
-	}
-	resp, err := p.client.Refund(ctx, req)
-	if err != nil {
-		return nil, mapDanaError(err)
-	}
-	return &PaymentRefundResult{
-		ProviderRef: resp.RefundNo,
-		Succeeded:   true,
-		RawResponse: resp.RawResponse,
-	}, nil
-}
-
 func (p *DanaProviderClient) createCPMQRIS(ctx context.Context, method *models.PaymentMethod, req *PaymentCreateRequest) (*PaymentCreateResponse, error) {
 	refNo := req.PartnerRef
 	if len(refNo) > 25 {

@@ -30,7 +30,3 @@ func (p *OVOProviderClient) InquiryPayment(ctx context.Context, payment *models.
 func (p *OVOProviderClient) CancelPayment(ctx context.Context, payment *models.Payment, reason string) (*PaymentCancelResult, error) {
 	return &PaymentCancelResult{Cancelled: true}, nil
 }
-
-func (p *OVOProviderClient) RefundPayment(ctx context.Context, payment *models.Payment, refund *models.Refund) (*PaymentRefundResult, error) {
-	return nil, newPaymentError(501, "NOT_IMPLEMENTED", "OVO Direct refund not yet available", nil)
-}

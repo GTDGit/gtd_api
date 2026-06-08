@@ -81,5 +81,4 @@ type PaymentProviderClient interface {
 	CreatePayment(ctx context.Context, method *models.PaymentMethod, req *PaymentCreateRequest) (*PaymentCreateResponse, error)
 	InquiryPayment(ctx context.Context, payment *models.Payment) (*PaymentInquiryResult, error)
 	CancelPayment(ctx context.Context, payment *models.Payment, reason string) (*PaymentCancelResult, error)
-	RefundPayment(ctx context.Context, payment *models.Payment, refund *models.Refund) (*PaymentRefundResult, error)
 }

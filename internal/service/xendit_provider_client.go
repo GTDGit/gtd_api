@@ -223,26 +223,6 @@ func (p *XenditProviderClient) CancelPayment(ctx context.Context, payment *model
 	return &PaymentCancelResult{Cancelled: true, RawResponse: resp.RawResponse}, nil
 }
 
-func (p *XenditProviderClient) RefundPayment(ctx context.Context, payment *models.Payment, refund *models.Refund) (*PaymentRefundResult, error) {
-	if payment.ProviderRef == nil || *payment.ProviderRef == "" {
-		return nil, newPaymentError(400, "PROVIDER_REF_MISSING", "Cannot refund without provider reference", nil)
-	}
-	create := xendit.RefundCreate{
-		Amount:      refund.Amount,
-		ReferenceID: refund.RefundID,
-		Reason:      firstNonEmpty(refund.Reason, "Refund"),
-	}
-	resp, err := p.client.CreateRefund(ctx, *payment.ProviderRef, create)
-	if err != nil {
-		return nil, mapXenditError(err)
-	}
-	return &PaymentRefundResult{
-		ProviderRef: resp.RefundID,
-		Succeeded:   true,
-		RawResponse: resp.RawResponse,
-	}, nil
-}
-
 func formatXenditExpiry(t time.Time) string {
 	if t.IsZero() {
 		return ""

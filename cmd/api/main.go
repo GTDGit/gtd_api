@@ -580,7 +580,6 @@ func setupRoutes(router *gin.Engine, handlers *Handlers, authMiddleware *middlew
 		payment.POST("/create", handlers.Payment.CreatePayment)
 		payment.GET("/:paymentId", handlers.Payment.GetPayment)
 		payment.POST("/:paymentId/cancel", handlers.Payment.CancelPayment)
-		payment.POST("/:paymentId/refund", handlers.Payment.RefundPayment)
 	}
 }
 

@@ -232,11 +232,6 @@ func (p *PakailinkProviderClient) CancelPayment(ctx context.Context, payment *mo
 	return &PaymentCancelResult{Cancelled: true, RawResponse: resp.RawResponse}, nil
 }
 
-func (p *PakailinkProviderClient) RefundPayment(ctx context.Context, payment *models.Payment, refund *models.Refund) (*PaymentRefundResult, error) {
-	// Pakailink does not expose refund APIs for VA/QRIS — document as manual ops.
-	return nil, newPaymentError(501, "REFUND_NOT_SUPPORTED", "Pakailink does not support automated refunds", nil)
-}
-
 func formatPakailinkExpiry(t time.Time) string {
 	if t.IsZero() {
 		return ""

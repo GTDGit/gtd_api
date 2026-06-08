@@ -101,23 +101,6 @@ func (p *MidtransProviderClient) CancelPayment(ctx context.Context, payment *mod
 	return &PaymentCancelResult{Cancelled: true, RawResponse: resp.RawResponse}, nil
 }
 
-func (p *MidtransProviderClient) RefundPayment(ctx context.Context, payment *models.Payment, refund *models.Refund) (*PaymentRefundResult, error) {
-	req := midtrans.RefundRequest{
-		RefundKey: refund.RefundID,
-		Amount:    refund.Amount,
-		Reason:    firstNonEmpty(refund.Reason, "Refund"),
-	}
-	resp, err := p.client.Refund(ctx, payment.PaymentID, req)
-	if err != nil {
-		return nil, mapMidtransError(err)
-	}
-	return &PaymentRefundResult{
-		ProviderRef: resp.TransactionID,
-		Succeeded:   true,
-		RawResponse: resp.RawResponse,
-	}, nil
-}
-
 func mapMidtransTransactionStatus(status, fraudStatus string) models.PaymentStatus {
 	s := strings.ToLower(strings.TrimSpace(status))
 	switch s {

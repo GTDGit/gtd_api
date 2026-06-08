@@ -138,7 +138,8 @@ func (p *PakailinkProviderClient) createEmoney(ctx context.Context, method *mode
 		CustomerPhone:      req.CustomerPhone,
 		CustomerEmail:      req.CustomerEmail,
 		TotalAmount:        req.TotalAmount,
-		ProductCode:        strings.ToUpper(method.Code), // PAYDANA, PAYGOPAY, etc.
+		// Map our internal code (DANA, GOPAY, OVO, etc.) to Pakailink's productCode format.
+		ProductCode: pakailinkEmoneyProductCode(method.Code),
 		EmoneyPhone:        phone,
 		BillTitle:          firstNonEmpty(req.Description, method.Name, method.Code),
 		CallbackURL:        firstNonEmpty(req.CallbackURL, p.callbackURL),
@@ -164,6 +165,26 @@ func (p *PakailinkProviderClient) createEmoney(ctx context.Context, method *mode
 		Normalized:  norm,
 		RawResponse: resp.RawResponse,
 	}, nil
+}
+
+// pakailinkEmoneyProductCode maps our internal ewallet code to Pakailink's productCode.
+// Pakailink uses PAY-prefixed codes; our DB stores the plain wallet name.
+func pakailinkEmoneyProductCode(code string) string {
+	switch strings.ToUpper(strings.TrimSpace(code)) {
+	case "DANA", "PAYDANA":
+		return "PAYDANA"
+	case "GOPAY", "PAYGOPAY":
+		return "PAYGOPAY"
+	case "OVO", "PAYOVO":
+		return "PAYOVO"
+	case "LINKAJA", "PAYLINKAJA":
+		return "PAYLINKAJA"
+	case "SHOPEEPAY", "PAYSHOPEE":
+		return "PAYSHOPEE"
+	default:
+		// Pass through as-is if already PAY-prefixed or unknown
+		return strings.ToUpper(code)
+	}
 }
 
 func (p *PakailinkProviderClient) InquiryPayment(ctx context.Context, payment *models.Payment) (*PaymentInquiryResult, error) {

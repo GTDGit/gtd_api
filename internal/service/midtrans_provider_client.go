@@ -23,6 +23,11 @@ func (p *MidtransProviderClient) Code() models.PaymentProvider {
 	return models.ProviderMidtrans
 }
 
+// Available reports whether the adapter is configured to serve requests.
+func (p *MidtransProviderClient) Available() bool {
+	return true
+}
+
 func (p *MidtransProviderClient) CreatePayment(ctx context.Context, method *models.PaymentMethod, req *PaymentCreateRequest) (*PaymentCreateResponse, error) {
 	cust := &midtrans.CustomerDetails{
 		FirstName: firstNonEmpty(req.CustomerName, "Customer"),

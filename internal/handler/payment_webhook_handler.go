@@ -17,6 +17,7 @@ import (
 	"github.com/GTDGit/gtd_api/internal/service"
 	"github.com/GTDGit/gtd_api/pkg/dana"
 	"github.com/GTDGit/gtd_api/pkg/midtrans"
+	"github.com/GTDGit/gtd_api/pkg/ovo"
 	"github.com/GTDGit/gtd_api/pkg/pakailink"
 	"github.com/GTDGit/gtd_api/pkg/xendit"
 )
@@ -29,12 +30,13 @@ type PaymentWebhookHandler struct {
 	danaClientSecret string
 	midtransKey      string
 	xenditToken      string
+	ovoSecret        string
 }
 
 func NewPaymentWebhookHandler(
 	paymentRepo *repository.PaymentRepository,
 	paymentSvc *service.PaymentService,
-	pakailinkSecret, danaClientSecret, midtransServerKey, xenditWebhookToken string,
+	pakailinkSecret, danaClientSecret, midtransServerKey, xenditWebhookToken, ovoClientSecret string,
 ) *PaymentWebhookHandler {
 	return &PaymentWebhookHandler{
 		paymentRepo:      paymentRepo,
@@ -43,6 +45,7 @@ func NewPaymentWebhookHandler(
 		danaClientSecret: danaClientSecret,
 		midtransKey:      midtransServerKey,
 		xenditToken:      xenditWebhookToken,
+		ovoSecret:        ovoClientSecret,
 	}
 }
 
@@ -284,6 +287,50 @@ func (h *PaymentWebhookHandler) HandleXendit(c *gin.Context) {
 }
 
 // ---------------------------------------------------------------------------
+// OVO Direct — HMAC-SHA256 signature over the raw body; plain JSON ACK.
+// ---------------------------------------------------------------------------
+
+// HandleOVO handles OVO Direct push-to-pay notifications (Req 13.4). OVO POSTs
+// an async notification once the customer approves/declines the push. The
+// signature header is verified before the status is applied.
+func (h *PaymentWebhookHandler) HandleOVO(c *gin.Context) {
+	body, cb, ok := h.persistRawCallback(c, models.ProviderOVODirect)
+	if !ok {
+		return
+	}
+	// TODO(ovo-docs): confirm the exact signature header name with OVO docs.
+	signature := firstPaymentString(c.GetHeader("X-Signature"), c.GetHeader("X-SIGNATURE"))
+	valid := ovo.VerifyWebhookSignature(body, signature, h.ovoSecret)
+	if err := h.paymentRepo.UpdatePaymentCallbackSignature(c.Request.Context(), cb.ID, valid); err != nil {
+		log.Warn().Err(err).Msg("ovo webhook: update signature flag")
+	}
+	if !valid {
+		h.markCallbackError(c.Request.Context(), cb.ID, "invalid signature")
+		c.JSON(http.StatusUnauthorized, gin.H{"status": "error", "message": "Invalid signature"})
+		return
+	}
+	var p ovo.WebhookPayload
+	if err := json.Unmarshal(body, &p); err != nil {
+		h.markCallbackError(c.Request.Context(), cb.ID, "invalid JSON")
+		c.JSON(http.StatusBadRequest, gin.H{"status": "error", "message": "Invalid body"})
+		return
+	}
+	event := service.PaymentWebhookEvent{
+		Status:      mapOVOWebhookStatus(p.TransactionStatus),
+		ProviderRef: p.ReferenceNo,
+		PaidAmount:  p.Amount,
+		RawPayload:  body,
+	}
+	if err := h.paymentSvc.ApplyWebhook(c.Request.Context(), models.ProviderOVODirect, strings.TrimSpace(p.PartnerReferenceNo), event); err != nil {
+		h.markCallbackError(c.Request.Context(), cb.ID, err.Error())
+		c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": err.Error()})
+		return
+	}
+	_ = h.paymentRepo.UpdatePaymentCallbackProcessed(c.Request.Context(), cb.ID, true, nil)
+	c.JSON(http.StatusOK, gin.H{"status": "ok"})
+}
+
+// ---------------------------------------------------------------------------
 // Shared helpers
 // ---------------------------------------------------------------------------
 
@@ -434,6 +481,21 @@ func mapXenditWebhookStatus(s string) models.PaymentStatus {
 	case xendit.StatusCanceled, "CANCELLED":
 		return models.PaymentStatusCancelled
 	case xendit.StatusFailed:
+		return models.PaymentStatusFailed
+	default:
+		return models.PaymentStatusPending
+	}
+}
+
+func mapOVOWebhookStatus(s string) models.PaymentStatus {
+	switch strings.ToUpper(strings.TrimSpace(s)) {
+	case ovo.StatusSuccess, "PAID", "COMPLETED", "00":
+		return models.PaymentStatusPaid
+	case ovo.StatusExpired:
+		return models.PaymentStatusExpired
+	case ovo.StatusVoided, "CANCELLED", "CANCELED":
+		return models.PaymentStatusCancelled
+	case ovo.StatusFailed:
 		return models.PaymentStatusFailed
 	default:
 		return models.PaymentStatusPending

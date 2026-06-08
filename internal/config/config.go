@@ -35,6 +35,7 @@ type PaymentConfig struct {
 	Dana      DanaConfig
 	Midtrans  MidtransConfig
 	Xendit    XenditConfig
+	OVO       OVOConfig
 }
 
 type PakailinkConfig struct {
@@ -83,6 +84,19 @@ type XenditConfig struct {
 	APIKey       string
 	APIVersion   string
 	WebhookToken string
+	CallbackURL  string
+}
+
+// OVOConfig holds OVO Direct partner credentials. When MerchantID/ClientSecret
+// are absent the OVO Direct adapter reports unavailable and selection falls
+// back to other OVO-capable providers (Req 13.3).
+type OVOConfig struct {
+	Env          string
+	BaseURL      string
+	MerchantID   string
+	AppID        string
+	ClientSecret string
+	APIKey       string
 	CallbackURL  string
 }
 
@@ -445,6 +459,15 @@ func Load() (*Config, error) {
 			APIVersion:   getEnv("XENDIT_API_VERSION", "2024-11-11"),
 			WebhookToken: getEnv("XENDIT_WEBHOOK_TOKEN", ""),
 			CallbackURL:  getEnv("XENDIT_CALLBACK_URL", ""),
+		},
+		OVO: OVOConfig{
+			Env:          getEnv("OVO_ENV", "SANDBOX"),
+			BaseURL:      getEnv("OVO_BASE_URL", ""),
+			MerchantID:   getEnv("OVO_MERCHANT_ID", ""),
+			AppID:        getEnv("OVO_APP_ID", ""),
+			ClientSecret: getEnv("OVO_CLIENT_SECRET", ""),
+			APIKey:       getEnv("OVO_API_KEY", ""),
+			CallbackURL:  getEnv("OVO_CALLBACK_URL", ""),
 		},
 	}
 	if cfg.Payment.Midtrans.BaseURL == "" {

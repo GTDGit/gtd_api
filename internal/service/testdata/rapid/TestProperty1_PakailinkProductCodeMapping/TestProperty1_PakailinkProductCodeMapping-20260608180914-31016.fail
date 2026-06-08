@@ -1,0 +1,34 @@
+# 2026/06/08 18:09:14.096698 [TestProperty1_PakailinkProductCodeMapping] [rapid] draw plainCode: "SHOPEEPAY"
+# 2026/06/08 18:09:14.096698 [TestProperty1_PakailinkProductCodeMapping] [rapid] draw withPayPrefix: true
+# 2026/06/08 18:09:14.096698 [TestProperty1_PakailinkProductCodeMapping] [rapid] draw upper: false
+# 2026/06/08 18:09:14.096698 [TestProperty1_PakailinkProductCodeMapping] [rapid] draw upper: false
+# 2026/06/08 18:09:14.096698 [TestProperty1_PakailinkProductCodeMapping] [rapid] draw upper: false
+# 2026/06/08 18:09:14.096698 [TestProperty1_PakailinkProductCodeMapping] [rapid] draw upper: false
+# 2026/06/08 18:09:14.096698 [TestProperty1_PakailinkProductCodeMapping] [rapid] draw upper: false
+# 2026/06/08 18:09:14.096698 [TestProperty1_PakailinkProductCodeMapping] [rapid] draw upper: false
+# 2026/06/08 18:09:14.096698 [TestProperty1_PakailinkProductCodeMapping] [rapid] draw upper: false
+# 2026/06/08 18:09:14.096698 [TestProperty1_PakailinkProductCodeMapping] [rapid] draw upper: false
+# 2026/06/08 18:09:14.096698 [TestProperty1_PakailinkProductCodeMapping] [rapid] draw upper: false
+# 2026/06/08 18:09:14.096698 [TestProperty1_PakailinkProductCodeMapping] [rapid] draw upper: false
+# 2026/06/08 18:09:14.096698 [TestProperty1_PakailinkProductCodeMapping] [rapid] draw upper: false
+# 2026/06/08 18:09:14.096698 [TestProperty1_PakailinkProductCodeMapping] [rapid] draw upper: false
+# 2026/06/08 18:09:14.096698 [TestProperty1_PakailinkProductCodeMapping] [rapid] draw padded: false
+# 2026/06/08 18:09:14.096698 [TestProperty1_PakailinkProductCodeMapping] pakailinkEmoneyProductCode("payshopeepay") returned error: UNSUPPORTED_PAYMENT_TYPE: Unknown e-wallet code for Pakailink: payshopeepay
+# 
+v0.4.8#11167560205620601704
+0x38e38e38e38e4
+0x3
+0x1
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0

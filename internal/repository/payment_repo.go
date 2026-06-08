@@ -32,7 +32,7 @@ func nullablePaymentJSON(v models.NullableRawMessage) any {
 // ----------------------------------------------------------------------------
 
 const paymentColumns = `id, payment_id, reference_id, client_id, payment_method_id, is_sandbox,
-    payment_type, payment_code, provider, amount, fee, total_amount,
+    payment_type, payment_code, provider, amount, fee, total_amount, fee_paid_by,
     customer_name, customer_email, customer_phone, status,
     payment_detail, payment_instruction, sender_bank, sender_name, sender_account,
     provider_ref, provider_data, callback_type, description, metadata,
@@ -42,20 +42,20 @@ const paymentColumns = `id, payment_id, reference_id, client_id, payment_method_
 func (r *PaymentRepository) CreatePayment(ctx context.Context, p *models.Payment) error {
 	const q = `INSERT INTO payments (
         payment_id, reference_id, client_id, payment_method_id, is_sandbox,
-        payment_type, payment_code, provider, amount, fee, total_amount,
+        payment_type, payment_code, provider, amount, fee, total_amount, fee_paid_by,
         customer_name, customer_email, customer_phone, status,
         payment_detail, payment_instruction, sender_bank, sender_name, sender_account,
         provider_ref, provider_data, callback_type, description, metadata,
         callback_sent, callback_sent_at, callback_attempts, expired_at
     ) VALUES (
-        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
-        $12, $13, $14, $15, $16, $17, $18, $19, $20,
-        $21, $22, $23, $24, $25, $26, $27, $28, $29
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+        $13, $14, $15, $16, $17, $18, $19, $20, $21,
+        $22, $23, $24, $25, $26, $27, $28, $29, $30
     ) RETURNING id, created_at, updated_at`
 
 	return r.db.QueryRowContext(ctx, q,
 		p.PaymentID, p.ReferenceID, p.ClientID, p.PaymentMethodID, p.IsSandbox,
-		p.PaymentType, p.PaymentCode, p.Provider, p.Amount, p.Fee, p.TotalAmount,
+		p.PaymentType, p.PaymentCode, p.Provider, p.Amount, p.Fee, p.TotalAmount, p.FeePaidBy,
 		p.CustomerName, p.CustomerEmail, p.CustomerPhone, p.Status,
 		nullablePaymentJSON(p.PaymentDetail), nullablePaymentJSON(p.PaymentInstruction),
 		p.SenderBank, p.SenderName, p.SenderAccount,
@@ -530,4 +530,105 @@ func (r *PaymentRepository) Stats(ctx context.Context, f PaymentFilter) (*Paymen
 		return nil, err
 	}
 	return &s, nil
+}
+
+// ----------------------------------------------------------------------------
+// Method_Provider_Mapping access (payment_method_providers)
+//
+// The mapping table binds one canonical payment method (type+code) to one or
+// more providers with an explicit priority. ProviderSelector reads the rows
+// for a (type, code) group ordered by priority ASC; the admin editor lists and
+// mutates the bindings for a method. See migration
+// 000051_add_payment_method_providers and models.MethodProviderBinding.
+// ----------------------------------------------------------------------------
+
+const methodProviderColumns = `id, payment_method_id, provider, priority, is_active, is_maintenance,
+    maintenance_message, provider_bank_code, provider_channel, created_at, updated_at`
+
+// GetMethodProvidersByTypeCode loads the provider bindings for the canonical
+// method identified by (type, code), ordered by priority ASC (lower = preferred).
+// It returns an empty slice (not an error) when the method has no bindings.
+func (r *PaymentRepository) GetMethodProvidersByTypeCode(ctx context.Context, paymentType models.PaymentType, code string) ([]models.MethodProviderBinding, error) {
+	q := `SELECT ` + prefixColumns("pmp", methodProviderColumns) + `
+    FROM payment_method_providers pmp
+    JOIN payment_methods pm ON pm.id = pmp.payment_method_id
+    WHERE pm.type = $1 AND pm.code = $2
+    ORDER BY pmp.priority ASC, pmp.id ASC`
+	rows := []models.MethodProviderBinding{}
+	if err := r.db.SelectContext(ctx, &rows, q, paymentType, code); err != nil {
+		return nil, err
+	}
+	return rows, nil
+}
+
+// ListMethodProvidersByMethodID lists the provider bindings for a single
+// payment method (admin editor), ordered by priority ASC.
+func (r *PaymentRepository) ListMethodProvidersByMethodID(ctx context.Context, methodID int) ([]models.MethodProviderBinding, error) {
+	q := `SELECT ` + methodProviderColumns + `
+    FROM payment_method_providers
+    WHERE payment_method_id = $1
+    ORDER BY priority ASC, id ASC`
+	rows := []models.MethodProviderBinding{}
+	if err := r.db.SelectContext(ctx, &rows, q, methodID); err != nil {
+		return nil, err
+	}
+	return rows, nil
+}
+
+// GetMethodProviderByID returns a single binding by its primary key.
+func (r *PaymentRepository) GetMethodProviderByID(ctx context.Context, id int) (*models.MethodProviderBinding, error) {
+	q := `SELECT ` + methodProviderColumns + ` FROM payment_method_providers WHERE id = $1 LIMIT 1`
+	var b models.MethodProviderBinding
+	if err := r.db.GetContext(ctx, &b, q, id); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, sql.ErrNoRows
+		}
+		return nil, err
+	}
+	return &b, nil
+}
+
+// UpdateMethodProviderBinding persists the admin-editable fields of a binding:
+// priority, is_active, is_maintenance, and maintenance_message.
+func (r *PaymentRepository) UpdateMethodProviderBinding(ctx context.Context, b *models.MethodProviderBinding) error {
+	q := `UPDATE payment_method_providers SET
+        priority = $2,
+        is_active = $3,
+        is_maintenance = $4,
+        maintenance_message = $5,
+        updated_at = NOW()
+    WHERE id = $1
+    RETURNING updated_at`
+	return r.db.QueryRowContext(ctx, q,
+		b.ID, b.Priority, b.IsActive, b.IsMaintenance, b.MaintenanceMessage,
+	).Scan(&b.UpdatedAt)
+}
+
+// ListCanonicalMethods returns active payment methods de-duplicated by
+// (type, code) so the public list endpoint shows one entry per logical method
+// even when several providers serve it (Req 6.18). Results keep the
+// display_order, id ordering used by ListActiveMethods.
+func (r *PaymentRepository) ListCanonicalMethods(ctx context.Context) ([]models.PaymentMethod, error) {
+	q := `SELECT ` + methodColumns + ` FROM (
+        SELECT DISTINCT ON (type, code) ` + methodColumns + `
+        FROM payment_methods
+        WHERE is_active = true
+        ORDER BY type, code, display_order ASC, id ASC
+    ) t
+    ORDER BY display_order ASC, id ASC`
+	rows := []models.PaymentMethod{}
+	if err := r.db.SelectContext(ctx, &rows, q); err != nil {
+		return nil, err
+	}
+	return rows, nil
+}
+
+// prefixColumns rewrites a comma-separated column list to alias.column form so
+// a shared column constant can be reused inside a JOIN query.
+func prefixColumns(alias, columns string) string {
+	parts := strings.Split(columns, ",")
+	for i, p := range parts {
+		parts[i] = alias + "." + strings.TrimSpace(p)
+	}
+	return strings.Join(parts, ", ")
 }

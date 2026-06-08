@@ -29,19 +29,31 @@ type PaymentCreateRequest struct {
 }
 
 // PaymentDetailNormalized is the union shape copied into payment.payment_detail.
+//
+// Each payment type populates only the fields from its own group; every field
+// is tagged omitempty so irrelevant fields are omitted from the serialized
+// paymentDetail. The field names are shared across all provider adapters so
+// the same type produces an identical field set regardless of provider
+// (Req 4.5, 4.8). Allowed field sets per type:
+//
+//	VA      -> bankCode, bankName, vaNumber, accountName
+//	EWALLET -> checkoutUrl, mobileWebUrl, deeplink, qrCodeUrl
+//	QRIS    -> qrString, qrImageUrl
+//	RETAIL  -> retailName, paymentCode
 type PaymentDetailNormalized struct {
 	// VA
 	BankCode    string `json:"bankCode,omitempty"`
 	BankName    string `json:"bankName,omitempty"`
 	VANumber    string `json:"vaNumber,omitempty"`
 	AccountName string `json:"accountName,omitempty"`
-	// EWALLET/QRIS
+	// EWALLET
 	CheckoutURL  string `json:"checkoutUrl,omitempty"`
 	MobileWebURL string `json:"mobileWebUrl,omitempty"`
 	Deeplink     string `json:"deeplink,omitempty"`
 	QRCodeURL    string `json:"qrCodeUrl,omitempty"`
-	QRString     string `json:"qrString,omitempty"`
-	QRImageURL   string `json:"qrImageUrl,omitempty"`
+	// QRIS
+	QRString   string `json:"qrString,omitempty"`
+	QRImageURL string `json:"qrImageUrl,omitempty"`
 	// RETAIL
 	RetailName  string `json:"retailName,omitempty"`
 	PaymentCode string `json:"paymentCode,omitempty"`
@@ -78,6 +90,9 @@ type PaymentRefundResult struct {
 // PaymentProviderClient is implemented by provider-specific adapters.
 type PaymentProviderClient interface {
 	Code() models.PaymentProvider
+	// Available reports whether the adapter has the configuration/credentials
+	// required to serve requests. Used by ProviderSelector for fallback.
+	Available() bool
 	CreatePayment(ctx context.Context, method *models.PaymentMethod, req *PaymentCreateRequest) (*PaymentCreateResponse, error)
 	InquiryPayment(ctx context.Context, payment *models.Payment) (*PaymentInquiryResult, error)
 	CancelPayment(ctx context.Context, payment *models.Payment, reason string) (*PaymentCancelResult, error)

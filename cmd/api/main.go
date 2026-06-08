@@ -35,6 +35,7 @@ import (
 	dfg "github.com/GTDGit/gtd_api/pkg/digiflazz"
 	"github.com/GTDGit/gtd_api/pkg/kiosbank"
 	"github.com/GTDGit/gtd_api/pkg/midtrans"
+	"github.com/GTDGit/gtd_api/pkg/ovo"
 	"github.com/GTDGit/gtd_api/pkg/pakailink"
 	"github.com/GTDGit/gtd_api/pkg/xendit"
 )
@@ -250,6 +251,26 @@ func main() {
 		log.Info().Msg("Xendit config incomplete - Indomaret/Alfamart disabled")
 	}
 
+	var ovoClient *ovo.Client
+	if cfg.Payment.OVO.MerchantID != "" && cfg.Payment.OVO.ClientSecret != "" {
+		var err error
+		ovoClient, err = ovo.NewClient(ovo.Config{
+			BaseURL:      cfg.Payment.OVO.BaseURL,
+			MerchantID:   cfg.Payment.OVO.MerchantID,
+			AppID:        cfg.Payment.OVO.AppID,
+			ClientSecret: cfg.Payment.OVO.ClientSecret,
+			APIKey:       cfg.Payment.OVO.APIKey,
+		})
+		if err != nil {
+			log.Warn().Err(err).Msg("OVO Direct client initialization failed - OVO Direct disabled")
+			ovoClient = nil
+		} else {
+			log.Info().Msg("OVO Direct client registered")
+		}
+	} else {
+		log.Info().Msg("OVO Direct config incomplete - falling back to other OVO providers")
+	}
+
 	// 6. Initialize services
 	authSvc := service.NewAuthService(clientRepo)
 	productSvc := service.NewProductService(productRepo, skuRepo)
@@ -382,10 +403,20 @@ func main() {
 		paymentRouter.Register(service.NewXenditProviderClient(xenditClient))
 		log.Info().Msg("Xendit payment adapter registered")
 	}
+	// Always register the OVO Direct adapter. When ovoClient is nil it reports
+	// Available()=false, so ProviderSelector skips it and falls back to other
+	// OVO-capable providers (Req 13.3).
+	paymentRouter.Register(service.NewOVOProviderClient(ovoClient, cfg.Payment.OVO.CallbackURL))
+	if ovoClient != nil {
+		log.Info().Msg("OVO Direct payment adapter registered")
+	} else {
+		log.Info().Msg("OVO Direct payment adapter registered (unconfigured - fallback only)")
+	}
 
 	paymentCallbackSvc := service.NewPaymentCallbackService(paymentRepo, clientRepo)
 	paymentSvc := service.NewPaymentService(paymentRepo, clientRepo, paymentRouter, paymentCallbackSvc)
 	paymentSvc.SetNotifier(sseNotifier)
+	adminPaymentSvc := service.NewAdminPaymentService(paymentRepo)
 
 	// Resolve webhook secrets for inbound signature verification.
 	pakailinkWebhookSecret := cfg.Payment.Pakailink.ClientSecret
@@ -412,6 +443,7 @@ func main() {
 		BRIConnector:     handler.NewBRIConnectorHandler(briConnectorSvc),
 		ProviderCallback: handler.NewProviderCallbackHandler(providerCallbackSvc, cfg.Alterra.CallbackPublicKey),
 		Payment:          handler.NewPaymentHandler(paymentSvc),
+		AdminPayment:     handler.NewAdminPaymentHandler(adminPaymentSvc),
 		PaymentWebhook: handler.NewPaymentWebhookHandler(
 			paymentRepo,
 			paymentSvc,
@@ -419,6 +451,7 @@ func main() {
 			danaWebhookSecret,
 			midtransWebhookSecret,
 			xenditWebhookToken,
+			cfg.Payment.OVO.ClientSecret,
 		),
 		DisbursementWebhook: handler.NewDisbursementWebhookHandler(
 			transferRepo,
@@ -526,6 +559,7 @@ type Handlers struct {
 	BRIConnector        *handler.BRIConnectorHandler
 	ProviderCallback    *handler.ProviderCallbackHandler
 	Payment             *handler.PaymentHandler
+	AdminPayment        *handler.AdminPaymentHandler
 	PaymentWebhook      *handler.PaymentWebhookHandler
 	DisbursementWebhook *handler.DisbursementWebhookHandler
 }
@@ -546,6 +580,7 @@ func setupRoutes(router *gin.Engine, handlers *Handlers, authMiddleware *middlew
 	router.POST("/v1/webhook/dana", handlers.PaymentWebhook.HandleDANA)
 	router.POST("/v1/webhook/midtrans", handlers.PaymentWebhook.HandleMidtrans)
 	router.POST("/v1/webhook/xendit", handlers.PaymentWebhook.HandleXendit)
+	router.POST("/v1/webhook/ovo", handlers.PaymentWebhook.HandleOVO)
 
 	// Disbursement provider webhooks (public — each handler verifies its own signature).
 	router.POST("/v1/webhook/pakailink-disbursement", handlers.DisbursementWebhook.HandlePakailink)
@@ -580,6 +615,22 @@ func setupRoutes(router *gin.Engine, handlers *Handlers, authMiddleware *middlew
 		payment.POST("/create", handlers.Payment.CreatePayment)
 		payment.GET("/:paymentId", handlers.Payment.GetPayment)
 		payment.POST("/:paymentId/cancel", handlers.Payment.CancelPayment)
+	}
+
+	// Admin API (protected with admin JWT). Manages canonical payment methods
+	// and their method-provider mappings.
+	jwtMw := middleware.NewJWTMiddleware()
+	admin := router.Group("/v1/admin")
+	admin.Use(jwtMw.Handle())
+	{
+		// Payment method admin. The first dynamic segment shares the wildcard
+		// name ":method" across routes because gin forbids differently-named
+		// wildcards at the same path position; the numeric edit route reads
+		// :method as the id, the providers routes read :method as the type.
+		admin.GET("/payment-methods", handlers.AdminPayment.ListMethods)
+		admin.PUT("/payment-methods/:method", handlers.AdminPayment.UpdateMethod)
+		admin.GET("/payment-methods/:method/:code/providers", handlers.AdminPayment.ListProviders)
+		admin.PUT("/payment-methods/:method/:code/providers", handlers.AdminPayment.UpdateProviders)
 	}
 }
 

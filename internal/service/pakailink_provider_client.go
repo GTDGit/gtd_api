@@ -37,6 +37,11 @@ func (p *PakailinkProviderClient) Code() models.PaymentProvider {
 	return models.ProviderPakailink
 }
 
+// Available reports whether the adapter is configured to serve requests.
+func (p *PakailinkProviderClient) Available() bool {
+	return true
+}
+
 func (p *PakailinkProviderClient) CreatePayment(ctx context.Context, method *models.PaymentMethod, req *PaymentCreateRequest) (*PaymentCreateResponse, error) {
 	switch req.Type {
 	case models.PaymentTypeVA:
@@ -129,6 +134,12 @@ func (p *PakailinkProviderClient) createEmoney(ctx context.Context, method *mode
 	if len(refNo) > 40 {
 		refNo = refNo[:40]
 	}
+	// Map our internal code (DANA, GOPAY, OVO, etc.) to Pakailink's productCode format.
+	// This mapping is wire-only: the stored/returned code stays the plain canonical code.
+	productCode, err := pakailinkEmoneyProductCode(method.Code)
+	if err != nil {
+		return nil, err
+	}
 	// emoneyPhone is mandatory — use CustomerPhone (Pakailink will reject if empty)
 	phone := firstNonEmpty(req.CustomerPhone, req.CustomerEmail)
 	emoneyReq := pakailink.EmoneyRequest{
@@ -138,8 +149,7 @@ func (p *PakailinkProviderClient) createEmoney(ctx context.Context, method *mode
 		CustomerPhone:      req.CustomerPhone,
 		CustomerEmail:      req.CustomerEmail,
 		TotalAmount:        req.TotalAmount,
-		// Map our internal code (DANA, GOPAY, OVO, etc.) to Pakailink's productCode format.
-		ProductCode: pakailinkEmoneyProductCode(method.Code),
+		ProductCode:        productCode,
 		EmoneyPhone:        phone,
 		BillTitle:          firstNonEmpty(req.Description, method.Name, method.Code),
 		CallbackURL:        firstNonEmpty(req.CallbackURL, p.callbackURL),
@@ -168,22 +178,25 @@ func (p *PakailinkProviderClient) createEmoney(ctx context.Context, method *mode
 }
 
 // pakailinkEmoneyProductCode maps our internal ewallet code to Pakailink's productCode.
-// Pakailink uses PAY-prefixed codes; our DB stores the plain wallet name.
-func pakailinkEmoneyProductCode(code string) string {
+// Pakailink uses PAY-prefixed codes; our DB stores the plain wallet name. The mapping is
+// wire-only — it never changes the canonical code stored on / returned by the payment.
+// Both plain (DANA) and PAY-prefixed (PAYDANA) codes are accepted in any case.
+// Unknown codes are rejected with UNSUPPORTED_PAYMENT_TYPE.
+func pakailinkEmoneyProductCode(code string) (string, error) {
 	switch strings.ToUpper(strings.TrimSpace(code)) {
 	case "DANA", "PAYDANA":
-		return "PAYDANA"
+		return "PAYDANA", nil
 	case "GOPAY", "PAYGOPAY":
-		return "PAYGOPAY"
+		return "PAYGOPAY", nil
 	case "OVO", "PAYOVO":
-		return "PAYOVO"
+		return "PAYOVO", nil
 	case "LINKAJA", "PAYLINKAJA":
-		return "PAYLINKAJA"
+		return "PAYLINKAJA", nil
 	case "SHOPEEPAY", "PAYSHOPEE":
-		return "PAYSHOPEE"
+		return "PAYSHOPEE", nil
 	default:
-		// Pass through as-is if already PAY-prefixed or unknown
-		return strings.ToUpper(code)
+		return "", newPaymentError(400, "UNSUPPORTED_PAYMENT_TYPE",
+			"Unknown e-wallet code for Pakailink: "+code, nil)
 	}
 }
 

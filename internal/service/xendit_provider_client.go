@@ -23,6 +23,11 @@ func (p *XenditProviderClient) Code() models.PaymentProvider {
 	return models.ProviderXendit
 }
 
+// Available reports whether the adapter is configured to serve requests.
+func (p *XenditProviderClient) Available() bool {
+	return true
+}
+
 func (p *XenditProviderClient) CreatePayment(ctx context.Context, method *models.PaymentMethod, req *PaymentCreateRequest) (*PaymentCreateResponse, error) {
 	switch req.Type {
 	case models.PaymentTypeRetail:
@@ -161,19 +166,25 @@ func (p *XenditProviderClient) createEwallet(ctx context.Context, method *models
 	}, nil
 }
 
-// xenditEwalletChannelCode maps a payment method code to a Xendit channel code.
-// GoPay is not supported by Xendit — returns "" so routing falls through to Midtrans/DANA.
+// xenditEwalletChannelCode maps a payment method e-wallet code to its Xendit
+// Payment Request API channel code. It accepts the canonical plain codes
+// (OVO, SHOPEEPAY, LINKAJA, ASTRAPAY) as well as the Pakailink PAY-prefixed
+// forms for robustness, in any case and with surrounding whitespace.
+//
+// Codes Xendit does not support (e.g. GOPAY) return "" so the caller forces a
+// fallback to another provider (Midtrans/DANA) instead of calling Xendit.
 func xenditEwalletChannelCode(code string) string {
-	switch strings.ToUpper(code) {
-	case "PAYOVO":
+	switch strings.ToUpper(strings.TrimSpace(code)) {
+	case "OVO", "PAYOVO":
 		return "OVO"
-	case "PAYSHOPEE":
+	case "SHOPEEPAY", "PAYSHOPEE", "PAYSHOPEEPAY":
 		return "SHOPEEPAY"
-	case "PAYLINKAJA":
+	case "LINKAJA", "PAYLINKAJA":
 		return "LINKAJA"
-	case "ASTRAPAY":
+	case "ASTRAPAY", "PAYASTRAPAY":
 		return "ASTRAPAY"
 	default:
+		// GOPAY and any unknown code: not supported by Xendit → force fallback.
 		return ""
 	}
 }

@@ -137,6 +137,7 @@ type Payment struct {
 	Amount             int64              `db:"amount" json:"amount"`
 	Fee                int64              `db:"fee" json:"fee"`
 	TotalAmount        int64              `db:"total_amount" json:"totalAmount"`
+	FeePaidBy          FeePaidBy          `db:"fee_paid_by" json:"feePaidBy"`
 	CustomerName       *string            `db:"customer_name" json:"customerName,omitempty"`
 	CustomerEmail      *string            `db:"customer_email" json:"customerEmail,omitempty"`
 	CustomerPhone      *string            `db:"customer_phone" json:"customerPhone,omitempty"`

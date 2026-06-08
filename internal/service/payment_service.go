@@ -173,6 +173,7 @@ type PaymentService struct {
 	paymentRepo *repository.PaymentRepository
 	clientRepo  *repository.ClientRepository
 	router      *PaymentProviderRouter
+	selector    *ProviderSelector
 	callbackSvc *PaymentCallbackService
 	notifier    sse.PaymentNotifier
 }
@@ -187,6 +188,7 @@ func NewPaymentService(
 		paymentRepo: paymentRepo,
 		clientRepo:  clientRepo,
 		router:      router,
+		selector:    NewProviderSelector(paymentRepo, router),
 		callbackSvc: callbackSvc,
 	}
 }
@@ -204,6 +206,9 @@ func (s *PaymentService) ListMethods(ctx context.Context) (*MethodsResponse, err
 	if err != nil {
 		return nil, err
 	}
+	// De-duplicate by (type, code) so a logical method served by several
+	// providers shows up once on the public list endpoint (Req 6.18).
+	methods = dedupMethodsByTypeCode(methods)
 	resp := &MethodsResponse{}
 	for i := range methods {
 		m := methods[i]
@@ -271,6 +276,14 @@ func (s *PaymentService) CreatePayment(ctx context.Context, req *CreatePaymentRe
 		return nil, newPaymentError(400, "INVALID_AMOUNT", "amount must be positive", nil)
 	}
 
+	// Resolve and validate feePaidBy (default merchant; rejects invalid values).
+	// Done before idempotency so a malformed feePaidBy is rejected even for a
+	// reference that does not yet exist (design "Validation Order" step 2).
+	feePaidBy, err := normalizeFeePaidBy(req.FeePaidBy)
+	if err != nil {
+		return nil, err
+	}
+
 	// Idempotency: return existing record for identical referenceId.
 	if existing, err := s.paymentRepo.GetByReferenceID(ctx, client.ID, req.ReferenceID); err == nil && existing != nil {
 		return s.buildResponse(existing), nil
@@ -278,6 +291,8 @@ func (s *PaymentService) CreatePayment(ctx context.Context, req *CreatePaymentRe
 		return nil, err
 	}
 
+	// Method resolution: load the canonical (type, code) method and apply
+	// method-level health checks (NOT_FOUND / inactive / maintenance).
 	method, err := s.paymentRepo.GetMethodByTypeCode(ctx, models.PaymentType(rawType), rawCode)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -295,6 +310,8 @@ func (s *PaymentService) CreatePayment(ctx context.Context, req *CreatePaymentRe
 		}
 		return nil, newPaymentError(503, "PAYMENT_METHOD_MAINTENANCE", msg, nil)
 	}
+
+	// Amount bounds.
 	if method.MinAmount > 0 && req.Amount < int64(method.MinAmount) {
 		return nil, newPaymentError(400, "AMOUNT_TOO_LOW", fmt.Sprintf("amount must be >= %d", method.MinAmount), nil)
 	}
@@ -302,19 +319,33 @@ func (s *PaymentService) CreatePayment(ctx context.Context, req *CreatePaymentRe
 		return nil, newPaymentError(400, "AMOUNT_TOO_HIGH", fmt.Sprintf("amount must be <= %d", method.MaxAmount), nil)
 	}
 
-	fee := method.CalculateFee(req.Amount)
-	totalAmount := req.Amount + fee
-	expiredAt := resolveExpiredAt(req.ExpiredAt, method.ExpiredDuration)
-
-	// Resolve feePaidBy
-	feePaidBy := strings.ToLower(strings.TrimSpace(req.FeePaidBy))
-	if feePaidBy == "" {
-		feePaidBy = "merchant"
+	// CPM QRIS requires the QR content scanned from the customer's app.
+	if method.Type == models.PaymentTypeQRIS && strings.EqualFold(strings.TrimSpace(method.Code), "CPM") &&
+		strings.TrimSpace(req.ScanData) == "" {
+		return nil, newPaymentError(400, "MISSING_FIELD",
+			"scanData is required for QRIS CPM", nil)
 	}
 
+	// Provider selection via the Method_Provider_Mapping: resolve the method
+	// group and pick the highest-priority healthy provider. Returns
+	// PAYMENT_METHOD_UNAVAILABLE when no provider qualifies (Req 6.16, 6.17).
+	group, err := s.selector.Resolve(ctx, method.Type, method.Code)
+	if err != nil {
+		return nil, err
+	}
+	binding, err := s.selector.Select(group)
+	if err != nil {
+		return nil, err
+	}
+
+	fee := method.CalculateFee(req.Amount)
+	// total depends on who bears the fee:
+	//   customer -> total = subtotal + fee
+	//   merchant -> total = subtotal
+	totalAmount := computeTotal(req.Amount, fee, feePaidBy)
+	expiredAt := resolveExpiredAt(req.ExpiredAt, method.ExpiredDuration)
+
 	metadata := models.NullableRawMessage(req.Metadata)
-	// Store feePaidBy in metadata for retrieval in buildResponse
-	metadata = mergeFeePaidByMetadata(metadata, feePaidBy)
 
 	payment := &models.Payment{
 		ReferenceID:     req.ReferenceID,
@@ -323,10 +354,11 @@ func (s *PaymentService) CreatePayment(ctx context.Context, req *CreatePaymentRe
 		IsSandbox:       isSandbox,
 		PaymentType:     method.Type,
 		PaymentCode:     method.Code,
-		Provider:        method.Provider,
+		Provider:        binding.Provider,
 		Amount:          req.Amount,
 		Fee:             fee,
 		TotalAmount:     totalAmount,
+		FeePaidBy:       feePaidBy,
 		Status:          models.PaymentStatusPending,
 		ExpiredAt:       expiredAt,
 		Metadata:        metadata,
@@ -355,63 +387,63 @@ func (s *PaymentService) CreatePayment(ctx context.Context, req *CreatePaymentRe
 		return nil, err
 	}
 
-	// Resolve adapter and execute provider-side creation.
-	provider, err := s.router.Get(method.Provider)
-	if err != nil {
-		// Mark as failed since we cannot reach the provider.
-		s.markFailed(ctx, payment, "PROVIDER_UNAVAILABLE", err.Error())
-		return nil, err
-	}
+	// Attempt creation against the chosen provider, advancing to the next
+	// healthy provider on a retryable failure (bounded fallback). Non-retryable
+	// rejections fail fast. Each attempt writes a payment_logs row (Req 16.7).
+	var providerResp *PaymentCreateResponse
+	for binding != nil {
+		payment.Provider = binding.Provider
 
-	providerReq := &PaymentCreateRequest{
-		Type:          method.Type,
-		Code:          method.Code,
-		BankCode:      method.Code,
-		PartnerRef:    payment.PaymentID,
-		Amount:        req.Amount,
-		Fee:           fee,
-		TotalAmount:   totalAmount,
-		ExpiredAt:     expiredAt,
-		Description:   req.Description,
-		CustomerName:  customerName,
-		CustomerEmail: customerEmail,
-		CustomerPhone: customerPhone,
-		CallbackURL:   req.CallbackURL,
-		ReturnURL:     req.ReturnURL,
-		ScanData:      req.ScanData,
-	}
-	start := time.Now()
-	providerResp, providerErr := provider.CreatePayment(ctx, method, providerReq)
-	elapsed := int(time.Since(start) / time.Millisecond)
-	logEntry := &models.PaymentLog{
-		PaymentID: payment.ID,
-		Action:    "create",
-		Provider:  method.Provider,
-		IsSuccess: providerErr == nil,
-	}
-	reqBody, _ := json.Marshal(providerReq)
-	logEntry.Request = models.NullableRawMessage(reqBody)
-	if providerResp != nil {
-		logEntry.Response = models.NullableRawMessage(providerResp.RawResponse)
-	}
-	if providerErr != nil {
-		msg := providerErr.Error()
-		logEntry.ErrorMessage = &msg
-		code := "PROVIDER_ERROR"
-		if svcErr, ok := providerErr.(*PaymentServiceError); ok {
-			code = svcErr.Code
+		bankCode := method.Code
+		if binding.ProviderBankCode != nil && strings.TrimSpace(*binding.ProviderBankCode) != "" {
+			bankCode = strings.TrimSpace(*binding.ProviderBankCode)
 		}
-		logEntry.ErrorCode = &code
-	}
-	now := time.Now()
-	logEntry.ResponseAt = &now
-	logEntry.ResponseTimeMs = &elapsed
-	if err := s.paymentRepo.CreatePaymentLog(ctx, logEntry); err != nil {
-		log.Warn().Err(err).Msg("payment: store log")
-	}
+		providerReq := &PaymentCreateRequest{
+			Type:          method.Type,
+			Code:          method.Code,
+			BankCode:      bankCode,
+			PartnerRef:    payment.PaymentID,
+			Amount:        req.Amount,
+			Fee:           fee,
+			TotalAmount:   totalAmount,
+			ExpiredAt:     expiredAt,
+			Description:   req.Description,
+			CustomerName:  customerName,
+			CustomerEmail: customerEmail,
+			CustomerPhone: customerPhone,
+			CallbackURL:   req.CallbackURL,
+			ReturnURL:     req.ReturnURL,
+			ScanData:      req.ScanData,
+		}
 
-	if providerErr != nil {
-		s.markFailed(ctx, payment, "PROVIDER_ERROR", providerErr.Error())
+		var providerErr error
+		provider, routeErr := s.router.Get(binding.Provider)
+		if routeErr != nil {
+			// No usable adapter for this binding — treat as retryable so we can
+			// advance to the next provider in the mapping.
+			providerErr = routeErr
+		} else {
+			start := time.Now()
+			providerResp, providerErr = provider.CreatePayment(ctx, method, providerReq)
+			elapsed := int(time.Since(start) / time.Millisecond)
+			s.writeCreateLog(ctx, payment, binding.Provider, providerReq, providerResp, providerErr, elapsed)
+		}
+
+		if providerErr == nil {
+			break
+		}
+
+		// Retryable failure: advance to the next healthy provider if available.
+		if isRetryableProviderError(providerErr) {
+			if next := s.selector.Next(group, binding); next != nil {
+				binding = next
+				providerResp = nil
+				continue
+			}
+		}
+
+		// Non-retryable, or no further provider: fail fast.
+		s.markFailed(ctx, payment, paymentProviderErrorCode(providerErr), providerErr.Error())
 		return nil, providerErr
 	}
 
@@ -434,6 +466,73 @@ func (s *PaymentService) CreatePayment(ctx context.Context, req *CreatePaymentRe
 	go s.EnqueueCallback(context.Background(), payment, "payment.pending")
 
 	return s.buildResponse(payment), nil
+}
+
+// writeCreateLog persists a payment_logs row for a single provider create
+// attempt, capturing the request, response, latency, and any error
+// code/message (Req 16.7). Log failures are non-fatal.
+func (s *PaymentService) writeCreateLog(
+	ctx context.Context,
+	payment *models.Payment,
+	provider models.PaymentProvider,
+	providerReq *PaymentCreateRequest,
+	providerResp *PaymentCreateResponse,
+	providerErr error,
+	elapsedMs int,
+) {
+	logEntry := &models.PaymentLog{
+		PaymentID: payment.ID,
+		Action:    "create",
+		Provider:  provider,
+		IsSuccess: providerErr == nil,
+	}
+	reqBody, _ := json.Marshal(providerReq)
+	logEntry.Request = models.NullableRawMessage(reqBody)
+	if providerResp != nil {
+		logEntry.Response = models.NullableRawMessage(providerResp.RawResponse)
+	}
+	if providerErr != nil {
+		msg := providerErr.Error()
+		logEntry.ErrorMessage = &msg
+		code := paymentProviderErrorCode(providerErr)
+		logEntry.ErrorCode = &code
+	}
+	now := time.Now()
+	logEntry.ResponseAt = &now
+	logEntry.ResponseTimeMs = &elapsedMs
+	if err := s.paymentRepo.CreatePaymentLog(ctx, logEntry); err != nil {
+		log.Warn().Err(err).Msg("payment: store log")
+	}
+}
+
+// isRetryableProviderError reports whether a provider create failure should
+// trigger fallback to the next provider in the mapping. Retryable failures are
+// PROVIDER_UNAVAILABLE / 5xx (transient); request rejections and validation
+// errors are not retryable. A missing/unconfigured adapter is also retryable.
+func isRetryableProviderError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var svcErr *PaymentServiceError
+	if errors.As(err, &svcErr) {
+		if svcErr.Code == "PROVIDER_UNAVAILABLE" || svcErr.Code == "PAYMENT_PROVIDER_UNAVAILABLE" {
+			return true
+		}
+		return svcErr.HTTPStatus >= 500
+	}
+	// Non-typed errors (e.g. router.Get when adapter unregistered) are treated
+	// as transient so the mapping can fall back to another provider.
+	return true
+}
+
+// paymentProviderErrorCode extracts the stable error code from a provider
+// failure, defaulting to PROVIDER_ERROR for untyped errors.
+func paymentProviderErrorCode(err error) string {
+	var svcErr *PaymentServiceError
+	if errors.As(err, &svcErr) && svcErr.Code != "" {
+		return svcErr.Code
+	}
+	return "PROVIDER_ERROR"
 }
 
 // ----------------------------------------------------------------------------
@@ -616,10 +715,7 @@ func (s *PaymentService) ApplyWebhook(ctx context.Context, provider models.Payme
 	if s.notifier != nil {
 		s.notifier.NotifyPaymentStatusChanged(p)
 	}
-	eventName := "payment." + strings.ToLower(string(p.Status))
-	if p.Status == models.PaymentStatusPartialRefund {
-		eventName = "payment.partial_refund"
-	}
+	eventName := paymentEventName(p.Status)
 	go s.EnqueueCallback(context.Background(), p, eventName)
 	return nil
 }
@@ -637,10 +733,21 @@ type PaymentWebhookEvent struct {
 // ----------------------------------------------------------------------------
 
 func (s *PaymentService) createPaymentWithGeneratedID(ctx context.Context, p *models.Payment) error {
+	return createWithGeneratedID(p, func(pp *models.Payment) error {
+		return s.paymentRepo.CreatePayment(ctx, pp)
+	})
+}
+
+// createWithGeneratedID generates a fresh UUIDv4 public id for the payment and
+// attempts the insert, regenerating the id and retrying on a payment_id unique
+// violation (Req 5.4). A reference-id unique violation is surfaced as
+// DUPLICATE_REFERENCE_ID; any other error fails immediately. The insert
+// function is injected so the retry loop is testable without a database.
+func createWithGeneratedID(p *models.Payment, insert func(*models.Payment) error) error {
 	var lastErr error
 	for i := 0; i < 5; i++ {
 		p.PaymentID = newPaymentPublicID("")
-		lastErr = s.paymentRepo.CreatePayment(ctx, p)
+		lastErr = insert(p)
 		if lastErr == nil {
 			return nil
 		}
@@ -706,10 +813,7 @@ func (s *PaymentService) refreshStatus(ctx context.Context, p *models.Payment) (
 			s.notifier.NotifyPaymentStatusChanged(p)
 		}
 		if prev != p.Status {
-			eventName := "payment." + strings.ToLower(string(p.Status))
-			if p.Status == models.PaymentStatusPartialRefund {
-				eventName = "payment.partial_refund"
-			}
+			eventName := paymentEventName(p.Status)
 			go s.EnqueueCallback(context.Background(), p, eventName)
 		}
 	} else if err := s.paymentRepo.UpdatePayment(ctx, p); err != nil {
@@ -739,7 +843,7 @@ func (s *PaymentService) buildResponse(p *models.Payment) *PaymentResponse {
 			Fee:      p.Fee,
 			Total:    p.TotalAmount,
 		},
-		FeePaidBy:          extractFeePaidByFromMetadata(p.Metadata),
+		FeePaidBy:          string(p.FeePaidBy),
 		Status:             string(p.Status),
 		PaymentDetail:      json.RawMessage(p.PaymentDetail),
 		PaymentInstruction: json.RawMessage(p.PaymentInstruction),
@@ -844,31 +948,54 @@ func newPaymentPublicID(_ string) string {
 	return uuid.New().String()
 }
 
-// mergeFeePaidByMetadata stores feePaidBy into the metadata JSON blob.
-func mergeFeePaidByMetadata(m models.NullableRawMessage, feePaidBy string) models.NullableRawMessage {
-	merged := map[string]any{}
-	if len(m) > 0 {
-		_ = json.Unmarshal(m, &merged)
+func computeTotal(subtotal, fee int64, feePaidBy models.FeePaidBy) int64 {
+	if feePaidBy == models.FeePaidByCustomer {
+		return subtotal + fee
 	}
-	merged["_feePaidBy"] = feePaidBy
-	raw, err := json.Marshal(merged)
-	if err != nil {
-		return m
-	}
-	return models.NullableRawMessage(raw)
+	return subtotal
 }
 
-// extractFeePaidByFromMetadata reads feePaidBy from the metadata JSON blob.
-func extractFeePaidByFromMetadata(m models.NullableRawMessage) string {
-	if len(m) == 0 {
-		return "merchant"
+// dedupMethodsByTypeCode keeps the first method seen for each (type, code)
+// pair, preserving input order. It guarantees at most one entry per logical
+// method on the public list endpoint even when several provider rows share the
+// same (type, code) (Req 6.18).
+func dedupMethodsByTypeCode(methods []models.PaymentMethod) []models.PaymentMethod {
+	seen := make(map[string]struct{}, len(methods))
+	out := make([]models.PaymentMethod, 0, len(methods))
+	for i := range methods {
+		key := string(methods[i].Type) + "\x00" + methods[i].Code
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, methods[i])
 	}
-	var meta map[string]any
-	if err := json.Unmarshal(m, &meta); err != nil {
-		return "merchant"
+	return out
+}
+
+// paymentEventName maps a payment status to its merchant webhook event name:
+// "payment." + lowercase(status), with Partial_Refund mapped to
+// "payment.partial_refund" (Req 8.4).
+func paymentEventName(status models.PaymentStatus) string {
+	if status == models.PaymentStatusPartialRefund {
+		return "payment.partial_refund"
 	}
-	if v, ok := meta["_feePaidBy"].(string); ok && v != "" {
-		return v
+	return "payment." + strings.ToLower(string(status))
+}
+
+// normalizeFeePaidBy validates and normalizes the request feePaidBy value.
+// Empty defaults to merchant. Accepts "merchant"/"customer" case-insensitively
+// and trimmed. Any other value is rejected with INVALID_FEE_PAID_BY (HTTP 400).
+func normalizeFeePaidBy(raw string) (models.FeePaidBy, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "":
+		return models.FeePaidByMerchant, nil
+	case string(models.FeePaidByMerchant):
+		return models.FeePaidByMerchant, nil
+	case string(models.FeePaidByCustomer):
+		return models.FeePaidByCustomer, nil
+	default:
+		return "", newPaymentError(400, "INVALID_FEE_PAID_BY",
+			"feePaidBy must be 'merchant' or 'customer'", nil)
 	}
-	return "merchant"
 }

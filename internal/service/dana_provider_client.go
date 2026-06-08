@@ -37,6 +37,11 @@ func (p *DanaProviderClient) Code() models.PaymentProvider {
 	return models.ProviderDanaDirect
 }
 
+// Available reports whether the adapter is configured to serve requests.
+func (p *DanaProviderClient) Available() bool {
+	return true
+}
+
 func (p *DanaProviderClient) CreatePayment(ctx context.Context, method *models.PaymentMethod, req *PaymentCreateRequest) (*PaymentCreateResponse, error) {
 	switch req.Type {
 	case models.PaymentTypeEwallet:

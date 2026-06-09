@@ -66,20 +66,25 @@ type CustomerRequest struct {
 	Phone string `json:"phone,omitempty"`
 }
 
+// UrlRequest groups callback and return URLs.
+type UrlRequest struct {
+	Callback string `json:"callback,omitempty"`
+	Return   string `json:"return,omitempty"`
+}
+
 // CreatePaymentRequest is the unified payment creation payload.
 // Supports both new nested format and legacy flat fields for backward compat.
 type CreatePaymentRequest struct {
-	ReferenceID string               `json:"referenceId"`
+	ReferenceID string                `json:"referenceId"`
 	PaymentMethod *PaymentMethodRequest `json:"paymentMethod,omitempty"`
 	Customer    *CustomerRequest      `json:"customer,omitempty"`
-	Amount      int64                `json:"amount"`
-	FeePaidBy   string               `json:"feePaidBy,omitempty"` // "merchant" (default) or "customer"
-	ScanData    string               `json:"scanData,omitempty"`  // CPM QRIS: QR code from customer's app
-	Description string               `json:"description,omitempty"`
-	ExpiredAt   string               `json:"expiredAt,omitempty"`
-	CallbackURL string               `json:"callbackUrl,omitempty"`
-	ReturnURL   string               `json:"returnUrl,omitempty"`
-	Metadata    json.RawMessage      `json:"metadata,omitempty"`
+	Url         *UrlRequest           `json:"url,omitempty"`
+	Amount      int64                 `json:"amount"`
+	FeePaidBy   string                `json:"feePaidBy,omitempty"` // "merchant" (default) or "customer"
+	ScanData    string                `json:"scanData,omitempty"`  // CPM QRIS: QR code from customer's app
+	Description string                `json:"description,omitempty"`
+	ExpiredAt   string                `json:"expiredAt,omitempty"`
+	Metadata    json.RawMessage       `json:"metadata,omitempty"`
 
 	// Legacy flat fields — kept for backward compatibility.
 	// If paymentMethod is set, these are ignored.
@@ -88,6 +93,8 @@ type CreatePaymentRequest struct {
 	CustomerName  string `json:"customerName,omitempty"`
 	CustomerEmail string `json:"customerEmail,omitempty"`
 	CustomerPhone string `json:"customerPhone,omitempty"`
+	CallbackURL   string `json:"callbackUrl,omitempty"`
+	ReturnURL     string `json:"returnUrl,omitempty"`
 }
 
 // resolvePaymentTypeCode resolves the payment type and code from either the
@@ -107,6 +114,55 @@ func (r *CreatePaymentRequest) resolveCustomer() (name, email, phone string) {
 	return r.CustomerName, r.CustomerEmail, r.CustomerPhone
 }
 
+// resolveURL returns callback and return URLs preferring the nested url object.
+func (r *CreatePaymentRequest) resolveURL() (callback, returnURL string) {
+	if r.Url != nil {
+		return r.Url.Callback, r.Url.Return
+	}
+	return r.CallbackURL, r.ReturnURL
+}
+
+// validateRequiredFields validates required fields based on payment method type/code.
+func (r *CreatePaymentRequest) validateRequiredFields(paymentType, paymentCode string) error {
+	// OVO requires customer.phone
+	if paymentType == "EWALLET" && strings.EqualFold(paymentCode, "OVO") {
+		_, _, phone := r.resolveCustomer()
+		if strings.TrimSpace(phone) == "" {
+			return newPaymentError(400, "MISSING_REQUIRED_FIELD", "customer.phone is required for EWALLET/OVO", nil)
+		}
+	}
+	// AstraPay requires url.return
+	if paymentType == "EWALLET" && strings.EqualFold(paymentCode, "ASTRAPAY") {
+		_, returnURL := r.resolveURL()
+		if strings.TrimSpace(returnURL) == "" {
+			return newPaymentError(400, "MISSING_RETURN_URL", "url.return is required for EWALLET/ASTRAPAY", nil)
+		}
+	}
+	// QRIS CPM requires scanData
+	if paymentType == "QRIS" && strings.EqualFold(paymentCode, "CPM") {
+		if strings.TrimSpace(r.ScanData) == "" {
+			return newPaymentError(400, "MISSING_SCAN_DATA", "scanData is required for QRIS/CPM", nil)
+		}
+	}
+	return nil
+}
+
+// isValidUUIDv4 checks if string is a valid UUID version 4.
+func isValidUUIDv4(s string) bool {
+	id, err := uuid.Parse(s)
+	if err != nil {
+		return false
+	}
+	return id.Version() == 4
+}
+
+// CustomerResponse is the nested customer object in the response.
+type CustomerResponse struct {
+	Name  string `json:"name,omitempty"`
+	Email string `json:"email,omitempty"`
+	Phone string `json:"phone,omitempty"`
+}
+
 // PaymentMethodResponse is the nested paymentMethod object in the response.
 type PaymentMethodResponse struct {
 	Type string `json:"type"`
@@ -122,22 +178,20 @@ type AmountResponse struct {
 
 // PaymentResponse is the shape returned on create/get endpoints.
 type PaymentResponse struct {
-	ID                 string          `json:"id"`
-	ReferenceID        string          `json:"referenceId"`
-	PaymentMethod      PaymentMethodResponse `json:"paymentMethod"`
-	Amount             AmountResponse  `json:"amount"`
-	FeePaidBy          string          `json:"feePaidBy"`
-	Status             string          `json:"status"`
-	PaymentDetail      json.RawMessage `json:"paymentDetail,omitempty"`
-	PaymentInstruction json.RawMessage `json:"paymentInstruction,omitempty"`
-	CustomerName       string          `json:"customerName,omitempty"`
-	CustomerEmail      string          `json:"customerEmail,omitempty"`
-	CustomerPhone      string          `json:"customerPhone,omitempty"`
-	Description        string          `json:"description,omitempty"`
-	ExpiredAt          string          `json:"expiredAt"`
-	PaidAt             string          `json:"paidAt,omitempty"`
-	CancelledAt        string          `json:"cancelledAt,omitempty"`
-	CreatedAt          string          `json:"createdAt"`
+	ID                 string                 `json:"id"`
+	ReferenceID        string                 `json:"referenceId"`
+	PaymentMethod      PaymentMethodResponse  `json:"paymentMethod"`
+	Amount             AmountResponse         `json:"amount"`
+	FeePaidBy          string                 `json:"feePaidBy"`
+	Status             string                 `json:"status"`
+	PaymentDetail      json.RawMessage        `json:"paymentDetail,omitempty"`
+	PaymentInstruction json.RawMessage        `json:"paymentInstruction,omitempty"`
+	Customer           *CustomerResponse      `json:"customer,omitempty"`
+	Description        string                 `json:"description,omitempty"`
+	ExpiredAt          string                 `json:"expiredAt"`
+	PaidAt             string                 `json:"paidAt,omitempty"`
+	CancelledAt        string                 `json:"cancelledAt,omitempty"`
+	CreatedAt          string                 `json:"createdAt"`
 }
 
 // MethodsResponse groups active methods by payment type for the list endpoint.
@@ -265,15 +319,34 @@ func (s *PaymentService) CreatePayment(ctx context.Context, req *CreatePaymentRe
 
 	// Resolve customer fields from nested or flat fields.
 	customerName, customerEmail, customerPhone := req.resolveCustomer()
+	callbackURL, returnURL := req.resolveURL()
 
 	if req.ReferenceID == "" {
-		return nil, newPaymentError(400, "MISSING_FIELD", "referenceId is required", nil)
+		return nil, newPaymentError(400, "MISSING_REQUIRED_FIELD", "referenceId is required", nil)
+	}
+	if !isValidUUIDv4(req.ReferenceID) {
+		return nil, newPaymentError(400, "INVALID_FIELD_VALUE", "referenceId must be a valid UUIDv4", nil)
 	}
 	if rawType == "" || rawCode == "" {
-		return nil, newPaymentError(400, "MISSING_FIELD", "paymentMethod.type and paymentMethod.code are required", nil)
+		return nil, newPaymentError(400, "MISSING_REQUIRED_FIELD", "paymentMethod.type and paymentMethod.code are required", nil)
+	}
+
+	// Validate required fields based on payment method (Fix #4)
+	if err := req.validateRequiredFields(rawType, rawCode); err != nil {
+		return nil, err
 	}
 	if req.Amount <= 0 {
 		return nil, newPaymentError(400, "INVALID_AMOUNT", "amount must be positive", nil)
+	}
+
+	// Basic validation for nested customer when provided (Req 4.2).
+	if req.Customer != nil {
+		if strings.TrimSpace(req.Customer.Name) == "" && strings.TrimSpace(req.CustomerEmail) == "" {
+			// Accept legacy flat customerName as fallback
+			if strings.TrimSpace(req.CustomerName) == "" {
+				return nil, newPaymentError(400, "MISSING_FIELD", "customer.name is required when customer object is provided", nil)
+			}
+		}
 	}
 
 	// Resolve and validate feePaidBy (default merchant; rejects invalid values).
@@ -408,11 +481,12 @@ func (s *PaymentService) CreatePayment(ctx context.Context, req *CreatePaymentRe
 			TotalAmount:   totalAmount,
 			ExpiredAt:     expiredAt,
 			Description:   req.Description,
+			ClientName:    client.Name,
 			CustomerName:  customerName,
 			CustomerEmail: customerEmail,
 			CustomerPhone: customerPhone,
-			CallbackURL:   req.CallbackURL,
-			ReturnURL:     req.ReturnURL,
+			CallbackURL:   callbackURL,
+			ReturnURL:     returnURL,
 			ScanData:      req.ScanData,
 		}
 
@@ -447,7 +521,9 @@ func (s *PaymentService) CreatePayment(ctx context.Context, req *CreatePaymentRe
 		return nil, providerErr
 	}
 
-	detailJSON, _ := json.Marshal(providerResp.Normalized)
+	// Simplify detail per spec (Fix #5): VA→{vaName,vaNumber}, QRIS-MPM→{qrString}, CPM→{}, EWALLET→{checkoutUrl} or {}, RETAIL→{paymentCode}
+	simplified := simplifyPaymentDetail(method.Type, method.Code, providerResp.Normalized)
+	detailJSON, _ := json.Marshal(simplified)
 	payment.PaymentDetail = models.NullableRawMessage(detailJSON)
 	if providerResp.ProviderRef != "" {
 		v := providerResp.ProviderRef
@@ -850,14 +926,18 @@ func (s *PaymentService) buildResponse(p *models.Payment) *PaymentResponse {
 		ExpiredAt:          formatPaymentTime(p.ExpiredAt),
 		CreatedAt:          formatPaymentTime(p.CreatedAt),
 	}
-	if p.CustomerName != nil {
-		resp.CustomerName = *p.CustomerName
-	}
-	if p.CustomerEmail != nil {
-		resp.CustomerEmail = *p.CustomerEmail
-	}
-	if p.CustomerPhone != nil {
-		resp.CustomerPhone = *p.CustomerPhone
+	// Populate nested Customer object (Fix #1)
+	if p.CustomerName != nil || p.CustomerEmail != nil || p.CustomerPhone != nil {
+		resp.Customer = &CustomerResponse{}
+		if p.CustomerName != nil {
+			resp.Customer.Name = *p.CustomerName
+		}
+		if p.CustomerEmail != nil {
+			resp.Customer.Email = *p.CustomerEmail
+		}
+		if p.CustomerPhone != nil {
+			resp.Customer.Phone = *p.CustomerPhone
+		}
 	}
 	if p.Description != nil {
 		resp.Description = *p.Description
@@ -875,9 +955,49 @@ func (s *PaymentService) buildResponse(p *models.Payment) *PaymentResponse {
 // Helpers
 // ----------------------------------------------------------------------------
 
+// simplifyPaymentDetail returns only the fields mandated by the contract (Fix #5).
+func simplifyPaymentDetail(typ models.PaymentType, code string, n PaymentDetailNormalized) map[string]string {
+	out := map[string]string{}
+	switch typ {
+	case models.PaymentTypeVA:
+		if n.AccountName != "" {
+			out["vaName"] = n.AccountName
+		}
+		if n.VANumber != "" {
+			out["vaNumber"] = n.VANumber
+		}
+	case models.PaymentTypeQRIS:
+		if strings.EqualFold(code, "CPM") {
+			// CPM: provider stores internally via scanData; return empty object
+			return map[string]string{}
+		}
+		if n.QRString != "" {
+			out["qrString"] = n.QRString
+		}
+	case models.PaymentTypeEwallet:
+		if strings.EqualFold(code, "OVO") {
+			// OVO uses push notification, no URL to return
+			return map[string]string{}
+		}
+		if n.CheckoutURL != "" {
+			out["checkoutUrl"] = n.CheckoutURL
+		} else if n.Deeplink != "" {
+			out["checkoutUrl"] = n.Deeplink
+		}
+	case models.PaymentTypeRetail:
+		if n.PaymentCode != "" {
+			out["paymentCode"] = n.PaymentCode
+		}
+	}
+	return out
+}
+
 func resolveExpiredAt(requested string, maxDurationSec int) time.Time {
 	now := time.Now()
 	var maxExp time.Time
+	if maxDurationSec > 0 {
+		maxExp = now.Add(time.Duration(maxDurationSec) * time.Second)
+	}
 	if maxDurationSec > 0 {
 		maxExp = now.Add(time.Duration(maxDurationSec) * time.Second)
 	}

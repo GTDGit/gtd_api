@@ -61,7 +61,7 @@ func (p *PakailinkProviderClient) createVA(ctx context.Context, method *models.P
 	vaReq := pakailink.CreateVARequest{
 		PartnerReferenceNo:  req.PartnerRef,
 		CustomerNo:          customerNo,
-		VirtualAccountName:  firstNonEmpty(req.CustomerName, "Customer"),
+		VirtualAccountName:  firstNonEmpty(req.CustomerName, req.ClientName, "Customer"),
 		VirtualAccountEmail: req.CustomerEmail,
 		VirtualAccountPhone: req.CustomerPhone,
 		TotalAmount:         req.TotalAmount,

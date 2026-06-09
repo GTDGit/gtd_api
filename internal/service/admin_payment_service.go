@@ -21,10 +21,11 @@ import (
 
 type AdminPaymentService struct {
 	paymentRepo *repository.PaymentRepository
+	router      *PaymentProviderRouter
 }
 
-func NewAdminPaymentService(paymentRepo *repository.PaymentRepository) *AdminPaymentService {
-	return &AdminPaymentService{paymentRepo: paymentRepo}
+func NewAdminPaymentService(paymentRepo *repository.PaymentRepository, router *PaymentProviderRouter) *AdminPaymentService {
+	return &AdminPaymentService{paymentRepo: paymentRepo, router: router}
 }
 
 // ----------------------------------------------------------------------------
@@ -190,6 +191,45 @@ func (s *AdminPaymentService) ListProviders(ctx context.Context, paymentType, co
 		}
 	}
 	return bindings, nil
+}
+
+// AvailableProviders returns providers that: (1) have adapter registered in router,
+// (2) Available() == true, (3) not globally maintained. (Fix #8)
+func (s *AdminPaymentService) AvailableProviders(ctx context.Context, paymentType, code string) ([]models.MethodProviderBinding, error) {
+	t, c, err := normalizeMethodKey(paymentType, code)
+	if err != nil {
+		return nil, err
+	}
+	all, err := s.paymentRepo.GetMethodProvidersByTypeCode(ctx, t, c)
+	if err != nil {
+		return nil, err
+	}
+	if len(all) == 0 {
+		if _, mErr := s.paymentRepo.GetMethodByTypeCode(ctx, t, c); mErr != nil {
+			if errors.Is(mErr, sql.ErrNoRows) {
+				return nil, newPaymentError(404, "PAYMENT_METHOD_NOT_FOUND", "Payment method not found", nil)
+			}
+			return nil, mErr
+		}
+	}
+	if s.router == nil {
+		return all, nil
+	}
+	out := make([]models.MethodProviderBinding, 0, len(all))
+	for _, b := range all {
+		if !b.IsActive || b.IsMaintenance {
+			continue
+		}
+		if !s.router.Has(b.Provider) {
+			continue
+		}
+		client, _ := s.router.Get(b.Provider)
+		if client == nil || !client.Available() {
+			continue
+		}
+		out = append(out, b)
+	}
+	return out, nil
 }
 
 // UpdateProviders applies the ordered binding updates (priority, is_active,

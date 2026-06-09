@@ -80,6 +80,17 @@ func (h *AdminPaymentHandler) UpdateProviders(c *gin.Context) {
 	utils.Success(c, http.StatusOK, "Successfully", bindings)
 }
 
+// AvailableProviders handles GET /v1/admin/payment-methods/:type/:code/available-providers
+// Returns only providers that have a registered adapter, pass Available(), and are not globally maintained.
+func (h *AdminPaymentHandler) AvailableProviders(c *gin.Context) {
+	providers, err := h.adminPaymentSvc.AvailableProviders(c.Request.Context(), c.Param("method"), c.Param("code"))
+	if err != nil {
+		h.handleError(c, err)
+		return
+	}
+	utils.Success(c, http.StatusOK, "Successfully", providers)
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------

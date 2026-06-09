@@ -19,6 +19,7 @@ type PaymentCreateRequest struct {
 	TotalAmount    int64
 	ExpiredAt      time.Time
 	Description    string
+	ClientName     string // owning client's name; VA name fallback when customer.name is empty
 	CustomerName   string
 	CustomerEmail  string
 	CustomerPhone  string

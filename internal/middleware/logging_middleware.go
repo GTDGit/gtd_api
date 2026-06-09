@@ -15,8 +15,8 @@ func LoggingMiddleware() gin.HandlerFunc {
         start := time.Now()
         path := c.Request.URL.Path
 
-        // Generate request ID
-        requestID := uuid.New().String()[:8]
+        // Generate request ID (full UUIDv4)
+        requestID := uuid.New().String()
         c.Set("request_id", requestID)
 
         // Process request

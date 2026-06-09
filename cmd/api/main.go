@@ -416,7 +416,7 @@ func main() {
 	paymentCallbackSvc := service.NewPaymentCallbackService(paymentRepo, clientRepo)
 	paymentSvc := service.NewPaymentService(paymentRepo, clientRepo, paymentRouter, paymentCallbackSvc)
 	paymentSvc.SetNotifier(sseNotifier)
-	adminPaymentSvc := service.NewAdminPaymentService(paymentRepo)
+	adminPaymentSvc := service.NewAdminPaymentService(paymentRepo, paymentRouter)
 
 	// Resolve webhook secrets for inbound signature verification.
 	pakailinkWebhookSecret := cfg.Payment.Pakailink.ClientSecret
@@ -631,6 +631,7 @@ func setupRoutes(router *gin.Engine, handlers *Handlers, authMiddleware *middlew
 		admin.PUT("/payment-methods/:method", handlers.AdminPayment.UpdateMethod)
 		admin.GET("/payment-methods/:method/:code/providers", handlers.AdminPayment.ListProviders)
 		admin.PUT("/payment-methods/:method/:code/providers", handlers.AdminPayment.UpdateProviders)
+		admin.GET("/payment-methods/:method/:code/available-providers", handlers.AdminPayment.AvailableProviders)
 	}
 }
 

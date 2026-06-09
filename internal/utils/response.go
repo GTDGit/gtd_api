@@ -88,7 +88,7 @@ func Error(c *gin.Context, code int, errCode, message string) {
 	c.JSON(code, Response{
 		Success: false,
 		Code:    code,
-		Message: message,
+		Message: "Failed",
 		Error: &ErrorInfo{
 			Code:    errCode,
 			Message: message,
@@ -105,7 +105,7 @@ func ErrorWithData(c *gin.Context, code int, message, errCode, errMessage string
 	c.JSON(code, Response{
 		Success: false,
 		Code:    code,
-		Message: message,
+		Message: "Failed",
 		Data:    data,
 		Error: &ErrorInfo{
 			Code:    errCode,
@@ -122,7 +122,7 @@ func getRequestID(c *gin.Context) string {
 	if id := c.GetString("request_id"); id != "" {
 		return id
 	}
-	return uuid.New().String()[:8]
+	return uuid.New().String()
 }
 
 // NowISO returns the current time in ISO 8601 format with WIB timezone.

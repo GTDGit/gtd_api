@@ -331,6 +331,12 @@ func (s *PaymentService) CreatePayment(ctx context.Context, req *CreatePaymentRe
 		return nil, newPaymentError(400, "MISSING_REQUIRED_FIELD", "paymentMethod.type and paymentMethod.code are required", nil)
 	}
 
+	// url.callback is mandatory: the payment webhook is delivered to this
+	// per-request URL (there is no client-level payment callback fallback).
+	if strings.TrimSpace(callbackURL) == "" {
+		return nil, newPaymentError(400, "MISSING_REQUIRED_FIELD", "url.callback is required", nil)
+	}
+
 	// Validate required fields based on payment method (Fix #4)
 	if err := req.validateRequiredFields(rawType, rawCode); err != nil {
 		return nil, err
@@ -454,6 +460,9 @@ func (s *PaymentService) CreatePayment(ctx context.Context, req *CreatePaymentRe
 	if req.Description != "" {
 		v := req.Description
 		payment.Description = &v
+	}
+	if cb := strings.TrimSpace(callbackURL); cb != "" {
+		payment.CallbackURL = &cb
 	}
 
 	if err := s.createPaymentWithGeneratedID(ctx, payment); err != nil {

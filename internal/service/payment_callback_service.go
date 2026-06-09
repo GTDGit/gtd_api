@@ -11,6 +11,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -54,10 +55,13 @@ func (s *PaymentCallbackService) EnqueueEvent(ctx context.Context, payment *mode
 		}
 		return
 	}
-	url, secret := client.EffectivePaymentCallback()
-	if url == "" {
+	// Callback URL comes from the create request (stored per-payment); the
+	// HMAC signing secret is the client's callback_secret.
+	if payment.CallbackURL == nil || strings.TrimSpace(*payment.CallbackURL) == "" {
 		return
 	}
+	url := strings.TrimSpace(*payment.CallbackURL)
+	secret := client.CallbackSecret
 
 	payload := buildPaymentCallbackPayload(payment, event)
 	logRow := &models.PaymentCallbackLog{
@@ -94,10 +98,12 @@ func (s *PaymentCallbackService) RetryPendingCallbacks(ctx context.Context, limi
 		if err != nil {
 			continue
 		}
-		url, secret := client.EffectivePaymentCallback()
-		if url == "" {
+		payment, err := s.paymentRepo.GetPaymentByID(ctx, row.PaymentID)
+		if err != nil || payment.CallbackURL == nil || strings.TrimSpace(*payment.CallbackURL) == "" {
 			continue
 		}
+		url := strings.TrimSpace(*payment.CallbackURL)
+		secret := client.CallbackSecret
 		s.AttemptDelivery(ctx, row, url, secret)
 	}
 	return nil

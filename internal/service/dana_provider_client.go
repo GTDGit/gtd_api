@@ -47,6 +47,12 @@ func (p *DanaProviderClient) CreatePayment(ctx context.Context, method *models.P
 	case models.PaymentTypeEwallet:
 		payMethod, payOption := danaEwalletMethodOption(method.Code)
 		return p.createOrder(ctx, method, req, payMethod, payOption)
+	case models.PaymentTypeVA:
+		payOption := danaVAPayOption(method.Code)
+		if payOption == "" {
+			return nil, newPaymentError(400, "UNSUPPORTED_PAYMENT_TYPE", "Unsupported VA bank code for DANA: "+method.Code, nil)
+		}
+		return p.createOrder(ctx, method, req, dana.PayMethodVirtualAccount, payOption)
 	case models.PaymentTypeQRIS:
 		if strings.ToUpper(strings.TrimSpace(method.Code)) == "CPM" {
 			return p.createCPMQRIS(ctx, method, req)
@@ -56,6 +62,32 @@ func (p *DanaProviderClient) CreatePayment(ctx context.Context, method *models.P
 		return p.createOrder(ctx, method, req, dana.PayMethodNetworkPay, dana.PayOptionQRIS)
 	default:
 		return nil, newPaymentError(400, "UNSUPPORTED_PAYMENT_TYPE", "DANA does not support this payment type", nil)
+	}
+}
+
+// danaVAPayOption maps the numeric DB bank code to the DANA VA payOption
+// (VIRTUAL_ACCOUNT_<bank>). Unknown codes return "" so the selector falls
+// through to the next provider.
+func danaVAPayOption(code string) string {
+	switch strings.TrimSpace(code) {
+	case "002":
+		return dana.PayOptionVABRI
+	case "009":
+		return dana.PayOptionVABNI
+	case "008":
+		return dana.PayOptionVAMandiri
+	case "451":
+		return dana.PayOptionVABSI
+	case "022":
+		return dana.PayOptionVACIMB
+	case "013":
+		return dana.PayOptionVAPermata
+	case "019":
+		return dana.PayOptionVAPanin
+	case "213":
+		return dana.PayOptionVABTPN
+	default:
+		return ""
 	}
 }
 
@@ -110,10 +142,16 @@ func (p *DanaProviderClient) createOrder(ctx context.Context, method *models.Pay
 		return nil, mapDanaError(err)
 	}
 	norm := PaymentDetailNormalized{}
-	if req.Type == models.PaymentTypeQRIS {
+	switch req.Type {
+	case models.PaymentTypeQRIS:
 		// Gapura Custom Checkout QRIS: QR string in additionalInfo.paymentCode
 		norm.QRString = resp.PaymentCode()
-	} else {
+	case models.PaymentTypeVA:
+		norm.BankCode = method.Code
+		norm.BankName = firstNonEmpty(method.Name, payOption)
+		norm.VANumber = resp.VirtualAccountNumber()
+		norm.AccountName = firstNonEmpty(req.CustomerName, req.ClientName, "Customer")
+	default:
 		norm.CheckoutURL = resp.CheckoutURL
 		norm.MobileWebURL = resp.WebRedirectURL
 		norm.Deeplink = resp.DeeplinkURL

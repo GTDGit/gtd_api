@@ -43,6 +43,18 @@ const (
 	PayOptionShopeePay  = "NETWORK_PAY_PG_SPAY"
 	PayOptionLinkAja    = "NETWORK_PAY_PG_LINKAJA"
 
+	// Virtual Account: same create-order endpoint, payMethod=VIRTUAL_ACCOUNT,
+	// payOption=VIRTUAL_ACCOUNT_<bank> (see DANA create-order-custom docs).
+	PayMethodVirtualAccount = "VIRTUAL_ACCOUNT"
+	PayOptionVABRI          = "VIRTUAL_ACCOUNT_BRI"
+	PayOptionVABNI          = "VIRTUAL_ACCOUNT_BNI"
+	PayOptionVAMandiri      = "VIRTUAL_ACCOUNT_MANDIRI"
+	PayOptionVABTPN         = "VIRTUAL_ACCOUNT_BTPN"
+	PayOptionVACIMB         = "VIRTUAL_ACCOUNT_CIMB"
+	PayOptionVAPermata      = "VIRTUAL_ACCOUNT_PERMATA"
+	PayOptionVAPanin        = "VIRTUAL_ACCOUNT_PANI"
+	PayOptionVABSI          = "VIRTUAL_ACCOUNT_BSI_PAYMENT"
+
 	StatusSuccess   = "00"
 	StatusCancelled = "05"
 )
@@ -83,6 +95,33 @@ func (r *CreateOrderResponse) PaymentCode() string {
 	}
 	if v, ok := r.AdditionalInfo["paymentCode"].(string); ok {
 		return v
+	}
+	return ""
+}
+
+// VirtualAccountNumber pulls the VA number from a create-order response.
+// DANA returns it inside additionalInfo; the exact key isn't documented for
+// this account, so we probe the common shapes: a top-level
+// additionalInfo.virtualAccountNumber/vaNumber/virtualAccountNo, or a nested
+// additionalInfo.virtualAccountData.virtualAccountNo. Returns "" if absent.
+func (r *CreateOrderResponse) VirtualAccountNumber() string {
+	if r == nil || r.AdditionalInfo == nil {
+		return ""
+	}
+	for _, k := range []string{"virtualAccountNumber", "vaNumber", "virtualAccountNo", "virtualAccountNumberFull"} {
+		if v, ok := r.AdditionalInfo[k].(string); ok && v != "" {
+			return v
+		}
+	}
+	// Nested under virtualAccountData / paymentInfo.
+	for _, parent := range []string{"virtualAccountData", "paymentInfo", "virtualAccount"} {
+		if sub, ok := r.AdditionalInfo[parent].(map[string]any); ok {
+			for _, k := range []string{"virtualAccountNo", "virtualAccountNumber", "vaNumber"} {
+				if v, ok := sub[k].(string); ok && v != "" {
+					return v
+				}
+			}
+		}
 	}
 	return ""
 }

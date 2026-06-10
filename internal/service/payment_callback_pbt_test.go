@@ -39,7 +39,6 @@ func cbEventName(t *rapid.T) string {
 		"payment.cancelled",
 		"payment.failed",
 		"payment.refunded",
-		"payment.partial_refund",
 	}).Draw(t, "event")
 }
 
@@ -48,9 +47,10 @@ func cbEventName(t *rapid.T) string {
 // ----------------------------------------------------------------------------
 
 // Feature: payment-provider-enhancements, Property 4: For any payment and event name,
-// the merchant webhook payload is an object with exactly event, data, and timestamp,
-// where data carries id, referenceId, nested paymentMethod, nested amount, status, and
-// paymentDetail, and data contains no provider name or providerRef key.
+// the merchant webhook payload is an object with exactly event, data, and meta, where
+// data carries id, referenceId, nested paymentMethod, nested amount, status, and
+// paymentDetail (matching the API response shape), and data contains no provider name or
+// providerRef key. meta carries requestId and timestamp.
 //
 // Validates: Requirements 8.1, 8.2, 8.3
 func TestProperty4_WebhookEventShape(t *testing.T) {
@@ -60,12 +60,12 @@ func TestProperty4_WebhookEventShape(t *testing.T) {
 
 		raw := buildPaymentCallbackPayload(p, event)
 
-		// Top-level must be an object with EXACTLY event, data, timestamp.
+		// Top-level must be an object with EXACTLY event, data, meta.
 		var top map[string]json.RawMessage
 		if err := json.Unmarshal(raw, &top); err != nil {
 			t.Fatalf("payload is not a JSON object: %v\npayload=%s", err, raw)
 		}
-		cbAssertExactKeys(t, top, []string{"event", "data", "timestamp"}, "top-level")
+		cbAssertExactKeys(t, top, []string{"event", "data", "meta"}, "top-level")
 
 		// event matches what we passed in.
 		var gotEvent string
@@ -76,13 +76,19 @@ func TestProperty4_WebhookEventShape(t *testing.T) {
 			t.Fatalf("event mismatch: got %q want %q", gotEvent, event)
 		}
 
-		// timestamp must be a non-empty string.
-		var ts string
-		if err := json.Unmarshal(top["timestamp"], &ts); err != nil {
-			t.Fatalf("timestamp not a string: %v", err)
+		// meta must be an object with a non-empty timestamp and requestId.
+		var metaObj map[string]json.RawMessage
+		if err := json.Unmarshal(top["meta"], &metaObj); err != nil {
+			t.Fatalf("meta is not a JSON object: %v", err)
 		}
-		if ts == "" {
-			t.Fatalf("timestamp is empty")
+		for _, k := range []string{"requestId", "timestamp"} {
+			var v string
+			if _, ok := metaObj[k]; !ok {
+				t.Fatalf("meta missing key %q; keys=%v", k, cbKeys(metaObj))
+			}
+			if err := json.Unmarshal(metaObj[k], &v); err != nil || v == "" {
+				t.Fatalf("meta.%s must be a non-empty string", k)
+			}
 		}
 
 		// data must be an object carrying the required keys.
@@ -152,9 +158,9 @@ func TestProperty4_WebhookEventShape(t *testing.T) {
 // ----------------------------------------------------------------------------
 
 // Feature: payment-provider-enhancements, Property 9: For any payment status, the derived
-// webhook event name equals "payment." + lowercase(status), except Partial_Refund which
-// maps to payment.partial_refund; in particular Paid, Cancelled, Expired, and Failed map
-// to payment.paid, payment.cancelled, payment.expired, and payment.failed.
+// webhook event name equals "payment." + lowercase(status); in particular Paid, Cancelled,
+// Expired, and Failed map to payment.paid, payment.cancelled, payment.expired, and
+// payment.failed.
 //
 // Validates: Requirements 8.4
 //
@@ -167,9 +173,6 @@ func TestProperty9_StatusToEventName(t *testing.T) {
 	// cbExpectedEventName replicates the documented rule independently of the
 	// implementation under test.
 	cbExpectedEventName := func(status models.PaymentStatus) string {
-		if status == models.PaymentStatusPartialRefund {
-			return "payment.partial_refund"
-		}
 		return "payment." + strings.ToLower(string(status))
 	}
 
@@ -187,11 +190,6 @@ func TestProperty9_StatusToEventName(t *testing.T) {
 		if got := cbExpectedEventName(status); got != want {
 			t.Fatalf("rule replica for %q = %q, want %q", status, got, want)
 		}
-	}
-
-	// Partial_Refund special case.
-	if got := paymentEventName(models.PaymentStatusPartialRefund); got != "payment.partial_refund" {
-		t.Fatalf("paymentEventName(Partial_Refund) = %q, want payment.partial_refund", got)
 	}
 
 	rapid.Check(t, func(t *rapid.T) {

@@ -202,10 +202,8 @@ func mapMidtransTransactionStatus(status, fraudStatus string) models.PaymentStat
 		return models.PaymentStatusExpired
 	case midtrans.StatusCancel:
 		return models.PaymentStatusCancelled
-	case midtrans.StatusRefund:
+	case midtrans.StatusRefund, "partial_refund":
 		return models.PaymentStatusRefunded
-	case "partial_refund":
-		return models.PaymentStatusPartialRefund
 	default:
 		return models.PaymentStatusPending
 	}

@@ -489,10 +489,8 @@ func mapMidtransWebhookStatus(status, fraudStatus string) models.PaymentStatus {
 		return models.PaymentStatusExpired
 	case midtrans.StatusCancel:
 		return models.PaymentStatusCancelled
-	case midtrans.StatusRefund:
+	case midtrans.StatusRefund, "partial_refund":
 		return models.PaymentStatusRefunded
-	case "partial_refund":
-		return models.PaymentStatusPartialRefund
 	default:
 		return models.PaymentStatusPending
 	}

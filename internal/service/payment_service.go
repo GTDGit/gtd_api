@@ -900,6 +900,13 @@ func (s *PaymentService) EnqueueCallback(ctx context.Context, p *models.Payment,
 }
 
 func (s *PaymentService) buildResponse(p *models.Payment) *PaymentResponse {
+	return paymentToResponse(p)
+}
+
+// paymentToResponse maps a persisted payment to the public response shape.
+// Shared by the create/get/cancel endpoints and the outbound webhook payload so
+// both always carry an identical data object.
+func paymentToResponse(p *models.Payment) *PaymentResponse {
 	resp := &PaymentResponse{
 		ID:          p.PaymentID,
 		ReferenceID: p.ReferenceID,
@@ -1103,12 +1110,8 @@ func dedupMethodsByTypeCode(methods []models.PaymentMethod) []models.PaymentMeth
 }
 
 // paymentEventName maps a payment status to its merchant webhook event name:
-// "payment." + lowercase(status), with Partial_Refund mapped to
-// "payment.partial_refund" (Req 8.4).
+// "payment." + lowercase(status), e.g. Paid -> "payment.paid".
 func paymentEventName(status models.PaymentStatus) string {
-	if status == models.PaymentStatusPartialRefund {
-		return "payment.partial_refund"
-	}
 	return "payment." + strings.ToLower(string(status))
 }
 

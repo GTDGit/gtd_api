@@ -61,7 +61,7 @@ func (s *PaymentCallbackService) EnqueueEvent(ctx context.Context, payment *mode
 		return
 	}
 	url := strings.TrimSpace(*payment.CallbackURL)
-	secret := client.CallbackSecret
+	secret := clientWebhookSecret(client)
 
 	payload := buildPaymentCallbackPayload(payment, event)
 	logRow := &models.PaymentCallbackLog{
@@ -103,7 +103,7 @@ func (s *PaymentCallbackService) RetryPendingCallbacks(ctx context.Context, limi
 			continue
 		}
 		url := strings.TrimSpace(*payment.CallbackURL)
-		secret := client.CallbackSecret
+		secret := clientWebhookSecret(client)
 		s.AttemptDelivery(ctx, row, url, secret)
 	}
 	return nil
@@ -215,6 +215,19 @@ func paymentNextRetry(attempt int) time.Time {
 	return time.Now().Add(intervals[attempt-1])
 }
 
+// clientWebhookSecret returns the HMAC signing secret for outbound webhooks.
+// Prefers the dedicated webhook_key; falls back to the legacy callback_secret
+// for clients not yet backfilled.
+func clientWebhookSecret(c *models.Client) string {
+	if c == nil {
+		return ""
+	}
+	if s := strings.TrimSpace(c.WebhookKey); s != "" {
+		return s
+	}
+	return c.CallbackSecret
+}
+
 func hmacHexSHA256(payload []byte, secret string) string {
 	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write(payload)
@@ -225,74 +238,28 @@ func genPaymentRequestID() string {
 	return uuid.New().String()
 }
 
-// buildPaymentCallbackPayload renders the merchant-facing webhook body.
-// All timestamps are formatted as WIB (UTC+7) without nanoseconds: 2006-01-02T15:04:05+07:00
+// buildPaymentCallbackPayload renders the merchant-facing webhook body. The
+// `data` object is the exact same shape returned by the create/get endpoints
+// (via paymentToResponse), so clients can deserialize webhook and API responses
+// with one model. The `meta` object mirrors the API response meta.
 func buildPaymentCallbackPayload(p *models.Payment, event string) []byte {
-	type paymentMethodData struct {
-		Type string `json:"type"`
-		Code string `json:"code"`
-	}
-	type amountData struct {
-		Subtotal int64 `json:"subtotal"`
-		Fee      int64 `json:"fee"`
-		Total    int64 `json:"total"`
-	}
-	type data struct {
-		ID            string             `json:"id"`
-		ReferenceID   string             `json:"referenceId"`
-		PaymentMethod paymentMethodData  `json:"paymentMethod"`
-		Amount        amountData         `json:"amount"`
-		Status        string             `json:"status"`
-		CustomerName  *string            `json:"customerName,omitempty"`
-		PaymentDetail json.RawMessage    `json:"paymentDetail,omitempty"`
-		PaidAt        string             `json:"paidAt,omitempty"`
-		CancelledAt   string             `json:"cancelledAt,omitempty"`
-		ExpiredAt     string             `json:"expiredAt"`
-		CreatedAt     string             `json:"createdAt"`
-	}
-	type envelope struct {
-		Event     string `json:"event"`
-		Data      data   `json:"data"`
+	type meta struct {
+		RequestID string `json:"requestId"`
 		Timestamp string `json:"timestamp"`
 	}
-
-	fmtWIB := func(t time.Time) string {
-		if t.IsZero() {
-			return ""
-		}
-		return t.UTC().Format("2006-01-02T15:04:05") + "+07:00"
-	}
-	fmtWIBPtr := func(t *time.Time) string {
-		if t == nil {
-			return ""
-		}
-		return fmtWIB(*t)
+	type envelope struct {
+		Event string           `json:"event"`
+		Data  *PaymentResponse `json:"data"`
+		Meta  meta             `json:"meta"`
 	}
 
-	d := data{
-		ID:          p.PaymentID,
-		ReferenceID: p.ReferenceID,
-		PaymentMethod: paymentMethodData{
-			Type: string(p.PaymentType),
-			Code: p.PaymentCode,
-		},
-		Amount: amountData{
-			Subtotal: p.Amount,
-			Fee:      p.Fee,
-			Total:    p.TotalAmount,
-		},
-		Status:        string(p.Status),
-		CustomerName:  p.CustomerName,
-		PaymentDetail: json.RawMessage(p.PaymentDetail),
-		PaidAt:        fmtWIBPtr(p.PaidAt),
-		CancelledAt:   fmtWIBPtr(p.CancelledAt),
-		ExpiredAt:     fmtWIB(p.ExpiredAt),
-		CreatedAt:     fmtWIB(p.CreatedAt),
-	}
 	out := envelope{
-		Event:     event,
-		Data:      d,
-		Timestamp: fmtWIB(time.Now()),
+		Event: event,
+		Data:  paymentToResponse(p),
+		Meta: meta{
+			RequestID: genPaymentRequestID(),
+			Timestamp: time.Now().UTC().Format("2006-01-02T15:04:05") + "+07:00",
+		},
 	}
 	b, _ := json.Marshal(out)
 	return b

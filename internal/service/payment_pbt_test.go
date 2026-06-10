@@ -50,7 +50,6 @@ func genPaymentStatus(t *rapid.T) models.PaymentStatus {
 		models.PaymentStatusCancelled,
 		models.PaymentStatusFailed,
 		models.PaymentStatusRefunded,
-		models.PaymentStatusPartialRefund,
 	}).Draw(t, "status")
 }
 

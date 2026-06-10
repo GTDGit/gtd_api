@@ -975,6 +975,10 @@ func simplifyPaymentDetail(typ models.PaymentType, code string, n PaymentDetailN
 		if n.VANumber != "" {
 			out["vaNumber"] = n.VANumber
 		}
+		// Mandiri Bill Payment (echannel): customer pays with biller code + bill key.
+		if n.BillerCode != "" {
+			out["billerCode"] = n.BillerCode
+		}
 	case models.PaymentTypeQRIS:
 		if strings.EqualFold(code, "CPM") {
 			// CPM: provider stores internally via scanData; return empty object

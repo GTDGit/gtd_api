@@ -119,6 +119,66 @@ func (c *Client) ChargeGoPayQR(ctx context.Context, orderID string, grossAmount 
 	return c.ChargeQRIS(ctx, orderID, grossAmount, "gopay", customer)
 }
 
+// ChargeBankTransfer creates a Virtual Account charge for BNI, BRI, CIMB, or Permata.
+// bank is the lowercase Midtrans bank code ("bni", "bri", "cimb", "permata").
+// recipientName is only used by Permata (ignored for other banks).
+func (c *Client) ChargeBankTransfer(ctx context.Context, orderID string, grossAmount int64, bank, recipientName string, expirySec int, cust *CustomerDetails) (*ChargeResponse, error) {
+	bt := &BankTransferOptions{Bank: bank}
+	if bank == "permata" && recipientName != "" {
+		bt.Permata = &PermataBankTransfer{RecipientName: recipientName}
+	}
+	req := ChargeRequest{
+		PaymentType: PaymentTypeBankTransfer,
+		TransactionDetails: TransactionDetails{
+			OrderID:     orderID,
+			GrossAmount: grossAmount,
+		},
+		BankTransfer:    bt,
+		CustomerDetails: cust,
+		CustomExpiry:    customExpiryFromSeconds(expirySec),
+	}
+	return c.Charge(ctx, req)
+}
+
+// ChargeEchannel creates a Mandiri Bill Payment (echannel) charge.
+func (c *Client) ChargeEchannel(ctx context.Context, orderID string, grossAmount int64, billInfo1, billInfo2 string, expirySec int, cust *CustomerDetails) (*ChargeResponse, error) {
+	req := ChargeRequest{
+		PaymentType: PaymentTypeEchannel,
+		TransactionDetails: TransactionDetails{
+			OrderID:     orderID,
+			GrossAmount: grossAmount,
+		},
+		Echannel: &EchannelOptions{
+			BillInfo1: firstNonEmptyMidtrans(billInfo1, "Payment"),
+			BillInfo2: firstNonEmptyMidtrans(billInfo2, "Online"),
+		},
+		CustomerDetails: cust,
+		CustomExpiry:    customExpiryFromSeconds(expirySec),
+	}
+	return c.Charge(ctx, req)
+}
+
+// customExpiryFromSeconds builds a CustomExpiry from a duration in seconds.
+// Returns nil when expirySec <= 0 so Midtrans applies its default.
+func customExpiryFromSeconds(expirySec int) *CustomExpiry {
+	if expirySec <= 0 {
+		return nil
+	}
+	return &CustomExpiry{
+		ExpiryDuration: expirySec,
+		Unit:           "second",
+	}
+}
+
+func firstNonEmptyMidtrans(vs ...string) string {
+	for _, v := range vs {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
 // Status performs GET /v2/{order_id}/status.
 func (c *Client) Status(ctx context.Context, orderID string) (*StatusResponse, error) {
 	path := "/v2/" + orderID + "/status"

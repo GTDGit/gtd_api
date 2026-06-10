@@ -37,9 +37,51 @@ func (p *XenditProviderClient) CreatePayment(ctx context.Context, method *models
 		return p.createQRIS(ctx, method, req)
 	case models.PaymentTypeEwallet:
 		return p.createEwallet(ctx, method, req)
+	case models.PaymentTypeVA:
+		return p.createVA(ctx, method, req)
 	default:
-		return nil, newPaymentError(400, "UNSUPPORTED_PAYMENT_TYPE", "Xendit adapter supports retail, QRIS, and e-wallet payments", nil)
+		return nil, newPaymentError(400, "UNSUPPORTED_PAYMENT_TYPE", "Xendit adapter supports retail, QRIS, e-wallet, and VA payments", nil)
 	}
+}
+
+func (p *XenditProviderClient) createVA(ctx context.Context, method *models.PaymentMethod, req *PaymentCreateRequest) (*PaymentCreateResponse, error) {
+	channel := xenditVAChannelCode(method.Code)
+	if channel == "" {
+		return nil, newPaymentError(400, "UNSUPPORTED_PAYMENT_TYPE", "Unsupported VA bank code for Xendit: "+method.Code, nil)
+	}
+	customerName := firstNonEmpty(req.CustomerName, req.ClientName, "Customer")
+	create := xendit.PaymentRequestCreate{
+		ReferenceID:   req.PartnerRef,
+		Type:          "PAY",
+		Country:       "ID",
+		Currency:      "IDR",
+		ChannelCode:   channel,
+		RequestAmount: req.TotalAmount,
+		ChannelProperties: xendit.PaymentRequestChannelProperties{
+			CustomerName: customerName,
+			ExpiresAt:    formatXenditExpiry(req.ExpiredAt),
+		},
+		Description: req.Description,
+	}
+	resp, err := p.client.CreatePaymentRequest(ctx, create)
+	if err != nil {
+		return nil, mapXenditError(err)
+	}
+	vaNumber := resp.ChannelProperties.VirtualAccountNumber
+	if vaNumber == "" {
+		vaNumber = extractXenditVANumber(resp.Actions)
+	}
+	norm := PaymentDetailNormalized{
+		BankCode:    method.Code,
+		BankName:    method.Name,
+		VANumber:    vaNumber,
+		AccountName: customerName,
+	}
+	return &PaymentCreateResponse{
+		ProviderRef: resp.PaymentRequestID,
+		Normalized:  norm,
+		RawResponse: resp.RawResponse,
+	}, nil
 }
 
 func (p *XenditProviderClient) createRetail(ctx context.Context, method *models.PaymentMethod, req *PaymentCreateRequest) (*PaymentCreateResponse, error) {
@@ -241,6 +283,50 @@ func extractXenditQRString(actions []any) string {
 		typ, _ := m["type"].(string)
 		val, _ := m["value"].(string)
 		if (descriptor == "QR_STRING" || typ == "PRESENT_TO_CUSTOMER") && val != "" {
+			return val
+		}
+	}
+	return ""
+}
+
+// xenditVAChannelCode maps the numeric DB bank code to the Xendit Payment
+// Request API channel code (uppercase). Unknown codes return "" so the selector
+// falls through to the next provider.
+func xenditVAChannelCode(code string) string {
+	switch strings.TrimSpace(code) {
+	case "002":
+		return "BRI"
+	case "009":
+		return "BNI"
+	case "008":
+		return "MANDIRI"
+	case "451":
+		return "BSI"
+	case "022":
+		return "CIMB"
+	case "013":
+		return "PERMATA"
+	case "110":
+		return "BJB"
+	case "120":
+		return "SAHABAT_SAMPOERNA"
+	default:
+		return ""
+	}
+}
+
+// extractXenditVANumber pulls the virtual account number from Xendit's actions
+// array. Xendit returns the VA number in actions[] with
+// descriptor=="VIRTUAL_ACCOUNT_NUMBER".
+func extractXenditVANumber(actions []any) string {
+	for _, a := range actions {
+		m, ok := a.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		descriptor, _ := m["descriptor"].(string)
+		val, _ := m["value"].(string)
+		if strings.EqualFold(descriptor, "VIRTUAL_ACCOUNT_NUMBER") && val != "" {
 			return val
 		}
 	}

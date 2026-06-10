@@ -21,9 +21,11 @@ func (e *APIError) Error() string {
 
 // Payment type constants.
 const (
-	PaymentTypeGoPay     = "gopay"
-	PaymentTypeShopeePay = "shopeepay"
-	PaymentTypeQRIS      = "qris" // National QRIS — returns qr_string directly
+	PaymentTypeGoPay        = "gopay"
+	PaymentTypeShopeePay    = "shopeepay"
+	PaymentTypeQRIS         = "qris"          // National QRIS — returns qr_string directly
+	PaymentTypeBankTransfer = "bank_transfer" // VA: BNI, BRI, CIMB, Permata
+	PaymentTypeEchannel     = "echannel"      // VA: Mandiri Bill Payment
 
 	StatusPending    = "pending"
 	StatusSettlement = "settlement"
@@ -69,15 +71,35 @@ type QRISOptions struct {
 	Acquirer string `json:"acquirer,omitempty"` // "gopay" (default), "airpay shopee", etc.
 }
 
+// BankTransferOptions configures a Virtual Account charge (BNI, BRI, CIMB, Permata).
+type BankTransferOptions struct {
+	Bank     string                 `json:"bank"`                // "bni", "bri", "cimb", "permata"
+	VANumber string                 `json:"va_number,omitempty"` // optional fixed VA (we let Midtrans generate)
+	Permata  *PermataBankTransfer   `json:"permata,omitempty"`
+}
+
+// PermataBankTransfer carries Permata-specific recipient info.
+type PermataBankTransfer struct {
+	RecipientName string `json:"recipient_name,omitempty"`
+}
+
+// EchannelOptions configures a Mandiri Bill Payment (echannel) charge.
+type EchannelOptions struct {
+	BillInfo1 string `json:"bill_info1"`
+	BillInfo2 string `json:"bill_info2"`
+}
+
 type ChargeRequest struct {
-	PaymentType        string              `json:"payment_type"`
-	TransactionDetails TransactionDetails  `json:"transaction_details"`
-	CustomerDetails    *CustomerDetails    `json:"customer_details,omitempty"`
-	ItemDetails        []ItemDetail        `json:"item_details,omitempty"`
-	GoPay              *GoPayOptions       `json:"gopay,omitempty"`
-	ShopeePay          *ShopeePayOptions   `json:"shopeepay,omitempty"`
-	QRIS               *QRISOptions        `json:"qris,omitempty"`
-	CustomExpiry       *CustomExpiry       `json:"custom_expiry,omitempty"`
+	PaymentType        string               `json:"payment_type"`
+	TransactionDetails TransactionDetails   `json:"transaction_details"`
+	CustomerDetails    *CustomerDetails     `json:"customer_details,omitempty"`
+	ItemDetails        []ItemDetail         `json:"item_details,omitempty"`
+	GoPay              *GoPayOptions        `json:"gopay,omitempty"`
+	ShopeePay          *ShopeePayOptions    `json:"shopeepay,omitempty"`
+	QRIS               *QRISOptions         `json:"qris,omitempty"`
+	BankTransfer       *BankTransferOptions `json:"bank_transfer,omitempty"`
+	Echannel           *EchannelOptions     `json:"echannel,omitempty"`
+	CustomExpiry       *CustomExpiry        `json:"custom_expiry,omitempty"`
 }
 
 type CustomExpiry struct {
@@ -107,10 +129,22 @@ type ChargeResponse struct {
 	Acquirer          string          `json:"acquirer,omitempty"`
 	// QRIS native: returned directly in response body
 	QRString          string          `json:"qr_string,omitempty"`
+	// VA: bank_transfer returns va_numbers[]; Permata returns permata_va_number;
+	// Mandiri echannel returns bill_key + biller_code.
+	VANumbers         []VANumber      `json:"va_numbers,omitempty"`
+	PermataVANumber   string          `json:"permata_va_number,omitempty"`
+	BillKey           string          `json:"bill_key,omitempty"`
+	BillerCode        string          `json:"biller_code,omitempty"`
 	ExpiryTime        string          `json:"expiry_time,omitempty"`
 	Actions           []Action        `json:"actions,omitempty"`
 	SettlementTime    string          `json:"settlement_time,omitempty"`
 	RawResponse       json.RawMessage `json:"-"`
+}
+
+// VANumber is one entry of the bank_transfer va_numbers array.
+type VANumber struct {
+	Bank     string `json:"bank"`
+	VANumber string `json:"va_number"`
 }
 
 // Action returns the URL of the first action with the given name (empty when absent).

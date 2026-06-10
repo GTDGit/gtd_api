@@ -37,7 +37,7 @@ type PaymentCreateRequest struct {
 // the same type produces an identical field set regardless of provider
 // (Req 4.5, 4.8). Allowed field sets per type:
 //
-//	VA      -> bankCode, bankName, vaNumber, accountName
+//	VA      -> bankCode, bankName, vaNumber, accountName, billerCode
 //	EWALLET -> checkoutUrl, mobileWebUrl, deeplink, qrCodeUrl
 //	QRIS    -> qrString, qrImageUrl
 //	RETAIL  -> retailName, paymentCode
@@ -47,6 +47,9 @@ type PaymentDetailNormalized struct {
 	BankName    string `json:"bankName,omitempty"`
 	VANumber    string `json:"vaNumber,omitempty"`
 	AccountName string `json:"accountName,omitempty"`
+	// BillerCode is set only for Mandiri Bill Payment (echannel), where the
+	// customer pays using biller code + bill key (carried in VANumber).
+	BillerCode string `json:"billerCode,omitempty"`
 	// EWALLET
 	CheckoutURL  string `json:"checkoutUrl,omitempty"`
 	MobileWebURL string `json:"mobileWebUrl,omitempty"`

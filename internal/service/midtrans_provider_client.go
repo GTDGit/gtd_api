@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/GTDGit/gtd_api/internal/models"
 	"github.com/GTDGit/gtd_api/pkg/midtrans"
@@ -80,9 +81,90 @@ func (p *MidtransProviderClient) CreatePayment(ctx context.Context, method *mode
 			RawResponse: resp.RawResponse,
 		}, nil
 
+	case models.PaymentTypeVA:
+		return p.createVA(ctx, method, req, cust)
+
 	default:
-		return nil, newPaymentError(400, "UNSUPPORTED_PAYMENT_TYPE", "Midtrans adapter supports QRIS and e-wallet payments only", nil)
+		return nil, newPaymentError(400, "UNSUPPORTED_PAYMENT_TYPE", "Midtrans adapter supports QRIS, e-wallet, and VA payments", nil)
 	}
+}
+
+// createVA issues a Virtual Account charge. Mandiri (008) uses Midtrans echannel
+// (Bill Payment); the other supported banks use bank_transfer.
+func (p *MidtransProviderClient) createVA(ctx context.Context, method *models.PaymentMethod, req *PaymentCreateRequest, cust *midtrans.CustomerDetails) (*PaymentCreateResponse, error) {
+	bank := midtransVABank(method.Code)
+	if bank == "" {
+		return nil, newPaymentError(400, "UNSUPPORTED_PAYMENT_TYPE", "Unsupported VA bank code for Midtrans: "+method.Code, nil)
+	}
+
+	expirySec := midtransExpirySeconds(req.ExpiredAt)
+	var resp *midtrans.ChargeResponse
+	var err error
+	if bank == "echannel" {
+		// Mandiri Bill Payment — bill_info defaults applied inside the client.
+		resp, err = p.client.ChargeEchannel(ctx, req.PartnerRef, req.TotalAmount, firstNonEmpty(req.Description, "Payment"), "", expirySec, cust)
+	} else {
+		resp, err = p.client.ChargeBankTransfer(ctx, req.PartnerRef, req.TotalAmount, bank, firstNonEmpty(req.CustomerName, "Customer"), expirySec, cust)
+	}
+	if err != nil {
+		return nil, mapMidtransError(err)
+	}
+
+	norm := PaymentDetailNormalized{
+		BankCode:    method.Code,
+		BankName:    method.Name,
+		AccountName: firstNonEmpty(req.CustomerName, "Customer"),
+	}
+	switch {
+	case len(resp.VANumbers) > 0 && resp.VANumbers[0].VANumber != "":
+		norm.VANumber = resp.VANumbers[0].VANumber
+	case resp.PermataVANumber != "":
+		norm.VANumber = resp.PermataVANumber
+	case resp.BillKey != "":
+		// Mandiri echannel: payment requires both biller_code and bill_key.
+		norm.VANumber = resp.BillKey
+		norm.BillerCode = resp.BillerCode
+	}
+
+	return &PaymentCreateResponse{
+		ProviderRef: resp.TransactionID,
+		Normalized:  norm,
+		RawResponse: resp.RawResponse,
+	}, nil
+}
+
+// midtransVABank maps the numeric DB bank code to the Midtrans bank_transfer
+// bank name (lowercase). Mandiri (008) returns "echannel" to signal the
+// Bill Payment pathway. Unknown codes return "" so the selector falls through
+// to the next provider.
+func midtransVABank(code string) string {
+	switch strings.TrimSpace(code) {
+	case "002":
+		return "bri"
+	case "009":
+		return "bni"
+	case "022":
+		return "cimb"
+	case "013":
+		return "permata"
+	case "008":
+		return "echannel"
+	default:
+		return ""
+	}
+}
+
+// midtransExpirySeconds returns the seconds from now until t. Returns 0 when t
+// is zero or already past, so Midtrans applies its default expiry.
+func midtransExpirySeconds(t time.Time) int {
+	if t.IsZero() {
+		return 0
+	}
+	d := int(time.Until(t).Seconds())
+	if d <= 0 {
+		return 0
+	}
+	return d
 }
 
 func (p *MidtransProviderClient) InquiryPayment(ctx context.Context, payment *models.Payment) (*PaymentInquiryResult, error) {

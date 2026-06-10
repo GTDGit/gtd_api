@@ -124,8 +124,13 @@ func (p *XenditProviderClient) createEwallet(ctx context.Context, method *models
 	props := xendit.PaymentRequestChannelProperties{
 		ExpiresAt: formatXenditExpiry(req.ExpiredAt),
 	}
-	if req.CustomerPhone != "" {
-		props.MobileNumber = req.CustomerPhone
+	phone := normalizePhone62(req.CustomerPhone)
+	// OVO requires the account mobile number; reject early if missing.
+	if channelCode == "OVO" && phone == "" {
+		return nil, newPaymentError(400, "MISSING_FIELD", "customer.phone is required for OVO payments", nil)
+	}
+	if phone != "" {
+		props.AccountMobileNumber = phone
 	}
 	if req.ReturnURL != "" {
 		props.SuccessReturnURL = req.ReturnURL
@@ -262,6 +267,35 @@ func formatXenditExpiry(t time.Time) string {
 		return ""
 	}
 	return t.UTC().Format("2006-01-02T15:04:05Z")
+}
+
+// normalizePhone62 normalizes an Indonesian mobile number to the 62 format
+// (no leading +). "08123" → "628123", "+628123" → "628123", "628123" → "628123".
+// Returns "" for empty/garbage input.
+func normalizePhone62(phone string) string {
+	p := strings.TrimSpace(phone)
+	if p == "" {
+		return ""
+	}
+	p = strings.TrimPrefix(p, "+")
+	var b strings.Builder
+	for _, r := range p {
+		if r >= '0' && r <= '9' {
+			b.WriteRune(r)
+		}
+	}
+	digits := b.String()
+	if digits == "" {
+		return ""
+	}
+	switch {
+	case strings.HasPrefix(digits, "62"):
+		return digits
+	case strings.HasPrefix(digits, "0"):
+		return "62" + strings.TrimPrefix(digits, "0")
+	default:
+		return "62" + digits
+	}
 }
 
 func mapXenditStatus(status string) models.PaymentStatus {

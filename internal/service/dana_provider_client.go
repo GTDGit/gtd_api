@@ -149,7 +149,9 @@ func (p *DanaProviderClient) createOrder(ctx context.Context, method *models.Pay
 	case models.PaymentTypeVA:
 		norm.BankCode = method.Code
 		norm.BankName = firstNonEmpty(method.Name, payOption)
-		norm.VANumber = resp.VirtualAccountNumber()
+		// DANA returns the VA number in additionalInfo.paymentCode (same field
+		// as QRIS); fall back to the documented VA keys just in case.
+		norm.VANumber = firstNonEmpty(resp.VirtualAccountNumber(), resp.PaymentCode())
 		norm.AccountName = firstNonEmpty(req.CustomerName, req.ClientName, "Customer")
 	default:
 		norm.CheckoutURL = resp.CheckoutURL

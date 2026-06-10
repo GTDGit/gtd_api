@@ -129,7 +129,7 @@ func (p *OVOProviderClient) CancelPayment(ctx context.Context, payment *models.P
 func mapOVOStatus(status string) models.PaymentStatus {
 	switch strings.ToUpper(strings.TrimSpace(status)) {
 	case ovo.StatusSuccess, "PAID", "COMPLETED", "00":
-		return models.PaymentStatusPaid
+		return models.PaymentStatusSuccess
 	case ovo.StatusExpired:
 		return models.PaymentStatusExpired
 	case ovo.StatusVoided, "CANCELLED", "CANCELED":

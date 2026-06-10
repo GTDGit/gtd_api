@@ -330,7 +330,7 @@ func TestDanaIntegration_QueryPayment_MapsProviderStatus(t *testing.T) {
 		statusCode string
 		want       models.PaymentStatus
 	}{
-		{"paid", "00", models.PaymentStatusPaid},
+		{"paid", "00", models.PaymentStatusSuccess},
 		{"cancelled", "05", models.PaymentStatusCancelled},
 		{"pending", "01", models.PaymentStatusPending},
 	}
@@ -391,8 +391,8 @@ func TestDanaIntegration_QueryPaymentCPM_HitsCPMStatusEndpoint(t *testing.T) {
 	if !rec.contains(dana.CPMInquiryPath) {
 		t.Fatalf("expected cpm status endpoint %q, got paths %v", dana.CPMInquiryPath, rec.all())
 	}
-	if result.Status != models.PaymentStatusPaid {
-		t.Errorf("Status = %q, want %q", result.Status, models.PaymentStatusPaid)
+	if result.Status != models.PaymentStatusSuccess {
+		t.Errorf("Status = %q, want %q", result.Status, models.PaymentStatusSuccess)
 	}
 }
 

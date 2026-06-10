@@ -300,7 +300,7 @@ func TestPakailinkIntegration_InquiryVA_MapsProviderStatus(t *testing.T) {
 		providerSt string
 		want       models.PaymentStatus
 	}{
-		{"paid", pakailink.StatusSuccess, models.PaymentStatusPaid},
+		{"paid", pakailink.StatusSuccess, models.PaymentStatusSuccess},
 		{"cancelled", pakailink.StatusCancelled, models.PaymentStatusCancelled},
 		{"expired", "07", models.PaymentStatusExpired},
 	}
@@ -332,7 +332,7 @@ func TestPakailinkIntegration_InquiryVA_MapsProviderStatus(t *testing.T) {
 			if res.Status != tc.want {
 				t.Errorf("status %q mapped to %q, want %q", tc.providerSt, res.Status, tc.want)
 			}
-			if tc.want == models.PaymentStatusPaid && res.PaidAmount != 25000 {
+			if tc.want == models.PaymentStatusSuccess && res.PaidAmount != 25000 {
 				t.Errorf("paidAmount = %d, want 25000", res.PaidAmount)
 			}
 		})
@@ -366,7 +366,7 @@ func TestPakailinkIntegration_Callback_VerifyAndParse(t *testing.T) {
 		t.Fatalf("unmarshal webhook payload: %v", err)
 	}
 	data := payload.ResolveTransactionData()
-	if got := mapPakailinkTransactionStatus(data.PaymentFlagStatus); got != models.PaymentStatusPaid {
+	if got := mapPakailinkTransactionStatus(data.PaymentFlagStatus); got != models.PaymentStatusSuccess {
 		t.Errorf("callback status %q mapped to %q, want Paid", data.PaymentFlagStatus, got)
 	}
 }

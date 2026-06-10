@@ -275,7 +275,7 @@ func (h *PaymentWebhookHandler) HandleXendit(c *gin.Context) {
 	// keyed by external_id == our PaymentID.
 	if p.CallbackVirtualAccountID != "" && p.EventType == "" && p.Data.Status == "" && p.Status == "" {
 		event := service.PaymentWebhookEvent{
-			Status:      models.PaymentStatusPaid,
+			Status:      models.PaymentStatusSuccess,
 			ProviderRef: p.CallbackVirtualAccountID,
 			PaidAmount:  p.Amount,
 			RawPayload:  body,
@@ -403,7 +403,7 @@ func respondSNAP(c *gin.Context, httpStatus int, code, message string) {
 	c.JSON(httpStatus, gin.H{
 		"responseCode":    code,
 		"responseMessage": message,
-		"timestamp":       time.Now().UTC().Format("2006-01-02T15:04:05") + "+07:00",
+		"timestamp":       time.Now().In(time.FixedZone("WIB", 7*3600)).Format("2006-01-02T15:04:05+07:00"),
 	})
 }
 
@@ -435,7 +435,7 @@ func firstPaymentString(values ...string) string {
 func mapPakailinkFlagStatus(code string) models.PaymentStatus {
 	switch strings.TrimSpace(code) {
 	case "00", "SUCCESS":
-		return models.PaymentStatusPaid
+		return models.PaymentStatusSuccess
 	case "05", "CANCELLED":
 		return models.PaymentStatusCancelled
 	case "06", "FAILED":
@@ -452,7 +452,7 @@ func mapDanaWebhookStatus(code string) models.PaymentStatus {
 	// "00" = Success/Paid, "05" = Cancelled/Closed
 	switch strings.TrimSpace(code) {
 	case "00":
-		return models.PaymentStatusPaid
+		return models.PaymentStatusSuccess
 	case "05":
 		return models.PaymentStatusCancelled
 	case "06":
@@ -461,7 +461,7 @@ func mapDanaWebhookStatus(code string) models.PaymentStatus {
 		return models.PaymentStatusExpired
 	// Legacy string codes (from older DANA integration)
 	case "SUCCESS", "PAID":
-		return models.PaymentStatusPaid
+		return models.PaymentStatusSuccess
 	case "CANCELLED", "CLOSED":
 		return models.PaymentStatusCancelled
 	case "FAILED":
@@ -469,7 +469,7 @@ func mapDanaWebhookStatus(code string) models.PaymentStatus {
 	case "EXPIRED":
 		return models.PaymentStatusExpired
 	case "REFUNDED":
-		return models.PaymentStatusRefunded
+		return models.PaymentStatusFailed
 	default:
 		return models.PaymentStatusPending
 	}
@@ -482,7 +482,7 @@ func mapMidtransWebhookStatus(status, fraudStatus string) models.PaymentStatus {
 		if strings.EqualFold(fraudStatus, "challenge") {
 			return models.PaymentStatusPending
 		}
-		return models.PaymentStatusPaid
+		return models.PaymentStatusSuccess
 	case midtrans.StatusDeny:
 		return models.PaymentStatusFailed
 	case midtrans.StatusExpire:
@@ -490,7 +490,7 @@ func mapMidtransWebhookStatus(status, fraudStatus string) models.PaymentStatus {
 	case midtrans.StatusCancel:
 		return models.PaymentStatusCancelled
 	case midtrans.StatusRefund, "partial_refund":
-		return models.PaymentStatusRefunded
+		return models.PaymentStatusFailed
 	default:
 		return models.PaymentStatusPending
 	}
@@ -499,7 +499,7 @@ func mapMidtransWebhookStatus(status, fraudStatus string) models.PaymentStatus {
 func mapXenditWebhookStatus(s string) models.PaymentStatus {
 	switch strings.ToUpper(strings.TrimSpace(s)) {
 	case xendit.StatusSucceeded, "COMPLETED":
-		return models.PaymentStatusPaid
+		return models.PaymentStatusSuccess
 	case xendit.StatusExpired:
 		return models.PaymentStatusExpired
 	case xendit.StatusCanceled, "CANCELLED":
@@ -514,7 +514,7 @@ func mapXenditWebhookStatus(s string) models.PaymentStatus {
 func mapOVOWebhookStatus(s string) models.PaymentStatus {
 	switch strings.ToUpper(strings.TrimSpace(s)) {
 	case ovo.StatusSuccess, "PAID", "COMPLETED", "00":
-		return models.PaymentStatusPaid
+		return models.PaymentStatusSuccess
 	case ovo.StatusExpired:
 		return models.PaymentStatusExpired
 	case ovo.StatusVoided, "CANCELLED", "CANCELED":

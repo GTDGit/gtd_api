@@ -195,7 +195,7 @@ func mapMidtransTransactionStatus(status, fraudStatus string) models.PaymentStat
 		if strings.EqualFold(fraudStatus, "challenge") {
 			return models.PaymentStatusPending
 		}
-		return models.PaymentStatusPaid
+		return models.PaymentStatusSuccess
 	case midtrans.StatusDeny:
 		return models.PaymentStatusFailed
 	case midtrans.StatusExpire:
@@ -203,7 +203,7 @@ func mapMidtransTransactionStatus(status, fraudStatus string) models.PaymentStat
 	case midtrans.StatusCancel:
 		return models.PaymentStatusCancelled
 	case midtrans.StatusRefund, "partial_refund":
-		return models.PaymentStatusRefunded
+		return models.PaymentStatusFailed
 	default:
 		return models.PaymentStatusPending
 	}

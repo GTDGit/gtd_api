@@ -178,7 +178,7 @@ func TestProperty9_StatusToEventName(t *testing.T) {
 
 	// Explicit coverage of the named statuses from Req 8.4.
 	explicit := map[models.PaymentStatus]string{
-		models.PaymentStatusPaid:      "payment.paid",
+		models.PaymentStatusSuccess:      "payment.paid",
 		models.PaymentStatusCancelled: "payment.cancelled",
 		models.PaymentStatusExpired:   "payment.expired",
 		models.PaymentStatusFailed:    "payment.failed",

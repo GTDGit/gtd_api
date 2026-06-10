@@ -258,7 +258,7 @@ func formatDanaExpiry(t time.Time) string {
 func mapDanaTransactionStatus(code string) models.PaymentStatus {
 	switch strings.TrimSpace(code) {
 	case "00":
-		return models.PaymentStatusPaid
+		return models.PaymentStatusSuccess
 	case "05":
 		return models.PaymentStatusCancelled
 	case "06":

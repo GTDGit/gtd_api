@@ -403,7 +403,7 @@ func normalizePhone62(phone string) string {
 func mapXenditStatus(status string) models.PaymentStatus {
 	switch strings.ToUpper(strings.TrimSpace(status)) {
 	case xendit.StatusSucceeded:
-		return models.PaymentStatusPaid
+		return models.PaymentStatusSuccess
 	case xendit.StatusExpired:
 		return models.PaymentStatusExpired
 	case xendit.StatusCanceled:

@@ -224,7 +224,7 @@ func TestMidtransInquiryHitsStatusEndpoint(t *testing.T) {
 		fraud      string
 		wantStatus models.PaymentStatus
 	}{
-		{"settlement maps to Paid", midtrans.StatusSettlement, "accept", models.PaymentStatusPaid},
+		{"settlement maps to Paid", midtrans.StatusSettlement, "accept", models.PaymentStatusSuccess},
 		{"capture+challenge maps to Pending", midtrans.StatusCapture, "challenge", models.PaymentStatusPending},
 		{"pending maps to Pending", midtrans.StatusPending, "", models.PaymentStatusPending},
 		{"expire maps to Expired", midtrans.StatusExpire, "", models.PaymentStatusExpired},

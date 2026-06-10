@@ -122,7 +122,7 @@ func (s *PaymentCallbackService) AttemptDelivery(ctx context.Context, row *model
 		return
 	}
 	reqID := genPaymentRequestID()
-	ts := time.Now().UTC().Format(time.RFC3339)
+	ts := formatPaymentTime(time.Now())
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set(paymentCallbackSignatureHeader, "sha256="+signature)
 	req.Header.Set("X-GTD-Event", row.Event)
@@ -258,7 +258,7 @@ func buildPaymentCallbackPayload(p *models.Payment, event string) []byte {
 		Data:  paymentToResponse(p),
 		Meta: meta{
 			RequestID: genPaymentRequestID(),
-			Timestamp: time.Now().UTC().Format("2006-01-02T15:04:05") + "+07:00",
+			Timestamp: formatPaymentTime(time.Now()),
 		},
 	}
 	b, _ := json.Marshal(out)

@@ -768,7 +768,7 @@ func (s *PaymentService) ApplyWebhook(ctx context.Context, provider models.Payme
 	prevStatus := p.Status
 	p.Status = confirmedStatus
 	now := time.Now()
-	if confirmedStatus == models.PaymentStatusPaid && p.PaidAt == nil {
+	if confirmedStatus == models.PaymentStatusSuccess && p.PaidAt == nil {
 		p.PaidAt = &now
 	}
 	if confirmedStatus == models.PaymentStatusCancelled && p.CancelledAt == nil {
@@ -869,7 +869,7 @@ func (s *PaymentService) refreshStatus(ctx context.Context, p *models.Payment) (
 		prev := p.Status
 		p.Status = result.Status
 		now := time.Now()
-		if result.Status == models.PaymentStatusPaid && p.PaidAt == nil {
+		if result.Status == models.PaymentStatusSuccess && p.PaidAt == nil {
 			p.PaidAt = &now
 		}
 		if result.Status == models.PaymentStatusCancelled && p.CancelledAt == nil {
@@ -1074,10 +1074,10 @@ func formatPaymentTime(t time.Time) string {
 	if t.IsZero() {
 		return ""
 	}
-	// Format in UTC but display with +07:00 offset label — the DB stores UTC
-	// values and the server clock runs UTC, so the numeric hours already match
-	// what WIB merchants see on their dashboard (no hour shift wanted).
-	return t.UTC().Format("2006-01-02T15:04:05") + "+07:00"
+	// Convert the stored UTC instant to WIB (UTC+7) before formatting so the
+	// numeric hours match the +07:00 offset label (valid ISO 8601). e.g. an
+	// instant at 00:00 UTC renders as 07:00:00+07:00, not 00:00:00+07:00.
+	return t.In(time.FixedZone("WIB", 7*3600)).Format("2006-01-02T15:04:05+07:00")
 }
 
 func newPaymentPublicID(_ string) string {

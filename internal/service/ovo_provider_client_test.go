@@ -184,7 +184,7 @@ func TestOVOInquiryPaymentHitsStatusEndpoint(t *testing.T) {
 		ovoStatus  string
 		wantStatus models.PaymentStatus
 	}{
-		{"success maps to Paid", ovo.StatusSuccess, models.PaymentStatusPaid},
+		{"success maps to Paid", ovo.StatusSuccess, models.PaymentStatusSuccess},
 		{"pending maps to Pending", ovo.StatusPending, models.PaymentStatusPending},
 		{"expired maps to Expired", ovo.StatusExpired, models.PaymentStatusExpired},
 		{"void maps to Cancelled", ovo.StatusVoided, models.PaymentStatusCancelled},

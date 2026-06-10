@@ -335,7 +335,7 @@ func formatPakailinkExpiry(t time.Time) string {
 func mapPakailinkTransactionStatus(code string) models.PaymentStatus {
 	switch strings.TrimSpace(code) {
 	case pakailink.StatusSuccess:
-		return models.PaymentStatusPaid
+		return models.PaymentStatusSuccess
 	case pakailink.StatusCancelled:
 		return models.PaymentStatusCancelled
 	case pakailink.StatusFailed:

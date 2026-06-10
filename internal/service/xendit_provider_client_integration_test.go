@@ -338,7 +338,7 @@ func TestXenditIntegration_Inquiry_MapsStatus(t *testing.T) {
 		providerSt string
 		want       models.PaymentStatus
 	}{
-		{"paid", xendit.StatusSucceeded, models.PaymentStatusPaid},
+		{"paid", xendit.StatusSucceeded, models.PaymentStatusSuccess},
 		{"expired", xendit.StatusExpired, models.PaymentStatusExpired},
 		{"cancelled", xendit.StatusCanceled, models.PaymentStatusCancelled},
 		{"failed", xendit.StatusFailed, models.PaymentStatusFailed},
@@ -446,7 +446,7 @@ func TestXenditIntegration_WebhookTokenVerification(t *testing.T) {
 	if !strings.EqualFold(payload.Data.Status, xendit.StatusSucceeded) {
 		t.Errorf("payload status = %q, want SUCCEEDED", payload.Data.Status)
 	}
-	if got := mapXenditStatus(payload.Data.Status); got != models.PaymentStatusPaid {
+	if got := mapXenditStatus(payload.Data.Status); got != models.PaymentStatusSuccess {
 		t.Errorf("webhook status %q mapped to %q, want Paid", payload.Data.Status, got)
 	}
 }

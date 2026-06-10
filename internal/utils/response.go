@@ -47,7 +47,7 @@ func Success(c *gin.Context, code int, message string, data interface{}) {
 		Data:    data,
 		Meta: Meta{
 			RequestID: getRequestID(c),
-			Timestamp: time.Now().Format(time.RFC3339),
+			Timestamp: NowISO(),
 		},
 	})
 }
@@ -72,7 +72,7 @@ func SuccessWithPagination(c *gin.Context, code int, message string, data interf
 		Data:    data,
 		Meta: Meta{
 			RequestID: getRequestID(c),
-			Timestamp: time.Now().Format(time.RFC3339),
+			Timestamp: NowISO(),
 			Pagination: &Pagination{
 				Page:       page,
 				Limit:      limit,
@@ -95,7 +95,7 @@ func Error(c *gin.Context, code int, errCode, message string) {
 		},
 		Meta: Meta{
 			RequestID: getRequestID(c),
-			Timestamp: time.Now().Format(time.RFC3339),
+			Timestamp: NowISO(),
 		},
 	})
 }
@@ -113,7 +113,7 @@ func ErrorWithData(c *gin.Context, code int, message, errCode, errMessage string
 		},
 		Meta: Meta{
 			RequestID: getRequestID(c),
-			Timestamp: time.Now().Format(time.RFC3339),
+			Timestamp: NowISO(),
 		},
 	})
 }

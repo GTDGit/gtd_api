@@ -284,8 +284,8 @@ func TestPakailinkIntegration_CreateRetail_Unsupported(t *testing.T) {
 	if !errors.As(err, &svcErr) {
 		t.Fatalf("error is not *PaymentServiceError: %T", err)
 	}
-	if svcErr.Code != "UNSUPPORTED_PAYMENT_TYPE" {
-		t.Errorf("error code = %q, want UNSUPPORTED_PAYMENT_TYPE", svcErr.Code)
+	if svcErr.Code != "VALIDATION_ERROR" {
+		t.Errorf("error code = %q, want VALIDATION_ERROR", svcErr.Code)
 	}
 	if cap.Path != "" {
 		t.Errorf("unsupported RETAIL should not hit any provider endpoint, hit %q", cap.Path)

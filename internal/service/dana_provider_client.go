@@ -50,7 +50,7 @@ func (p *DanaProviderClient) CreatePayment(ctx context.Context, method *models.P
 	case models.PaymentTypeVA:
 		payOption := danaVAPayOption(method.Code)
 		if payOption == "" {
-			return nil, newPaymentError(400, "UNSUPPORTED_PAYMENT_TYPE", "Unsupported VA bank code for DANA: "+method.Code, nil)
+			return nil, newPaymentError(400, "VALIDATION_ERROR", "Unsupported VA bank code for DANA: "+method.Code, nil)
 		}
 		return p.createOrder(ctx, method, req, dana.PayMethodVirtualAccount, payOption)
 	case models.PaymentTypeQRIS:
@@ -61,7 +61,7 @@ func (p *DanaProviderClient) CreatePayment(ctx context.Context, method *models.P
 		// Returns qrContent in additionalInfo.paymentCode.
 		return p.createOrder(ctx, method, req, dana.PayMethodNetworkPay, dana.PayOptionQRIS)
 	default:
-		return nil, newPaymentError(400, "UNSUPPORTED_PAYMENT_TYPE", "DANA does not support this payment type", nil)
+		return nil, newPaymentError(400, "VALIDATION_ERROR", "DANA does not support this payment type", nil)
 	}
 }
 
@@ -217,12 +217,12 @@ func (p *DanaProviderClient) createCPMQRIS(ctx context.Context, method *models.P
 	}
 	storeID := p.storeID
 	if storeID == "" {
-		return nil, newPaymentError(400, "MISSING_CONFIG", "DANA CPM QRIS requires DANA_EXTERNAL_STORE_ID to be configured", nil)
+		return nil, newPaymentError(400, "VALIDATION_ERROR", "DANA CPM QRIS requires DANA_EXTERNAL_STORE_ID to be configured", nil)
 	}
 	// QRContent is the QR string scanned from the customer's DANA app.
 	qrContent := req.ScanData
 	if qrContent == "" {
-		return nil, newPaymentError(400, "MISSING_FIELD", "scanData (QR content from customer's DANA app) is required for CPM QRIS", nil)
+		return nil, newPaymentError(400, "VALIDATION_ERROR", "scanData (QR content from customer's DANA app) is required for CPM QRIS", nil)
 	}
 	cpmReq := dana.CPMPaymentRequest{
 		PartnerReferenceNo: refNo,
@@ -270,18 +270,45 @@ func mapDanaTransactionStatus(code string) models.PaymentStatus {
 	}
 }
 
+// mapDanaError maps a DANA failure to the unified payment error taxonomy.
+// DANA ResponseCode is a 7-digit SNAP code whose first two digits mirror the
+// HTTP status. It inspects the specific code first, then falls back to the
+// embedded HTTP range. Duplicate signals → PROVIDER_DUPLICATE (409).
 func mapDanaError(err error) error {
 	if err == nil {
 		return nil
 	}
 	apiErr, ok := err.(*dana.APIError)
-	if ok {
-		if strings.HasPrefix(apiErr.ResponseCode, "4") {
-			return newPaymentError(400, "PROVIDER_REQUEST_REJECTED", firstNonEmpty(apiErr.ResponseMessage, "Provider rejected request"), err)
-		}
-		if strings.HasPrefix(apiErr.ResponseCode, "5") {
-			return newPaymentError(503, "PROVIDER_UNAVAILABLE", "Payment provider temporarily unavailable", err)
-		}
+	if !ok {
+		// Network/timeout/empty body: status unknown.
+		return newPaymentError(504, "PROVIDER_TIMEOUT", "No response from provider, payment status unknown", err)
 	}
-	return newPaymentError(502, "PROVIDER_ERROR", "Payment provider error", err)
+
+	code := strings.TrimSpace(apiErr.ResponseCode)
+	switch code {
+	case "4045418": // inconsistent request = duplicate partnerReferenceNo
+		return newPaymentError(409, "PROVIDER_DUPLICATE", "Duplicate reference at provider", err)
+	case "4035402", "4035405", "4035415", "4045408":
+		// exceeds limit / do not honor / not permitted / invalid merchant
+		return newPaymentError(402, "PAYMENT_DENIED", "Payment was denied", err)
+	case "4295400", "5005400", "5005401":
+		// too many requests / general / internal error
+		return newPaymentError(503, "PROVIDER_UNAVAILABLE", "Payment provider is temporarily unavailable", err)
+	case "4005400", "4005401", "4005402", "4015400":
+		// bad request / invalid format / missing mandatory / invalid signature
+		return newPaymentError(400, "PROVIDER_REJECTED", "Provider rejected the request", err)
+	}
+
+	// Fallback by the embedded HTTP prefix (first 3 digits = HTTP status).
+	switch {
+	case strings.HasPrefix(code, "409"):
+		return newPaymentError(409, "PROVIDER_DUPLICATE", "Duplicate reference at provider", err)
+	case strings.HasPrefix(code, "403"):
+		return newPaymentError(402, "PAYMENT_DENIED", "Payment was denied", err)
+	case strings.HasPrefix(code, "429"), strings.HasPrefix(code, "5"):
+		return newPaymentError(503, "PROVIDER_UNAVAILABLE", "Payment provider is temporarily unavailable", err)
+	case strings.HasPrefix(code, "4"):
+		return newPaymentError(400, "PROVIDER_REJECTED", "Provider rejected the request", err)
+	}
+	return newPaymentError(504, "PROVIDER_TIMEOUT", "No response from provider, payment status unknown", err)
 }

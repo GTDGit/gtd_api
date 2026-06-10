@@ -373,11 +373,11 @@ func TestProperty6_ProviderSelectionRespectsPriorityAndHealth(t *testing.T) {
 		got, err := selector.Select(group)
 		if want == nil {
 			if err == nil {
-				t.Fatalf("expected PAYMENT_METHOD_UNAVAILABLE, got binding %+v", got)
+				t.Fatalf("expected METHOD_UNAVAILABLE, got binding %+v", got)
 			}
 			var pe *PaymentServiceError
-			if !asPaymentError(err, &pe) || pe.Code != "PAYMENT_METHOD_UNAVAILABLE" {
-				t.Fatalf("expected PAYMENT_METHOD_UNAVAILABLE error, got %v", err)
+			if !asPaymentError(err, &pe) || pe.Code != "METHOD_UNAVAILABLE" {
+				t.Fatalf("expected METHOD_UNAVAILABLE error, got %v", err)
 			}
 			return
 		}

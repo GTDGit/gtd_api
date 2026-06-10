@@ -58,8 +58,8 @@ func TestRequireScope_RejectsWhenScopeMissing(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	errInfo, _ := body["error"].(map[string]any)
-	if code, _ := errInfo["code"].(string); code != "INSUFFICIENT_SCOPE" {
-		t.Fatalf("expected INSUFFICIENT_SCOPE, got %v", errInfo)
+	if code, _ := errInfo["code"].(string); code != "FORBIDDEN" {
+		t.Fatalf("expected FORBIDDEN, got %v", errInfo)
 	}
 	if msg, _ := errInfo["message"].(string); !strings.Contains(msg, "payment") {
 		t.Fatalf("expected message to mention payment, got %q", msg)

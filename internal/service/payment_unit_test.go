@@ -59,8 +59,8 @@ func TestNormalizeFeePaidBy(t *testing.T) {
 			if !errors.As(err, &svcErr) {
 				t.Fatalf("normalizeFeePaidBy(%q) error is not *PaymentServiceError: %T", in, err)
 			}
-			if svcErr.Code != "INVALID_FEE_PAID_BY" {
-				t.Fatalf("normalizeFeePaidBy(%q) code = %q, want INVALID_FEE_PAID_BY", in, svcErr.Code)
+			if svcErr.Code != "VALIDATION_ERROR" {
+				t.Fatalf("normalizeFeePaidBy(%q) code = %q, want VALIDATION_ERROR", in, svcErr.Code)
 			}
 		})
 	}

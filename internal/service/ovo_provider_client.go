@@ -44,11 +44,11 @@ func (p *OVOProviderClient) CreatePayment(ctx context.Context, method *models.Pa
 		return nil, newPaymentError(503, "PROVIDER_UNAVAILABLE", "OVO Direct is not configured", nil)
 	}
 	if req.Type != models.PaymentTypeEwallet {
-		return nil, newPaymentError(400, "UNSUPPORTED_PAYMENT_TYPE", "OVO Direct supports e-wallet payments only", nil)
+		return nil, newPaymentError(400, "VALIDATION_ERROR", "OVO Direct supports e-wallet payments only", nil)
 	}
 	phone := strings.TrimSpace(req.CustomerPhone)
 	if phone == "" {
-		return nil, newPaymentError(400, "MISSING_FIELD", "customer phone (OVO MSISDN) is required for OVO Direct", nil)
+		return nil, newPaymentError(400, "VALIDATION_ERROR", "customer phone (OVO MSISDN) is required for OVO Direct", nil)
 	}
 
 	pushReq := ovo.PushPaymentRequest{
@@ -145,13 +145,20 @@ func mapOVOError(err error) error {
 	if err == nil {
 		return nil
 	}
-	if apiErr, ok := err.(*ovo.APIError); ok {
-		if apiErr.HTTPStatus >= 400 && apiErr.HTTPStatus < 500 {
-			return newPaymentError(400, "PROVIDER_REQUEST_REJECTED", firstNonEmpty(apiErr.Message, "Provider rejected request"), err)
-		}
-		if apiErr.HTTPStatus >= 500 {
-			return newPaymentError(503, "PROVIDER_UNAVAILABLE", "Payment provider temporarily unavailable", err)
-		}
+	apiErr, ok := err.(*ovo.APIError)
+	if !ok {
+		// Network/timeout/empty body: status unknown.
+		return newPaymentError(504, "PROVIDER_TIMEOUT", "No response from provider, payment status unknown", err)
 	}
-	return newPaymentError(502, "PROVIDER_ERROR", "Payment provider error", err)
+	switch {
+	case apiErr.HTTPStatus == 409:
+		return newPaymentError(409, "PROVIDER_DUPLICATE", "Duplicate reference at provider", err)
+	case apiErr.HTTPStatus == 402:
+		return newPaymentError(402, "PAYMENT_DENIED", "Payment was denied", err)
+	case apiErr.HTTPStatus == 429, apiErr.HTTPStatus >= 500:
+		return newPaymentError(503, "PROVIDER_UNAVAILABLE", "Payment provider is temporarily unavailable", err)
+	case apiErr.HTTPStatus >= 400:
+		return newPaymentError(400, "PROVIDER_REJECTED", "Provider rejected the request", err)
+	}
+	return newPaymentError(504, "PROVIDER_TIMEOUT", "No response from provider, payment status unknown", err)
 }

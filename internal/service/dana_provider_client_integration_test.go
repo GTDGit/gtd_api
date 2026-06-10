@@ -304,14 +304,14 @@ func TestDanaIntegration_CreateQRISCPM_MissingScanDataRejected(t *testing.T) {
 
 	_, err := adapter.CreatePayment(context.Background(), method, req)
 	if err == nil {
-		t.Fatalf("expected MISSING_FIELD error, got nil")
+		t.Fatalf("expected VALIDATION_ERROR error, got nil")
 	}
 	pse, ok := err.(*PaymentServiceError)
 	if !ok {
 		t.Fatalf("expected *PaymentServiceError, got %T: %v", err, err)
 	}
-	if pse.Code != "MISSING_FIELD" {
-		t.Errorf("error code = %q, want MISSING_FIELD", pse.Code)
+	if pse.Code != "VALIDATION_ERROR" {
+		t.Errorf("error code = %q, want VALIDATION_ERROR", pse.Code)
 	}
 	// The adapter must reject before making any provider HTTP call.
 	if len(rec.all()) != 0 {

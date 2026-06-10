@@ -32,7 +32,7 @@ func (r *PaymentProviderRouter) Get(code models.PaymentProvider) (PaymentProvide
 	defer r.mu.RUnlock()
 	c, ok := r.clients[code]
 	if !ok || c == nil {
-		return nil, newPaymentError(503, "PAYMENT_PROVIDER_UNAVAILABLE", "Payment provider is not configured", nil)
+		return nil, newPaymentError(503, "PROVIDER_UNAVAILABLE", "Payment provider is temporarily unavailable", nil)
 	}
 	return c, nil
 }

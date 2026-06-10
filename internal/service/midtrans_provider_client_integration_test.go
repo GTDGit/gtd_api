@@ -397,8 +397,8 @@ func TestMidtransVABanksUnsupported(t *testing.T) {
 			if !ok {
 				t.Fatalf("expected *PaymentServiceError, got %T: %v", err, err)
 			}
-			if svcErr.Code != "UNSUPPORTED_PAYMENT_TYPE" {
-				t.Errorf("expected UNSUPPORTED_PAYMENT_TYPE for VA bank %s, got %q", vb.bank, svcErr.Code)
+			if svcErr.Code != "VALIDATION_ERROR" {
+				t.Errorf("expected VALIDATION_ERROR for VA bank %s, got %q", vb.bank, svcErr.Code)
 			}
 			// The adapter rejects VA before issuing any HTTP call.
 			if cap.path != "" {
@@ -427,13 +427,13 @@ func TestMidtransUnsupportedEwalletCode(t *testing.T) {
 
 	_, err := adapter.CreatePayment(context.Background(), mtTestMethod("DANA"), req)
 	if err == nil {
-		t.Fatal("expected UNSUPPORTED_PAYMENT_TYPE error, got nil")
+		t.Fatal("expected VALIDATION_ERROR error, got nil")
 	}
 	svcErr, ok := err.(*PaymentServiceError)
 	if !ok {
 		t.Fatalf("expected *PaymentServiceError, got %T: %v", err, err)
 	}
-	if svcErr.Code != "UNSUPPORTED_PAYMENT_TYPE" {
-		t.Errorf("expected UNSUPPORTED_PAYMENT_TYPE, got %q", svcErr.Code)
+	if svcErr.Code != "VALIDATION_ERROR" {
+		t.Errorf("expected VALIDATION_ERROR, got %q", svcErr.Code)
 	}
 }

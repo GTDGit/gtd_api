@@ -30,7 +30,7 @@ func (m *AuthMiddleware) Handle() gin.HandlerFunc {
         // 1. Extract Bearer token
         authHeader := c.GetHeader("Authorization")
         if authHeader == "" || !strings.HasPrefix(authHeader, "Bearer ") {
-            m.handleAuthError(c, "INVALID_TOKEN", "Missing or invalid authorization header")
+            m.handleAuthError(c, 401, "UNAUTHORIZED", "Missing or invalid API key")
             return
         }
         token := strings.TrimPrefix(authHeader, "Bearer ")
@@ -38,27 +38,27 @@ func (m *AuthMiddleware) Handle() gin.HandlerFunc {
         // 2. Validate API key (live or sandbox)
         client, isSandbox, err := m.authService.ValidateAPIKey(token)
         if err != nil || client == nil {
-            m.handleAuthError(c, "INVALID_TOKEN", "Invalid API token")
+            m.handleAuthError(c, 401, "UNAUTHORIZED", "Missing or invalid API key")
             return
         }
 
         // 3. Check if client is active
         if !client.IsActive {
-            m.handleAuthError(c, "INVALID_CLIENT", "Client is not active")
+            m.handleAuthError(c, 403, "FORBIDDEN", "API key is not allowed to perform this action")
             return
         }
 
         // 4. Validate Client ID header
         clientID := c.GetHeader("X-Client-Id")
         if !m.authService.ValidateClientID(client, clientID) {
-            m.handleAuthError(c, "INVALID_CLIENT", "Client ID mismatch")
+            m.handleAuthError(c, 401, "UNAUTHORIZED", "Missing or invalid API key")
             return
         }
 
         // 5. Validate IP whitelist
         clientIP := c.ClientIP()
         if !m.authService.IsIPAllowed(client, clientIP) {
-            m.handleAuthError(c, "INVALID_IP", "Request from unauthorized IP address")
+            m.handleAuthError(c, 403, "IP_NOT_ALLOWED", "Request from unauthorized IP address")
             return
         }
 
@@ -71,16 +71,16 @@ func (m *AuthMiddleware) Handle() gin.HandlerFunc {
     }
 }
 
-func (m *AuthMiddleware) handleAuthError(c *gin.Context, code, message string) {
+func (m *AuthMiddleware) handleAuthError(c *gin.Context, httpStatus int, code, message string) {
     // Apply rate limit for invalid auth attempts
     ip := c.ClientIP()
     if !m.rateLimiter.Allow(ip) {
-        utils.Error(c, 429, "TOO_MANY_REQUESTS", "Too many invalid authentication attempts")
+        utils.Error(c, 429, "RATE_LIMITED", "Too many requests, please try again later")
         c.Abort()
         return
     }
 
-    utils.Error(c, 401, code, message)
+    utils.Error(c, httpStatus, code, message)
     c.Abort()
 }
 

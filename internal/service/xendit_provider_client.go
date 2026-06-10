@@ -40,7 +40,7 @@ func (p *XenditProviderClient) CreatePayment(ctx context.Context, method *models
 	case models.PaymentTypeVA:
 		return p.createVA(ctx, method, req)
 	default:
-		return nil, newPaymentError(400, "UNSUPPORTED_PAYMENT_TYPE", "Xendit adapter supports retail, QRIS, e-wallet, and VA payments", nil)
+		return nil, newPaymentError(400, "VALIDATION_ERROR", "Xendit adapter supports retail, QRIS, e-wallet, and VA payments", nil)
 	}
 }
 
@@ -52,7 +52,7 @@ func (p *XenditProviderClient) CreatePayment(ctx context.Context, method *models
 func (p *XenditProviderClient) createVA(ctx context.Context, method *models.PaymentMethod, req *PaymentCreateRequest) (*PaymentCreateResponse, error) {
 	bankCode := xenditVAChannelCode(method.Code)
 	if bankCode == "" {
-		return nil, newPaymentError(400, "UNSUPPORTED_PAYMENT_TYPE", "Unsupported VA bank code for Xendit: "+method.Code, nil)
+		return nil, newPaymentError(400, "VALIDATION_ERROR", "Unsupported VA bank code for Xendit: "+method.Code, nil)
 	}
 	customerName := firstNonEmpty(req.CustomerName, req.ClientName, "Customer")
 	create := xendit.VirtualAccountCreate{
@@ -159,7 +159,7 @@ func (p *XenditProviderClient) createQRIS(ctx context.Context, method *models.Pa
 func (p *XenditProviderClient) createEwallet(ctx context.Context, method *models.PaymentMethod, req *PaymentCreateRequest) (*PaymentCreateResponse, error) {
 	channelCode := xenditEwalletChannelCode(method.Code)
 	if channelCode == "" {
-		return nil, newPaymentError(400, "UNSUPPORTED_PAYMENT_TYPE", "Unsupported ewallet code for Xendit: "+method.Code, nil)
+		return nil, newPaymentError(400, "VALIDATION_ERROR", "Unsupported ewallet code for Xendit: "+method.Code, nil)
 	}
 	props := xendit.PaymentRequestChannelProperties{
 		ExpiresAt: formatXenditExpiry(req.ExpiredAt),
@@ -167,7 +167,7 @@ func (p *XenditProviderClient) createEwallet(ctx context.Context, method *models
 	phone := normalizePhone62(req.CustomerPhone)
 	// OVO requires the account mobile number; reject early if missing.
 	if channelCode == "OVO" && phone == "" {
-		return nil, newPaymentError(400, "MISSING_FIELD", "customer.phone is required for OVO payments", nil)
+		return nil, newPaymentError(400, "VALIDATION_ERROR", "customer.phone is required for OVO payments", nil)
 	}
 	if phone != "" {
 		// Xendit account_mobile_number requires E.164 with leading "+": ^\+[0-9]\d{1,14}$
@@ -415,18 +415,39 @@ func mapXenditStatus(status string) models.PaymentStatus {
 	}
 }
 
+// mapXenditError maps a Xendit failure to the unified payment error taxonomy.
+// It inspects the specific error_code first, falling back to HTTP-status range.
+// Duplicate signals are surfaced as PROVIDER_DUPLICATE (409) so CreatePayment
+// can answer idempotently with the existing payment.
 func mapXenditError(err error) error {
 	if err == nil {
 		return nil
 	}
 	apiErr, ok := err.(*xendit.APIError)
-	if ok {
-		if apiErr.HTTPStatus >= 400 && apiErr.HTTPStatus < 500 {
-			return newPaymentError(400, "PROVIDER_REQUEST_REJECTED", firstNonEmpty(apiErr.Message, "Provider rejected request"), err)
-		}
-		if apiErr.HTTPStatus >= 500 {
-			return newPaymentError(503, "PROVIDER_UNAVAILABLE", "Payment provider temporarily unavailable", err)
-		}
+	if !ok {
+		// Non-API error (network/timeout/empty body): status unknown.
+		return newPaymentError(504, "PROVIDER_TIMEOUT", "No response from provider, payment status unknown", err)
 	}
-	return newPaymentError(502, "PROVIDER_ERROR", "Payment provider error", err)
+
+	switch strings.ToUpper(strings.TrimSpace(apiErr.ErrorCode)) {
+	case "DUPLICATE_ERROR", "DATA_NOT_FOUND", "ACCOUNT_ALREADY_LINKED":
+		return newPaymentError(409, "PROVIDER_DUPLICATE", "Duplicate reference at provider", err)
+	case "INVALID_VALUE_ERROR", "API_VALIDATION_ERROR", "INVALID_PAYMENT_DETAILS", "CARD_EXPIRED":
+		return newPaymentError(400, "PROVIDER_REJECTED", "Provider rejected the request", err)
+	case "ACCOUNT_ACCESS_BLOCKED", "INVALID_MERCHANT_SETTINGS", "SKIP_3DS_FORBIDDEN":
+		return newPaymentError(402, "PAYMENT_DENIED", "Payment was denied", err)
+	case "PAYMENT_REQUEST_RATE_LIMITED", "CHANNEL_UNAVAILABLE", "ISSUER_UNAVAILABLE", "SERVER_ERROR":
+		return newPaymentError(503, "PROVIDER_UNAVAILABLE", "Payment provider is temporarily unavailable", err)
+	}
+
+	// Fallback by HTTP status range.
+	switch {
+	case apiErr.HTTPStatus == 409:
+		return newPaymentError(409, "PROVIDER_DUPLICATE", "Duplicate reference at provider", err)
+	case apiErr.HTTPStatus == 429, apiErr.HTTPStatus >= 500:
+		return newPaymentError(503, "PROVIDER_UNAVAILABLE", "Payment provider is temporarily unavailable", err)
+	case apiErr.HTTPStatus >= 400:
+		return newPaymentError(400, "PROVIDER_REJECTED", "Provider rejected the request", err)
+	}
+	return newPaymentError(504, "PROVIDER_TIMEOUT", "No response from provider, payment status unknown", err)
 }

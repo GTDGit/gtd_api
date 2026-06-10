@@ -124,20 +124,20 @@ func (r *CreatePaymentRequest) validateRequiredFields(paymentType, paymentCode s
 	if paymentType == "EWALLET" && strings.EqualFold(paymentCode, "OVO") {
 		_, _, phone := r.resolveCustomer()
 		if strings.TrimSpace(phone) == "" {
-			return newPaymentError(400, "MISSING_REQUIRED_FIELD", "customer.phone is required for EWALLET/OVO", nil)
+			return newPaymentError(400, "VALIDATION_ERROR", "customer.phone is required for EWALLET/OVO", nil)
 		}
 	}
 	// AstraPay requires url.return
 	if paymentType == "EWALLET" && strings.EqualFold(paymentCode, "ASTRAPAY") {
 		_, returnURL := r.resolveURL()
 		if strings.TrimSpace(returnURL) == "" {
-			return newPaymentError(400, "MISSING_RETURN_URL", "url.return is required for EWALLET/ASTRAPAY", nil)
+			return newPaymentError(400, "VALIDATION_ERROR", "url.return is required for EWALLET/ASTRAPAY", nil)
 		}
 	}
 	// QRIS CPM requires scanData
 	if paymentType == "QRIS" && strings.EqualFold(paymentCode, "CPM") {
 		if strings.TrimSpace(r.ScanData) == "" {
-			return newPaymentError(400, "MISSING_SCAN_DATA", "scanData is required for QRIS/CPM", nil)
+			return newPaymentError(400, "VALIDATION_ERROR", "scanData is required for QRIS/CPM", nil)
 		}
 	}
 	return nil
@@ -296,10 +296,10 @@ func (s *PaymentService) ListMethods(ctx context.Context) (*MethodsResponse, err
 
 func (s *PaymentService) CreatePayment(ctx context.Context, req *CreatePaymentRequest, client *models.Client, isSandbox bool) (*PaymentResponse, error) {
 	if req == nil {
-		return nil, newPaymentError(400, "MISSING_FIELD", "Invalid request body", nil)
+		return nil, newPaymentError(400, "VALIDATION_ERROR", "Invalid request body", nil)
 	}
 	if client == nil {
-		return nil, newPaymentError(401, "INVALID_TOKEN", "Unauthorized", nil)
+		return nil, newPaymentError(401, "UNAUTHORIZED", "Missing or invalid API key", nil)
 	}
 
 	req.ReferenceID = strings.TrimSpace(req.ReferenceID)
@@ -314,16 +314,16 @@ func (s *PaymentService) CreatePayment(ctx context.Context, req *CreatePaymentRe
 	callbackURL, returnURL := req.resolveURL()
 
 	if req.ReferenceID == "" {
-		return nil, newPaymentError(400, "MISSING_REQUIRED_FIELD", "referenceId is required", nil)
+		return nil, newPaymentError(400, "VALIDATION_ERROR", "referenceId is required", nil)
 	}
 	if rawType == "" || rawCode == "" {
-		return nil, newPaymentError(400, "MISSING_REQUIRED_FIELD", "paymentMethod.type and paymentMethod.code are required", nil)
+		return nil, newPaymentError(400, "VALIDATION_ERROR", "paymentMethod.type and paymentMethod.code are required", nil)
 	}
 
 	// url.callback is mandatory: the payment webhook is delivered to this
 	// per-request URL (there is no client-level payment callback fallback).
 	if strings.TrimSpace(callbackURL) == "" {
-		return nil, newPaymentError(400, "MISSING_REQUIRED_FIELD", "url.callback is required", nil)
+		return nil, newPaymentError(400, "VALIDATION_ERROR", "url.callback is required", nil)
 	}
 
 	// Validate required fields based on payment method (Fix #4)
@@ -336,7 +336,7 @@ func (s *PaymentService) CreatePayment(ctx context.Context, req *CreatePaymentRe
 
 	// customer.name is mandatory for all payment methods.
 	if strings.TrimSpace(customerName) == "" {
-		return nil, newPaymentError(400, "MISSING_REQUIRED_FIELD", "customer.name is required", nil)
+		return nil, newPaymentError(400, "VALIDATION_ERROR", "customer.name is required", nil)
 	}
 
 	// Resolve and validate feePaidBy (default merchant; rejects invalid values).
@@ -364,28 +364,28 @@ func (s *PaymentService) CreatePayment(ctx context.Context, req *CreatePaymentRe
 		return nil, err
 	}
 	if !method.IsActive {
-		return nil, newPaymentError(400, "PAYMENT_METHOD_INACTIVE", "Payment method is not active", nil)
+		return nil, newPaymentError(503, "METHOD_UNAVAILABLE", "Payment method is temporarily unavailable", nil)
 	}
 	if method.IsMaintenance {
-		msg := "Payment method is under maintenance"
+		msg := "Payment method is temporarily unavailable"
 		if method.MaintenanceMessage != nil && *method.MaintenanceMessage != "" {
 			msg = *method.MaintenanceMessage
 		}
-		return nil, newPaymentError(503, "PAYMENT_METHOD_MAINTENANCE", msg, nil)
+		return nil, newPaymentError(503, "METHOD_UNAVAILABLE", msg, nil)
 	}
 
 	// Amount bounds.
 	if method.MinAmount > 0 && req.Amount < int64(method.MinAmount) {
-		return nil, newPaymentError(400, "AMOUNT_TOO_LOW", fmt.Sprintf("amount must be >= %d", method.MinAmount), nil)
+		return nil, newPaymentError(400, "INVALID_AMOUNT", fmt.Sprintf("amount must be >= %d", method.MinAmount), nil)
 	}
 	if method.MaxAmount > 0 && req.Amount > int64(method.MaxAmount) {
-		return nil, newPaymentError(400, "AMOUNT_TOO_HIGH", fmt.Sprintf("amount must be <= %d", method.MaxAmount), nil)
+		return nil, newPaymentError(400, "INVALID_AMOUNT", fmt.Sprintf("amount must be <= %d", method.MaxAmount), nil)
 	}
 
 	// CPM QRIS requires the QR content scanned from the customer's app.
 	if method.Type == models.PaymentTypeQRIS && strings.EqualFold(strings.TrimSpace(method.Code), "CPM") &&
 		strings.TrimSpace(req.ScanData) == "" {
-		return nil, newPaymentError(400, "MISSING_FIELD",
+		return nil, newPaymentError(400, "VALIDATION_ERROR",
 			"scanData is required for QRIS CPM", nil)
 	}
 
@@ -500,6 +500,17 @@ func (s *PaymentService) CreatePayment(ctx context.Context, req *CreatePaymentRe
 			break
 		}
 
+		// Duplicate at provider (idempotent): the provider already accepted this
+		// reference/partnerRef. Do NOT create a second charge — look up the
+		// existing payment and return it as-is. Falls back to DUPLICATE_REFERENCE
+		// only if the existing record cannot be found.
+		if paymentProviderErrorCode(providerErr) == "PROVIDER_DUPLICATE" {
+			if existing := s.findExistingPaymentForDup(ctx, req.ReferenceID, client.ID); existing != nil {
+				return existing, nil
+			}
+			return nil, newPaymentError(409, "DUPLICATE_REFERENCE", "referenceId already used", providerErr)
+		}
+
 		// Retryable failure: advance to the next healthy provider if available.
 		if isRetryableProviderError(providerErr) {
 			if next := s.selector.Next(group, binding); next != nil {
@@ -584,8 +595,13 @@ func isRetryableProviderError(err error) bool {
 	}
 	var svcErr *PaymentServiceError
 	if errors.As(err, &svcErr) {
-		if svcErr.Code == "PROVIDER_UNAVAILABLE" || svcErr.Code == "PAYMENT_PROVIDER_UNAVAILABLE" {
+		if svcErr.Code == "PROVIDER_UNAVAILABLE" || svcErr.Code == "PROVIDER_TIMEOUT" {
 			return true
+		}
+		// PROVIDER_DUPLICATE is handled separately (idempotent lookup), not via
+		// provider fallback.
+		if svcErr.Code == "PROVIDER_DUPLICATE" {
+			return false
 		}
 		return svcErr.HTTPStatus >= 500
 	}
@@ -604,6 +620,18 @@ func paymentProviderErrorCode(err error) string {
 	return "PROVIDER_ERROR"
 }
 
+// findExistingPaymentForDup looks up the payment already persisted for this
+// (clientID, referenceID) so a provider-side duplicate can be answered
+// idempotently with the existing record instead of double-charging. Returns
+// nil when no record is found or the lookup fails.
+func (s *PaymentService) findExistingPaymentForDup(ctx context.Context, referenceID string, clientID int) *PaymentResponse {
+	existing, err := s.paymentRepo.GetByReferenceID(ctx, clientID, strings.TrimSpace(referenceID))
+	if err != nil || existing == nil {
+		return nil
+	}
+	return s.buildResponse(existing)
+}
+
 // ----------------------------------------------------------------------------
 // Get / read path
 // ----------------------------------------------------------------------------
@@ -611,7 +639,7 @@ func paymentProviderErrorCode(err error) string {
 func (s *PaymentService) GetPayment(ctx context.Context, paymentID string, clientID int) (*PaymentResponse, error) {
 	paymentID = strings.TrimSpace(paymentID)
 	if paymentID == "" {
-		return nil, newPaymentError(400, "MISSING_FIELD", "paymentId is required", nil)
+		return nil, newPaymentError(400, "VALIDATION_ERROR", "paymentId is required", nil)
 	}
 	p, err := s.paymentRepo.GetByPaymentID(ctx, paymentID)
 	if err != nil {
@@ -647,7 +675,7 @@ func (s *PaymentService) CancelPayment(ctx context.Context, paymentID string, cl
 		return nil, newPaymentError(404, "PAYMENT_NOT_FOUND", "Payment not found", nil)
 	}
 	if p.Status != models.PaymentStatusPending {
-		return nil, newPaymentError(400, "INVALID_PAYMENT_STATE", "Only pending payments can be cancelled", nil)
+		return nil, newPaymentError(409, "INVALID_STATE", "Only pending payments can be cancelled", nil)
 	}
 	if provider, err := s.router.Get(p.Provider); err == nil {
 		if _, err := provider.CancelPayment(ctx, p, reason); err != nil {
@@ -822,7 +850,7 @@ func createWithGeneratedID(p *models.Payment, insert func(*models.Payment) error
 		}
 		if !isUniqueViolation(lastErr) {
 			if isReferenceUniqueViolation(lastErr) {
-				return newPaymentError(400, "DUPLICATE_REFERENCE_ID", "Reference ID already exists", lastErr)
+				return newPaymentError(409, "DUPLICATE_REFERENCE", "referenceId already used", lastErr)
 			}
 			return lastErr
 		}
@@ -1127,7 +1155,7 @@ func normalizeFeePaidBy(raw string) (models.FeePaidBy, error) {
 	case string(models.FeePaidByCustomer):
 		return models.FeePaidByCustomer, nil
 	default:
-		return "", newPaymentError(400, "INVALID_FEE_PAID_BY",
+		return "", newPaymentError(400, "VALIDATION_ERROR",
 			"feePaidBy must be 'merchant' or 'customer'", nil)
 	}
 }

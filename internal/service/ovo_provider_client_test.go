@@ -161,14 +161,14 @@ func TestOVOCreatePaymentMissingPhone(t *testing.T) {
 
 	_, err := adapter.CreatePayment(context.Background(), ovoTestMethod(), req)
 	if err == nil {
-		t.Fatal("expected MISSING_FIELD error, got nil")
+		t.Fatal("expected VALIDATION_ERROR error, got nil")
 	}
 	svcErr, ok := err.(*PaymentServiceError)
 	if !ok {
 		t.Fatalf("expected *PaymentServiceError, got %T: %v", err, err)
 	}
-	if svcErr.Code != "MISSING_FIELD" {
-		t.Errorf("expected MISSING_FIELD, got %q", svcErr.Code)
+	if svcErr.Code != "VALIDATION_ERROR" {
+		t.Errorf("expected VALIDATION_ERROR, got %q", svcErr.Code)
 	}
 	if cap.path != "" {
 		t.Errorf("expected no HTTP call on missing phone, but server saw %q", cap.path)
@@ -297,13 +297,13 @@ func TestOVOCreatePaymentRejectsNonEwallet(t *testing.T) {
 
 	_, err := adapter.CreatePayment(context.Background(), ovoTestMethod(), req)
 	if err == nil {
-		t.Fatal("expected UNSUPPORTED_PAYMENT_TYPE error, got nil")
+		t.Fatal("expected VALIDATION_ERROR error, got nil")
 	}
 	svcErr, ok := err.(*PaymentServiceError)
 	if !ok {
 		t.Fatalf("expected *PaymentServiceError, got %T: %v", err, err)
 	}
-	if svcErr.Code != "UNSUPPORTED_PAYMENT_TYPE" {
-		t.Errorf("expected UNSUPPORTED_PAYMENT_TYPE, got %q", svcErr.Code)
+	if svcErr.Code != "VALIDATION_ERROR" {
+		t.Errorf("expected VALIDATION_ERROR, got %q", svcErr.Code)
 	}
 }

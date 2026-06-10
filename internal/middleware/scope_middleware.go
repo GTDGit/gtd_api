@@ -22,13 +22,13 @@ func RequireScope(scope string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		client := GetClient(c)
 		if client == nil {
-			utils.Error(c, 401, "INVALID_TOKEN", "Authentication required")
+			utils.Error(c, 401, "UNAUTHORIZED", "Missing or invalid API key")
 			c.Abort()
 			return
 		}
 
 		if !slices.Contains(client.Scopes, scope) {
-			utils.Error(c, 403, "INSUFFICIENT_SCOPE", "API key does not have required scope: "+scope)
+			utils.Error(c, 403, "FORBIDDEN", "API key is not allowed to perform this action (required scope: "+scope+")")
 			c.Abort()
 			return
 		}

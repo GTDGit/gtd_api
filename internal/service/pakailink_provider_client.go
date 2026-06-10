@@ -53,7 +53,7 @@ func (p *PakailinkProviderClient) CreatePayment(ctx context.Context, method *mod
 	case models.PaymentTypeRetail:
 		return p.createRetail(ctx, method, req)
 	default:
-		return nil, newPaymentError(400, "UNSUPPORTED_PAYMENT_TYPE", "Pakailink does not support this payment type", nil)
+		return nil, newPaymentError(400, "VALIDATION_ERROR", "Pakailink does not support this payment type", nil)
 	}
 }
 
@@ -241,7 +241,7 @@ func pakailinkEmoneyProductCode(code string) (string, error) {
 	case "SHOPEEPAY", "PAYSHOPEE":
 		return "PAYSHOPEE", nil
 	default:
-		return "", newPaymentError(400, "UNSUPPORTED_PAYMENT_TYPE",
+		return "", newPaymentError(400, "VALIDATION_ERROR",
 			"Unknown e-wallet code for Pakailink: "+code, nil)
 	}
 }
@@ -301,7 +301,7 @@ func (p *PakailinkProviderClient) InquiryPayment(ctx context.Context, payment *m
 			RawResponse: resp.RawResponse,
 		}, nil
 	}
-	return nil, newPaymentError(400, "UNSUPPORTED_PAYMENT_TYPE", "Inquiry not supported for this type", nil)
+	return nil, newPaymentError(400, "VALIDATION_ERROR", "Inquiry not supported for this type", nil)
 }
 
 func (p *PakailinkProviderClient) CancelPayment(ctx context.Context, payment *models.Payment, reason string) (*PaymentCancelResult, error) {
@@ -347,20 +347,54 @@ func mapPakailinkTransactionStatus(code string) models.PaymentStatus {
 	}
 }
 
+// mapPakailinkError maps a Pakailink failure to the unified payment error
+// taxonomy. Pakailink ResponseCode is a 7-digit SNAP code (first 3 digits =
+// HTTP status; last 2 = case). It inspects the specific code first, then falls
+// back to the embedded HTTP prefix. Duplicate signals → PROVIDER_DUPLICATE (409).
 func mapPakailinkError(err error) error {
 	if err == nil {
 		return nil
 	}
 	var apiErr *pakailink.APIError
-	if asPakailinkAPIError(err, &apiErr) {
-		if strings.HasPrefix(apiErr.ResponseCode, "4") {
-			return newPaymentError(400, "PROVIDER_REQUEST_REJECTED", firstNonEmptyStr(apiErr.ResponseMessage, "Provider rejected request"), err)
-		}
-		if strings.HasPrefix(apiErr.ResponseCode, "5") {
-			return newPaymentError(503, "PROVIDER_UNAVAILABLE", "Payment provider temporarily unavailable", err)
-		}
+	if !asPakailinkAPIError(err, &apiErr) {
+		// Network/timeout/empty body: status unknown.
+		return newPaymentError(504, "PROVIDER_TIMEOUT", "No response from provider, payment status unknown", err)
 	}
-	return newPaymentError(502, "PROVIDER_ERROR", "Payment provider error", err)
+
+	code := strings.TrimSpace(apiErr.ResponseCode)
+	switch code {
+	case "4032701", "4032702", "4042703", "4042711", "4044708":
+		// feature not allowed / exceeds limit / bank not supported / invalid
+		// account / invalid merchant
+		return newPaymentError(402, "PAYMENT_DENIED", "Payment was denied", err)
+	case "5002702", "5002902", "5004702":
+		// backend failure
+		return newPaymentError(503, "PROVIDER_UNAVAILABLE", "Payment provider is temporarily unavailable", err)
+	case "4012700", "4012701":
+		// unauthorized / invalid token
+		return newPaymentError(400, "PROVIDER_REJECTED", "Provider rejected the request", err)
+	}
+
+	// Conflict / duplicate: X-EXTERNAL-ID conflict (4092700) or duplicate
+	// partnerReferenceNo (409xx01).
+	if strings.HasPrefix(code, "409") {
+		return newPaymentError(409, "PROVIDER_DUPLICATE", "Duplicate reference at provider", err)
+	}
+	// Generic invalid format (...01) / invalid mandatory (...02) → rejected.
+	if strings.HasPrefix(code, "400") || strings.HasSuffix(code, "01") || strings.HasSuffix(code, "02") {
+		return newPaymentError(400, "PROVIDER_REJECTED", "Provider rejected the request", err)
+	}
+
+	// Fallback by the embedded HTTP prefix.
+	switch {
+	case strings.HasPrefix(code, "403"):
+		return newPaymentError(402, "PAYMENT_DENIED", "Payment was denied", err)
+	case strings.HasPrefix(code, "429"), strings.HasPrefix(code, "5"):
+		return newPaymentError(503, "PROVIDER_UNAVAILABLE", "Payment provider is temporarily unavailable", err)
+	case strings.HasPrefix(code, "4"):
+		return newPaymentError(400, "PROVIDER_REJECTED", "Provider rejected the request", err)
+	}
+	return newPaymentError(504, "PROVIDER_TIMEOUT", "No response from provider, payment status unknown", err)
 }
 
 func asPakailinkAPIError(err error, target **pakailink.APIError) bool {

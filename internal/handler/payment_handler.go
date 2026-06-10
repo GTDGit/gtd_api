@@ -34,12 +34,12 @@ func (h *PaymentHandler) ListMethods(c *gin.Context) {
 func (h *PaymentHandler) CreatePayment(c *gin.Context) {
 	var req service.CreatePaymentRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		utils.Error(c, http.StatusBadRequest, "MISSING_FIELD", "Invalid request body")
+		utils.Error(c, http.StatusBadRequest, "VALIDATION_ERROR", "Invalid request body")
 		return
 	}
 	client := middleware.GetClient(c)
 	if client == nil {
-		utils.Error(c, http.StatusUnauthorized, "INVALID_TOKEN", "Unauthorized")
+		utils.Error(c, http.StatusUnauthorized, "UNAUTHORIZED", "Missing or invalid API key")
 		return
 	}
 	resp, err := h.paymentService.CreatePayment(c.Request.Context(), &req, client, middleware.IsSandbox(c))
@@ -54,7 +54,7 @@ func (h *PaymentHandler) CreatePayment(c *gin.Context) {
 func (h *PaymentHandler) GetPayment(c *gin.Context) {
 	client := middleware.GetClient(c)
 	if client == nil {
-		utils.Error(c, http.StatusUnauthorized, "INVALID_TOKEN", "Unauthorized")
+		utils.Error(c, http.StatusUnauthorized, "UNAUTHORIZED", "Missing or invalid API key")
 		return
 	}
 	resp, err := h.paymentService.GetPayment(c.Request.Context(), c.Param("paymentId"), client.ID)
@@ -73,7 +73,7 @@ func (h *PaymentHandler) CancelPayment(c *gin.Context) {
 	_ = c.ShouldBindJSON(&body)
 	client := middleware.GetClient(c)
 	if client == nil {
-		utils.Error(c, http.StatusUnauthorized, "INVALID_TOKEN", "Unauthorized")
+		utils.Error(c, http.StatusUnauthorized, "UNAUTHORIZED", "Missing or invalid API key")
 		return
 	}
 	resp, err := h.paymentService.CancelPayment(c.Request.Context(), c.Param("paymentId"), client.ID, body.Reason)

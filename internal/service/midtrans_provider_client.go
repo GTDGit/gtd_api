@@ -62,7 +62,7 @@ func (p *MidtransProviderClient) CreatePayment(ctx context.Context, method *mode
 		case "SHOPEEPAY", "PAYSHOPEE":
 			resp, err = p.client.ChargeShopeePay(ctx, req.PartnerRef, req.TotalAmount, p.callbackURL, cust)
 		default:
-			return nil, newPaymentError(400, "UNSUPPORTED_PAYMENT_TYPE", "Unsupported e-wallet code for Midtrans: "+code, nil)
+			return nil, newPaymentError(400, "VALIDATION_ERROR", "Unsupported e-wallet code for Midtrans: "+code, nil)
 		}
 		if err != nil {
 			return nil, mapMidtransError(err)
@@ -85,7 +85,7 @@ func (p *MidtransProviderClient) CreatePayment(ctx context.Context, method *mode
 		return p.createVA(ctx, method, req, cust)
 
 	default:
-		return nil, newPaymentError(400, "UNSUPPORTED_PAYMENT_TYPE", "Midtrans adapter supports QRIS, e-wallet, and VA payments", nil)
+		return nil, newPaymentError(400, "VALIDATION_ERROR", "Midtrans adapter supports QRIS, e-wallet, and VA payments", nil)
 	}
 }
 
@@ -94,7 +94,7 @@ func (p *MidtransProviderClient) CreatePayment(ctx context.Context, method *mode
 func (p *MidtransProviderClient) createVA(ctx context.Context, method *models.PaymentMethod, req *PaymentCreateRequest, cust *midtrans.CustomerDetails) (*PaymentCreateResponse, error) {
 	bank := midtransVABank(method.Code)
 	if bank == "" {
-		return nil, newPaymentError(400, "UNSUPPORTED_PAYMENT_TYPE", "Unsupported VA bank code for Midtrans: "+method.Code, nil)
+		return nil, newPaymentError(400, "VALIDATION_ERROR", "Unsupported VA bank code for Midtrans: "+method.Code, nil)
 	}
 
 	expirySec := midtransExpirySeconds(req.ExpiredAt)
@@ -209,18 +209,47 @@ func mapMidtransTransactionStatus(status, fraudStatus string) models.PaymentStat
 	}
 }
 
+// mapMidtransError maps a Midtrans failure to the unified payment error
+// taxonomy. Midtrans StatusCode is a 3-digit string (independent of the HTTP
+// status). It inspects StatusCode first, then falls back to the HTTP range.
+// Duplicate order_id (406) → PROVIDER_DUPLICATE (409).
 func mapMidtransError(err error) error {
 	if err == nil {
 		return nil
 	}
 	apiErr, ok := err.(*midtrans.APIError)
-	if ok {
-		if apiErr.HTTPStatus >= 400 && apiErr.HTTPStatus < 500 {
-			return newPaymentError(400, "PROVIDER_REQUEST_REJECTED", firstNonEmpty(apiErr.StatusMessage, "Provider rejected request"), err)
-		}
-		if apiErr.HTTPStatus >= 500 {
-			return newPaymentError(503, "PROVIDER_UNAVAILABLE", "Payment provider temporarily unavailable", err)
-		}
+	if !ok {
+		// Network/timeout/empty body: status unknown.
+		return newPaymentError(504, "PROVIDER_TIMEOUT", "No response from provider, payment status unknown", err)
 	}
-	return newPaymentError(502, "PROVIDER_ERROR", "Payment provider error", err)
+
+	switch strings.TrimSpace(apiErr.StatusCode) {
+	case "406":
+		// Duplicate order_id — provider already has this transaction.
+		return newPaymentError(409, "PROVIDER_DUPLICATE", "Duplicate reference at provider", err)
+	case "202", "407":
+		// deny / expired
+		return newPaymentError(402, "PAYMENT_DENIED", "Payment was denied", err)
+	case "400", "401", "402", "404":
+		// validation / auth / channel inactive / not found — for the client this
+		// is a rejection (401/402 are logged for ops, not surfaced as denied).
+		return newPaymentError(400, "PROVIDER_REJECTED", "Provider rejected the request", err)
+	case "409", "429", "500", "502", "503":
+		return newPaymentError(503, "PROVIDER_UNAVAILABLE", "Payment provider is temporarily unavailable", err)
+	case "504":
+		return newPaymentError(504, "PROVIDER_TIMEOUT", "No response from provider, payment status unknown", err)
+	}
+
+	// Fallback by HTTP status range.
+	switch {
+	case apiErr.HTTPStatus == 504:
+		return newPaymentError(504, "PROVIDER_TIMEOUT", "No response from provider, payment status unknown", err)
+	case apiErr.HTTPStatus == 406, apiErr.HTTPStatus == 409:
+		return newPaymentError(409, "PROVIDER_DUPLICATE", "Duplicate reference at provider", err)
+	case apiErr.HTTPStatus == 429, apiErr.HTTPStatus >= 500:
+		return newPaymentError(503, "PROVIDER_UNAVAILABLE", "Payment provider is temporarily unavailable", err)
+	case apiErr.HTTPStatus >= 400:
+		return newPaymentError(400, "PROVIDER_REJECTED", "Provider rejected the request", err)
+	}
+	return newPaymentError(504, "PROVIDER_TIMEOUT", "No response from provider, payment status unknown", err)
 }

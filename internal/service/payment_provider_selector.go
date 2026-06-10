@@ -69,8 +69,8 @@ func (s *ProviderSelector) Select(g *models.MethodGroup) (*models.MethodProvider
 			}
 		}
 	}
-	return nil, newPaymentError(503, "PAYMENT_METHOD_UNAVAILABLE",
-		"No payment provider is currently available for this method", nil)
+	return nil, newPaymentError(503, "METHOD_UNAVAILABLE",
+		"Payment method is temporarily unavailable", nil)
 }
 
 // Next returns the next healthy binding after the given one, used for bounded

@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -153,22 +154,32 @@ func (p *XenditProviderClient) createEwallet(ctx context.Context, method *models
 		return nil, mapXenditError(err)
 	}
 	norm := PaymentDetailNormalized{}
-	// Xendit returns deeplink/checkout URL in actions array
+	// Xendit returns the redirect/deeplink URL in the actions array. The URL is
+	// in "value" (sometimes "url"); the kind is in "descriptor" (WEB_URL,
+	// MOBILE_URL, DEEPLINK_URL) or "type" (REDIRECT_CUSTOMER/PRESENT_TO_CUSTOMER).
 	for _, a := range resp.Actions {
 		m, ok := a.(map[string]interface{})
 		if !ok {
 			continue
 		}
-		typ, _ := m["type"].(string)
-		url, _ := m["url"].(string)
+		url, _ := m["value"].(string)
+		if url == "" {
+			url, _ = m["url"].(string)
+		}
 		if url == "" {
 			continue
 		}
-		switch strings.ToUpper(typ) {
-		case "WEB", "DESKTOP_WEB":
-			norm.CheckoutURL = url
-		case "MOBILE", "MOBILE_DEEPLINK", "APP":
+		descriptor := strings.ToUpper(fmt.Sprint(m["descriptor"]))
+		typ := strings.ToUpper(fmt.Sprint(m["type"]))
+		switch {
+		case strings.Contains(descriptor, "DEEPLINK"), strings.Contains(descriptor, "MOBILE"),
+			strings.Contains(typ, "MOBILE"), strings.Contains(typ, "APP"):
 			norm.Deeplink = url
+		default:
+			// WEB_URL, REDIRECT_CUSTOMER, or anything else with a URL → web checkout.
+			if norm.CheckoutURL == "" {
+				norm.CheckoutURL = url
+			}
 		}
 	}
 	return &PaymentCreateResponse{

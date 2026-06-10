@@ -76,16 +76,16 @@ func danaVAPayOption(code string) string {
 		return dana.PayOptionVABNI
 	case "008":
 		return dana.PayOptionVAMandiri
-	case "451":
-		return dana.PayOptionVABSI
 	case "022":
 		return dana.PayOptionVACIMB
-	case "013":
-		return dana.PayOptionVAPermata
 	case "019":
 		return dana.PayOptionVAPanin
 	case "213":
 		return dana.PayOptionVABTPN
+	// 451 BSI and 013 Permata are intentionally omitted: DANA rejects both
+	// VIRTUAL_ACCOUNT_BSI_PAYMENT/VIRTUAL_ACCOUNT_BSI and VIRTUAL_ACCOUNT_PERMATA
+	// with 4005402 Invalid Field Format on this account. Returning "" makes the
+	// selector fall through to Pakailink/Xendit instead of hard-failing.
 	default:
 		return ""
 	}

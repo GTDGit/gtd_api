@@ -990,6 +990,8 @@ func simplifyPaymentDetail(typ models.PaymentType, code string, n PaymentDetailN
 		}
 		if n.CheckoutURL != "" {
 			out["checkoutUrl"] = n.CheckoutURL
+		} else if n.MobileWebURL != "" {
+			out["checkoutUrl"] = n.MobileWebURL
 		} else if n.Deeplink != "" {
 			out["checkoutUrl"] = n.Deeplink
 		}

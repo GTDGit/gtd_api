@@ -17,6 +17,7 @@ const (
 	DefaultAPIVersion = "2024-11-11"
 
 	CreatePaymentRequestPath = "/v3/payment_requests"
+	VirtualAccountPath       = "/callback_virtual_accounts"
 )
 
 type Config struct {
@@ -114,6 +115,31 @@ func (c *Client) CreateRefund(ctx context.Context, paymentRequestID string, req 
 func (c *Client) SimulatePayment(ctx context.Context, paymentRequestID string) (json.RawMessage, error) {
 	path := CreatePaymentRequestPath + "/" + paymentRequestID + "/payments/simulate"
 	return c.do(ctx, http.MethodPost, path, nil, nil)
+}
+
+// CreateVirtualAccount creates a legacy Fixed Virtual Account
+// (POST /callback_virtual_accounts).
+func (c *Client) CreateVirtualAccount(ctx context.Context, req VirtualAccountCreate) (*VirtualAccount, error) {
+	var resp VirtualAccount
+	raw, err := c.do(ctx, http.MethodPost, VirtualAccountPath, req, &resp)
+	if err != nil {
+		return nil, err
+	}
+	resp.RawResponse = raw
+	return &resp, nil
+}
+
+// GetVirtualAccount fetches a legacy Fixed VA by its id
+// (GET /callback_virtual_accounts/{id}). The returned status is a lifecycle
+// value (PENDING/ACTIVE/INACTIVE), not a payment status.
+func (c *Client) GetVirtualAccount(ctx context.Context, id string) (*VirtualAccount, error) {
+	var resp VirtualAccount
+	raw, err := c.do(ctx, http.MethodGet, VirtualAccountPath+"/"+id, nil, &resp)
+	if err != nil {
+		return nil, err
+	}
+	resp.RawResponse = raw
+	return &resp, nil
 }
 
 func (c *Client) do(ctx context.Context, method, path string, body any, out any) (json.RawMessage, error) {

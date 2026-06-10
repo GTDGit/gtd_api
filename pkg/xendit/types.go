@@ -39,9 +39,6 @@ type PaymentRequestChannelProperties struct {
 	PayerName   string `json:"payer_name,omitempty"`
 	ExpiresAt   string `json:"expires_at,omitempty"`
 	PaymentCode string `json:"payment_code,omitempty"`
-	// VA-specific: Xendit requires a customer/display name on virtual accounts.
-	CustomerName string `json:"customer_name,omitempty"`
-	VirtualAccountNumber string `json:"virtual_account_number,omitempty"`
 	// QRIS-specific fields returned by Xendit
 	QRString   string `json:"qr_string,omitempty"`
 	QRImageURL string `json:"qr_image_url,omitempty"`
@@ -129,4 +126,58 @@ type WebhookData struct {
 	Created          string         `json:"created"`
 	Updated          string         `json:"updated"`
 	Metadata         map[string]any `json:"metadata,omitempty"`
+}
+
+// ---------------------------------------------------------------------------
+// Legacy Virtual Account API (/callback_virtual_accounts).
+//
+// This account serves VA through the legacy Fixed-VA endpoint, not the v3
+// /v3/payment_requests flow. Closed single-use VAs are created with an
+// expected_amount and expiration; Xendit POSTs a FixedVirtualAccountPaid
+// webhook (no event/status field — its arrival means PAID) keyed by external_id.
+// ---------------------------------------------------------------------------
+
+// VirtualAccountCreate is the request body for POST /callback_virtual_accounts.
+type VirtualAccountCreate struct {
+	ExternalID     string `json:"external_id"`
+	BankCode       string `json:"bank_code"`
+	Name           string `json:"name"`
+	IsClosed       bool   `json:"is_closed"`
+	IsSingleUse    bool   `json:"is_single_use"`
+	ExpectedAmount int64  `json:"expected_amount,omitempty"`
+	ExpirationDate string `json:"expiration_date,omitempty"` // ISO-8601 UTC
+}
+
+// VirtualAccount is the legacy Fixed-VA object returned by create/get.
+// status is a lifecycle value (PENDING/ACTIVE/INACTIVE) — NOT a payment status.
+type VirtualAccount struct {
+	ID             string          `json:"id"`
+	OwnerID        string          `json:"owner_id"`
+	ExternalID     string          `json:"external_id"`
+	MerchantCode   string          `json:"merchant_code"`
+	AccountNumber  string          `json:"account_number"`
+	BankCode       string          `json:"bank_code"`
+	Name           string          `json:"name"`
+	IsClosed       bool            `json:"is_closed"`
+	IsSingleUse    bool            `json:"is_single_use"`
+	ExpectedAmount int64           `json:"expected_amount"`
+	ExpirationDate string          `json:"expiration_date"`
+	Status         string          `json:"status"`
+	Currency       string          `json:"currency"`
+	Country        string          `json:"country"`
+	RawResponse    json.RawMessage `json:"-"`
+}
+
+// VirtualAccountPaidWebhook models the Fixed-VA payment notification. The
+// arrival of this payload means the VA was paid; there is no status field.
+type VirtualAccountPaidWebhook struct {
+	ID                         string `json:"id"`                  // payment id
+	PaymentID                  string `json:"payment_id"`          // bank-side payment id
+	CallbackVirtualAccountID   string `json:"callback_virtual_account_id"`
+	ExternalID                 string `json:"external_id"`         // our PaymentID
+	MerchantCode               string `json:"merchant_code"`
+	AccountNumber              string `json:"account_number"`
+	BankCode                   string `json:"bank_code"`
+	Amount                     int64  `json:"amount"`
+	TransactionTimestamp       string `json:"transaction_timestamp"`
 }

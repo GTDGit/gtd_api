@@ -44,41 +44,38 @@ func (p *XenditProviderClient) CreatePayment(ctx context.Context, method *models
 	}
 }
 
+// createVA creates a closed single-use Fixed Virtual Account via the legacy
+// /callback_virtual_accounts API. This account does not serve VA through the
+// v3 payment_requests flow (that endpoint rejects VA channel codes), so VA uses
+// the dedicated FVA endpoint. Payment confirmation arrives via the FVA-paid
+// webhook (handled in HandleXendit), keyed by external_id == our PaymentID.
 func (p *XenditProviderClient) createVA(ctx context.Context, method *models.PaymentMethod, req *PaymentCreateRequest) (*PaymentCreateResponse, error) {
-	channel := xenditVAChannelCode(method.Code)
-	if channel == "" {
+	bankCode := xenditVAChannelCode(method.Code)
+	if bankCode == "" {
 		return nil, newPaymentError(400, "UNSUPPORTED_PAYMENT_TYPE", "Unsupported VA bank code for Xendit: "+method.Code, nil)
 	}
 	customerName := firstNonEmpty(req.CustomerName, req.ClientName, "Customer")
-	create := xendit.PaymentRequestCreate{
-		ReferenceID:   req.PartnerRef,
-		Type:          "PAY",
-		Country:       "ID",
-		Currency:      "IDR",
-		ChannelCode:   channel,
-		RequestAmount: req.TotalAmount,
-		ChannelProperties: xendit.PaymentRequestChannelProperties{
-			CustomerName: customerName,
-			ExpiresAt:    formatXenditExpiry(req.ExpiredAt),
-		},
-		Description: req.Description,
+	create := xendit.VirtualAccountCreate{
+		ExternalID:     req.PartnerRef,
+		BankCode:       bankCode,
+		Name:           customerName,
+		IsClosed:       true,
+		IsSingleUse:    true,
+		ExpectedAmount: req.TotalAmount,
+		ExpirationDate: formatXenditExpiry(req.ExpiredAt),
 	}
-	resp, err := p.client.CreatePaymentRequest(ctx, create)
+	resp, err := p.client.CreateVirtualAccount(ctx, create)
 	if err != nil {
 		return nil, mapXenditError(err)
 	}
-	vaNumber := resp.ChannelProperties.VirtualAccountNumber
-	if vaNumber == "" {
-		vaNumber = extractXenditVANumber(resp.Actions)
-	}
 	norm := PaymentDetailNormalized{
 		BankCode:    method.Code,
-		BankName:    method.Name,
-		VANumber:    vaNumber,
+		BankName:    firstNonEmpty(method.Name, bankCode),
+		VANumber:    resp.AccountNumber,
 		AccountName: customerName,
 	}
 	return &PaymentCreateResponse{
-		ProviderRef: resp.PaymentRequestID,
+		ProviderRef: resp.ID,
 		Normalized:  norm,
 		RawResponse: resp.RawResponse,
 	}, nil
@@ -289,9 +286,11 @@ func extractXenditQRString(actions []any) string {
 	return ""
 }
 
-// xenditVAChannelCode maps the numeric DB bank code to the Xendit Payment
-// Request API channel code (uppercase). Unknown codes return "" so the selector
-// falls through to the next provider.
+// xenditVAChannelCode maps the numeric DB bank code to the Xendit legacy
+// Fixed-VA bank code (uppercase). Unknown codes return "" so the selector
+// falls through to the next provider. Only banks activated on the account
+// (per GET /available_virtual_account_banks) will actually succeed; others
+// surface a provider error and trigger fallback.
 func xenditVAChannelCode(code string) string {
 	switch strings.TrimSpace(code) {
 	case "002":
@@ -315,27 +314,26 @@ func xenditVAChannelCode(code string) string {
 	}
 }
 
-// extractXenditVANumber pulls the virtual account number from Xendit's actions
-// array. Xendit returns the VA number in actions[] with
-// descriptor=="VIRTUAL_ACCOUNT_NUMBER".
-func extractXenditVANumber(actions []any) string {
-	for _, a := range actions {
-		m, ok := a.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		descriptor, _ := m["descriptor"].(string)
-		val, _ := m["value"].(string)
-		if strings.EqualFold(descriptor, "VIRTUAL_ACCOUNT_NUMBER") && val != "" {
-			return val
-		}
-	}
-	return ""
-}
-
 func (p *XenditProviderClient) InquiryPayment(ctx context.Context, payment *models.Payment) (*PaymentInquiryResult, error) {
 	if payment.ProviderRef == nil || *payment.ProviderRef == "" {
 		return &PaymentInquiryResult{Status: payment.Status}, nil
+	}
+	// VA uses the legacy Fixed-VA API. Its object status is a lifecycle value
+	// (PENDING/ACTIVE/INACTIVE), not a payment status — a paid single-use VA
+	// reads back INACTIVE, which would wrongly clobber a paid payment. So we
+	// fetch it only to record the raw object and return an empty status,
+	// deferring authoritative payment confirmation to the FVA-paid webhook.
+	if payment.PaymentType == models.PaymentTypeVA {
+		resp, err := p.client.GetVirtualAccount(ctx, *payment.ProviderRef)
+		if err != nil {
+			return nil, mapXenditError(err)
+		}
+		return &PaymentInquiryResult{
+			Status:      "",
+			ProviderRef: resp.ID,
+			PaidAmount:  payment.Amount,
+			RawResponse: resp.RawResponse,
+		}, nil
 	}
 	resp, err := p.client.GetPaymentRequest(ctx, *payment.ProviderRef)
 	if err != nil {
@@ -351,6 +349,12 @@ func (p *XenditProviderClient) InquiryPayment(ctx context.Context, payment *mode
 
 func (p *XenditProviderClient) CancelPayment(ctx context.Context, payment *models.Payment, reason string) (*PaymentCancelResult, error) {
 	if payment.ProviderRef == nil || *payment.ProviderRef == "" {
+		return &PaymentCancelResult{Cancelled: true}, nil
+	}
+	// VA uses the legacy Fixed-VA API; the v3 cancel endpoint would 404 on a
+	// legacy VA id. A closed single-use VA simply expires, so cancel is a
+	// local no-op (the payment is marked cancelled by the caller).
+	if payment.PaymentType == models.PaymentTypeVA {
 		return &PaymentCancelResult{Cancelled: true}, nil
 	}
 	resp, err := p.client.CancelPaymentRequest(ctx, *payment.ProviderRef)

@@ -233,6 +233,11 @@ type xenditWebhookPayload struct {
 	Status            string          `json:"status"`
 	RequestAmount     int64           `json:"request_amount"`
 	ChannelCode       string          `json:"channel_code"`
+	// Legacy Fixed-VA paid notification: keyed by external_id (our PaymentID),
+	// carries callback_virtual_account_id; arrival means PAID (no status field).
+	ExternalID               string `json:"external_id"`
+	CallbackVirtualAccountID string `json:"callback_virtual_account_id"`
+	Amount                   int64  `json:"amount"`
 }
 
 type xenditEventData struct {
@@ -264,6 +269,27 @@ func (h *PaymentWebhookHandler) HandleXendit(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"status": "error", "message": "Invalid body"})
 		return
 	}
+
+	// Legacy Fixed-VA paid notification: identified by callback_virtual_account_id
+	// with no v3 event/status. The payload's arrival means the VA was paid; it is
+	// keyed by external_id == our PaymentID.
+	if p.CallbackVirtualAccountID != "" && p.EventType == "" && p.Data.Status == "" && p.Status == "" {
+		event := service.PaymentWebhookEvent{
+			Status:      models.PaymentStatusPaid,
+			ProviderRef: p.CallbackVirtualAccountID,
+			PaidAmount:  p.Amount,
+			RawPayload:  body,
+		}
+		if err := h.paymentSvc.ApplyWebhook(c.Request.Context(), models.ProviderXendit, strings.TrimSpace(p.ExternalID), event); err != nil {
+			h.markCallbackError(c.Request.Context(), cb.ID, err.Error())
+			c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": err.Error()})
+			return
+		}
+		_ = h.paymentRepo.UpdatePaymentCallbackProcessed(c.Request.Context(), cb.ID, true, nil)
+		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+		return
+	}
+
 	ref := firstPaymentString(p.Data.ReferenceID, p.ReferenceID)
 	providerID := firstPaymentString(p.Data.ID, p.ID)
 	status := firstPaymentString(p.Data.Status, p.Status)

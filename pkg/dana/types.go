@@ -53,7 +53,7 @@ const (
 	PayOptionVACIMB         = "VIRTUAL_ACCOUNT_CIMB"
 	PayOptionVAPermata      = "VIRTUAL_ACCOUNT_PERMATA"
 	PayOptionVAPanin        = "VIRTUAL_ACCOUNT_PANI"
-	PayOptionVABSI          = "VIRTUAL_ACCOUNT_BSI_PAYMENT"
+	PayOptionVABSI          = "VIRTUAL_ACCOUNT_BSI"
 
 	StatusSuccess   = "00"
 	StatusCancelled = "05"

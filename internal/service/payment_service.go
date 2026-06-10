@@ -83,8 +83,6 @@ type CreatePaymentRequest struct {
 	FeePaidBy   string                `json:"feePaidBy,omitempty"` // "merchant" (default) or "customer"
 	ScanData    string                `json:"scanData,omitempty"`  // CPM QRIS: QR code from customer's app
 	Description string                `json:"description,omitempty"`
-	ExpiredAt   string                `json:"expiredAt,omitempty"`
-	Metadata    json.RawMessage       `json:"metadata,omitempty"`
 
 	// Legacy flat fields — kept for backward compatibility.
 	// If paymentMethod is set, these are ignored.
@@ -145,15 +143,6 @@ func (r *CreatePaymentRequest) validateRequiredFields(paymentType, paymentCode s
 	return nil
 }
 
-// isValidUUIDv4 checks if string is a valid UUID version 4.
-func isValidUUIDv4(s string) bool {
-	id, err := uuid.Parse(s)
-	if err != nil {
-		return false
-	}
-	return id.Version() == 4
-}
-
 // CustomerResponse is the nested customer object in the response.
 type CustomerResponse struct {
 	Name  string `json:"name,omitempty"`
@@ -211,7 +200,6 @@ type MethodEntry struct {
 	ID              int    `json:"id"`
 	Code            string `json:"code"`
 	Name            string `json:"name"`
-	Provider        string `json:"provider"`
 	FeeType         string `json:"feeType"`
 	FeeFlat         int    `json:"feeFlat"`
 	FeePercent      float64 `json:"feePercent"`
@@ -275,7 +263,6 @@ func (s *PaymentService) ListMethods(ctx context.Context) (*MethodsResponse, err
 			ID:              m.ID,
 			Code:            m.Code,
 			Name:            m.Name,
-			Provider:        string(m.Provider),
 			FeeType:         string(m.FeeType),
 			FeeFlat:         m.FeeFlat,
 			FeePercent:      m.FeePercent,
@@ -329,9 +316,6 @@ func (s *PaymentService) CreatePayment(ctx context.Context, req *CreatePaymentRe
 	if req.ReferenceID == "" {
 		return nil, newPaymentError(400, "MISSING_REQUIRED_FIELD", "referenceId is required", nil)
 	}
-	if !isValidUUIDv4(req.ReferenceID) {
-		return nil, newPaymentError(400, "INVALID_FIELD_VALUE", "referenceId must be a valid UUIDv4", nil)
-	}
 	if rawType == "" || rawCode == "" {
 		return nil, newPaymentError(400, "MISSING_REQUIRED_FIELD", "paymentMethod.type and paymentMethod.code are required", nil)
 	}
@@ -350,14 +334,9 @@ func (s *PaymentService) CreatePayment(ctx context.Context, req *CreatePaymentRe
 		return nil, newPaymentError(400, "INVALID_AMOUNT", "amount must be positive", nil)
 	}
 
-	// Basic validation for nested customer when provided (Req 4.2).
-	if req.Customer != nil {
-		if strings.TrimSpace(req.Customer.Name) == "" && strings.TrimSpace(req.CustomerEmail) == "" {
-			// Accept legacy flat customerName as fallback
-			if strings.TrimSpace(req.CustomerName) == "" {
-				return nil, newPaymentError(400, "MISSING_FIELD", "customer.name is required when customer object is provided", nil)
-			}
-		}
+	// customer.name is mandatory for all payment methods.
+	if strings.TrimSpace(customerName) == "" {
+		return nil, newPaymentError(400, "MISSING_REQUIRED_FIELD", "customer.name is required", nil)
 	}
 
 	// Resolve and validate feePaidBy (default merchant; rejects invalid values).
@@ -427,9 +406,7 @@ func (s *PaymentService) CreatePayment(ctx context.Context, req *CreatePaymentRe
 	//   customer -> total = subtotal + fee
 	//   merchant -> total = subtotal
 	totalAmount := computeTotal(req.Amount, fee, feePaidBy)
-	expiredAt := resolveExpiredAt(req.ExpiredAt, method.ExpiredDuration)
-
-	metadata := models.NullableRawMessage(req.Metadata)
+	expiredAt := resolveExpiredAt("", method.ExpiredDuration)
 
 	payment := &models.Payment{
 		ReferenceID:     req.ReferenceID,
@@ -445,7 +422,7 @@ func (s *PaymentService) CreatePayment(ctx context.Context, req *CreatePaymentRe
 		FeePaidBy:       feePaidBy,
 		Status:          models.PaymentStatusPending,
 		ExpiredAt:       expiredAt,
-		Metadata:        metadata,
+		Metadata:        models.NullableRawMessage(nil),
 		// payment_detail has NOT NULL constraint with default '{}' in DB.
 		// Set explicitly so Go driver does not send NULL.
 		PaymentDetail: models.NullableRawMessage(`{}`),

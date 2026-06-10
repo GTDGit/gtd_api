@@ -61,7 +61,7 @@ func (s *PaymentCallbackService) EnqueueEvent(ctx context.Context, payment *mode
 		return
 	}
 	url := strings.TrimSpace(*payment.CallbackURL)
-	secret := clientWebhookSecret(client)
+	secret := client.CallbackSecret
 
 	payload := buildPaymentCallbackPayload(payment, event)
 	logRow := &models.PaymentCallbackLog{
@@ -103,7 +103,7 @@ func (s *PaymentCallbackService) RetryPendingCallbacks(ctx context.Context, limi
 			continue
 		}
 		url := strings.TrimSpace(*payment.CallbackURL)
-		secret := clientWebhookSecret(client)
+		secret := client.CallbackSecret
 		s.AttemptDelivery(ctx, row, url, secret)
 	}
 	return nil
@@ -213,19 +213,6 @@ func paymentNextRetry(attempt int) time.Time {
 		return time.Time{}
 	}
 	return time.Now().Add(intervals[attempt-1])
-}
-
-// clientWebhookSecret returns the HMAC signing secret for outbound webhooks.
-// Prefers the dedicated webhook_key; falls back to the legacy callback_secret
-// for clients not yet backfilled.
-func clientWebhookSecret(c *models.Client) string {
-	if c == nil {
-		return ""
-	}
-	if s := strings.TrimSpace(c.WebhookKey); s != "" {
-		return s
-	}
-	return c.CallbackSecret
 }
 
 func hmacHexSHA256(payload []byte, secret string) string {

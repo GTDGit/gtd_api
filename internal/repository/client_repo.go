@@ -20,7 +20,7 @@ func NewClientRepository(db *sqlx.DB) *ClientRepository {
 }
 
 const clientColumns = `id, client_id, name, api_key, sandbox_key, callback_url, callback_secret,
-    webhook_key, ip_whitelist, scopes, is_active, created_at, updated_at`
+    ip_whitelist, scopes, is_active, created_at, updated_at`
 
 func scanClient(scanner interface {
 	Scan(dest ...any) error
@@ -33,7 +33,6 @@ func scanClient(scanner interface {
 		&c.SandboxKey,
 		&c.CallbackURL,
 		&c.CallbackSecret,
-		&c.WebhookKey,
 		pq.Array(&c.IPWhitelist),
 		pq.Array(&c.Scopes),
 		&c.IsActive,

@@ -60,26 +60,32 @@ func (p *PakailinkProviderClient) CreatePayment(ctx context.Context, method *mod
 func (p *PakailinkProviderClient) createVA(ctx context.Context, method *models.PaymentMethod, req *PaymentCreateRequest) (*PaymentCreateResponse, error) {
 	bankCode := strings.TrimSpace(method.Code)
 	customerNo := req.PartnerRef
+	accountName := firstNonEmpty(req.CustomerName, req.ClientName, "Customer")
 	vaReq := pakailink.CreateVARequest{
 		PartnerReferenceNo:  req.PartnerRef,
 		CustomerNo:          customerNo,
-		VirtualAccountName:  firstNonEmpty(req.CustomerName, req.ClientName, "Customer"),
+		VirtualAccountName:  accountName,
 		VirtualAccountEmail: req.CustomerEmail,
 		VirtualAccountPhone: req.CustomerPhone,
 		TotalAmount:         req.TotalAmount,
 		BankCode:            bankCode,
-		CallbackURL:         firstNonEmpty(req.CallbackURL, p.callbackURL),
-		ExpiredDate:         formatPakailinkExpiry(req.ExpiredAt),
+		// Provider notification goes to OUR webhook endpoint, never the client's
+		// callback URL. The client webhook is delivered separately by
+		// PaymentCallbackService using payment.CallbackURL.
+		CallbackURL: p.callbackURL,
+		ExpiredDate: formatPakailinkExpiry(req.ExpiredAt),
 	}
 	resp, err := p.client.CreateVA(ctx, vaReq)
 	if err != nil {
 		return nil, mapPakailinkError(err)
 	}
 	norm := PaymentDetailNormalized{
-		BankCode:    bankCode,
-		BankName:    method.Name,
-		VANumber:    resp.VirtualAccountData.VirtualAccountNo,
-		AccountName: resp.VirtualAccountData.VirtualAccountName,
+		BankCode: bankCode,
+		BankName: method.Name,
+		VANumber: resp.VirtualAccountData.VirtualAccountNo,
+		// Pakailink often does not echo the VA name back; fall back to the name
+		// we sent so the response always carries vaName (Finding #1).
+		AccountName: firstNonEmpty(resp.VirtualAccountData.VirtualAccountName, accountName),
 	}
 	return &PaymentCreateResponse{
 		ProviderRef: resp.VirtualAccountData.PartnerReferenceNo,
@@ -99,7 +105,7 @@ func (p *PakailinkProviderClient) createQRIS(ctx context.Context, method *models
 		Amount:             req.TotalAmount,
 		MerchantName:       firstNonEmpty(req.CustomerName, "GTD Gateway"),
 		Description:        req.Description,
-		CallbackURL:        firstNonEmpty(req.CallbackURL, p.callbackURL),
+		CallbackURL:        p.callbackURL,
 		ExpiredDate:        formatPakailinkExpiry(req.ExpiredAt),
 		TerminalID:         p.terminalID,
 		StoreID:            p.storeID,
@@ -154,7 +160,7 @@ func (p *PakailinkProviderClient) createEmoney(ctx context.Context, method *mode
 		ProductCode:        productCode,
 		EmoneyPhone:        phone,
 		BillTitle:          firstNonEmpty(req.Description, method.Name, method.Code),
-		CallbackURL:        firstNonEmpty(req.CallbackURL, p.callbackURL),
+		CallbackURL:        p.callbackURL,
 		ExpiredDate:        formatPakailinkExpiry(req.ExpiredAt),
 	}
 	resp, err := p.client.CreateEmoney(ctx, emoneyReq)
@@ -195,7 +201,7 @@ func (p *PakailinkProviderClient) createRetail(ctx context.Context, method *mode
 		TotalAmount:        req.TotalAmount,
 		ProductCode:        productCode,
 		Remark:             req.Description,
-		CallbackURL:        firstNonEmpty(req.CallbackURL, p.callbackURL),
+		CallbackURL:        p.callbackURL,
 		ExpiredDate:        formatPakailinkExpiry(req.ExpiredAt),
 	}
 	resp, err := p.client.CreateRetail(ctx, retailReq)

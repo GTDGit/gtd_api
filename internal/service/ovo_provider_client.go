@@ -58,7 +58,7 @@ func (p *OVOProviderClient) CreatePayment(ctx context.Context, method *models.Pa
 		Currency:           "IDR",
 		Description:        firstNonEmpty(req.Description, method.Name),
 		ExpiredAt:          formatXenditExpiry(req.ExpiredAt), // RFC3339 UTC
-		NotificationURL:    firstNonEmpty(req.CallbackURL, p.notificationURL),
+		NotificationURL:    p.notificationURL,
 	}
 	resp, err := p.client.PushPayment(ctx, pushReq)
 	if err != nil {

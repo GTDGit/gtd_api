@@ -121,7 +121,9 @@ func (p *DanaProviderClient) createOrder(ctx context.Context, method *models.Pay
 		PartnerReferenceNo: partnerRef,
 		Amount:             req.TotalAmount,
 		ValidUpTo:          formatDanaExpiry(req.ExpiredAt),
-		NotificationURL:    firstNonEmpty(req.CallbackURL, p.notificationURL, "https://dev-api.gtd.co.id/v1/webhook/dana"),
+		// Provider notification always goes to OUR webhook endpoint, never the
+		// client's callback URL (the client webhook is delivered separately).
+		NotificationURL: p.notificationURL,
 		// For QRIS (server-to-server) there is no user redirect; pass empty so
 		// pkg/dana will substitute a safe placeholder URL for the mandatory PAY_RETURN field.
 		ReturnURL: func() string {
@@ -230,7 +232,7 @@ func (p *DanaProviderClient) createCPMQRIS(ctx context.Context, method *models.P
 		TerminalID:         p.terminalID,
 		Title:              firstNonEmpty(req.Description, method.Name),
 		ValidityPeriod:     formatDanaExpiry(req.ExpiredAt),
-		NotificationURL:    firstNonEmpty(req.CallbackURL, p.notificationURL, "https://dev-api.gtd.co.id/v1/webhook/dana"),
+		NotificationURL:    p.notificationURL,
 	}
 	resp, err := p.client.CPMPayment(ctx, cpmReq)
 	if err != nil {

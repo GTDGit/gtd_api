@@ -93,8 +93,6 @@ type CreatePaymentRequest struct {
 	CustomerName  string `json:"customerName,omitempty"`
 	CustomerEmail string `json:"customerEmail,omitempty"`
 	CustomerPhone string `json:"customerPhone,omitempty"`
-	CallbackURL   string `json:"callbackUrl,omitempty"`
-	ReturnURL     string `json:"returnUrl,omitempty"`
 }
 
 // resolvePaymentTypeCode resolves the payment type and code from either the
@@ -114,12 +112,12 @@ func (r *CreatePaymentRequest) resolveCustomer() (name, email, phone string) {
 	return r.CustomerName, r.CustomerEmail, r.CustomerPhone
 }
 
-// resolveURL returns callback and return URLs preferring the nested url object.
+// resolveURL returns callback and return URLs from the nested url object.
 func (r *CreatePaymentRequest) resolveURL() (callback, returnURL string) {
 	if r.Url != nil {
 		return r.Url.Callback, r.Url.Return
 	}
-	return r.CallbackURL, r.ReturnURL
+	return "", ""
 }
 
 // validateRequiredFields validates required fields based on payment method type/code.
@@ -169,6 +167,12 @@ type PaymentMethodResponse struct {
 	Code string `json:"code"`
 }
 
+// URLResponse echoes back the callback/return URLs the client supplied.
+type URLResponse struct {
+	Callback string `json:"callback,omitempty"`
+	Return   string `json:"return,omitempty"`
+}
+
 // AmountResponse is the nested amount object in the response.
 type AmountResponse struct {
 	Subtotal int64 `json:"subtotal"` // original amount before fee
@@ -187,6 +191,7 @@ type PaymentResponse struct {
 	PaymentDetail      json.RawMessage        `json:"paymentDetail,omitempty"`
 	PaymentInstruction json.RawMessage        `json:"paymentInstruction,omitempty"`
 	Customer           *CustomerResponse      `json:"customer,omitempty"`
+	URL                *URLResponse           `json:"url,omitempty"`
 	Description        string                 `json:"description,omitempty"`
 	ExpiredAt          string                 `json:"expiredAt"`
 	PaidAt             string                 `json:"paidAt,omitempty"`
@@ -464,6 +469,9 @@ func (s *PaymentService) CreatePayment(ctx context.Context, req *CreatePaymentRe
 	if cb := strings.TrimSpace(callbackURL); cb != "" {
 		payment.CallbackURL = &cb
 	}
+	if rt := strings.TrimSpace(returnURL); rt != "" {
+		payment.ReturnURL = &rt
+	}
 
 	if err := s.createPaymentWithGeneratedID(ctx, payment); err != nil {
 		return nil, err
@@ -494,7 +502,6 @@ func (s *PaymentService) CreatePayment(ctx context.Context, req *CreatePaymentRe
 			CustomerName:  customerName,
 			CustomerEmail: customerEmail,
 			CustomerPhone: customerPhone,
-			CallbackURL:   callbackURL,
 			ReturnURL:     returnURL,
 			ScanData:      req.ScanData,
 		}
@@ -950,6 +957,16 @@ func (s *PaymentService) buildResponse(p *models.Payment) *PaymentResponse {
 	}
 	if p.Description != nil {
 		resp.Description = *p.Description
+	}
+	// Echo back the URLs the client supplied at create time.
+	if p.CallbackURL != nil || p.ReturnURL != nil {
+		resp.URL = &URLResponse{}
+		if p.CallbackURL != nil {
+			resp.URL.Callback = *p.CallbackURL
+		}
+		if p.ReturnURL != nil {
+			resp.URL.Return = *p.ReturnURL
+		}
 	}
 	if p.PaidAt != nil {
 		resp.PaidAt = formatPaymentTime(*p.PaidAt)

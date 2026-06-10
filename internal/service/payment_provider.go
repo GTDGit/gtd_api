@@ -23,7 +23,6 @@ type PaymentCreateRequest struct {
 	CustomerName   string
 	CustomerEmail  string
 	CustomerPhone  string
-	CallbackURL    string
 	ReturnURL      string
 	ScanData       string // CPM QRIS: QR code content scanned from customer's app
 	Metadata       map[string]any

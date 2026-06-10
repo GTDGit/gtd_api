@@ -151,6 +151,7 @@ type Payment struct {
 	ProviderData       NullableRawMessage `db:"provider_data" json:"providerData,omitempty"`
 	CallbackType       *string            `db:"callback_type" json:"callbackType,omitempty"`
 	CallbackURL        *string            `db:"callback_url" json:"callbackUrl,omitempty"`
+	ReturnURL          *string            `db:"return_url" json:"returnUrl,omitempty"`
 	Description        *string            `db:"description" json:"description,omitempty"`
 	Metadata           NullableRawMessage `db:"metadata" json:"metadata,omitempty"`
 	CallbackSent       bool               `db:"callback_sent" json:"callbackSent"`

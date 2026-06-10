@@ -50,6 +50,8 @@ func (p *PakailinkProviderClient) CreatePayment(ctx context.Context, method *mod
 		return p.createQRIS(ctx, method, req)
 	case models.PaymentTypeEwallet:
 		return p.createEmoney(ctx, method, req)
+	case models.PaymentTypeRetail:
+		return p.createRetail(ctx, method, req)
 	default:
 		return nil, newPaymentError(400, "UNSUPPORTED_PAYMENT_TYPE", "Pakailink does not support this payment type", nil)
 	}
@@ -177,6 +179,44 @@ func (p *PakailinkProviderClient) createEmoney(ctx context.Context, method *mode
 	}, nil
 }
 
+func (p *PakailinkProviderClient) createRetail(ctx context.Context, method *models.PaymentMethod, req *PaymentCreateRequest) (*PaymentCreateResponse, error) {
+	// partnerReferenceNo max 40 chars per Pakailink retail docs
+	refNo := req.PartnerRef
+	if len(refNo) > 40 {
+		refNo = refNo[:40]
+	}
+	productCode := strings.ToUpper(strings.TrimSpace(method.Code))
+	retailReq := pakailink.RetailRequest{
+		PartnerReferenceNo: refNo,
+		CustomerID:         refNo,
+		CustomerName:       firstNonEmpty(req.CustomerName, req.ClientName, "Customer"),
+		CustomerPhone:      req.CustomerPhone,
+		CustomerEmail:      req.CustomerEmail,
+		TotalAmount:        req.TotalAmount,
+		ProductCode:        productCode,
+		Remark:             req.Description,
+		CallbackURL:        firstNonEmpty(req.CallbackURL, p.callbackURL),
+		ExpiredDate:        formatPakailinkExpiry(req.ExpiredAt),
+	}
+	resp, err := p.client.CreateRetail(ctx, retailReq)
+	if err != nil {
+		return nil, mapPakailinkError(err)
+	}
+	retailName := method.Name
+	if retailName == "" {
+		retailName = productCode
+	}
+	norm := PaymentDetailNormalized{
+		RetailName:  retailName,
+		PaymentCode: resp.PaymentData.PaymentCode,
+	}
+	return &PaymentCreateResponse{
+		ProviderRef: firstNonEmpty(resp.PaymentData.ReferenceNo, resp.PaymentData.PartnerReferenceNo),
+		Normalized:  norm,
+		RawResponse: resp.RawResponse,
+	}, nil
+}
+
 // pakailinkEmoneyProductCode maps our internal ewallet code to Pakailink's productCode.
 // Pakailink uses PAY-prefixed codes; our DB stores the plain wallet name. The mapping is
 // wire-only — it never changes the canonical code stored on / returned by the payment.
@@ -230,6 +270,19 @@ func (p *PakailinkProviderClient) InquiryPayment(ctx context.Context, payment *m
 		}, nil
 	case models.PaymentTypeEwallet:
 		resp, err := p.client.InquiryEmoney(ctx, payment.PaymentID)
+		if err != nil {
+			return nil, mapPakailinkError(err)
+		}
+		status := mapPakailinkTransactionStatus(resp.LatestTransactionStatus)
+		amount, _ := pakailink.ParseWebhookAmount(resp.Amount)
+		return &PaymentInquiryResult{
+			Status:      status,
+			ProviderRef: firstNonEmpty(resp.OriginalReferenceNo, resp.OriginalPartnerReferenceNo),
+			PaidAmount:  amount,
+			RawResponse: resp.RawResponse,
+		}, nil
+	case models.PaymentTypeRetail:
+		resp, err := p.client.InquiryRetail(ctx, payment.PaymentID)
 		if err != nil {
 			return nil, mapPakailinkError(err)
 		}

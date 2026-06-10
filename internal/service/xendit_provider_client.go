@@ -64,9 +64,15 @@ func (p *XenditProviderClient) createRetail(ctx context.Context, method *models.
 	if retailName == "" {
 		retailName = channel
 	}
+	// Xendit returns the OTC payment code in actions[] with
+	// descriptor=PAYMENT_CODE, not in channel_properties.payment_code.
+	paymentCode := resp.ChannelProperties.PaymentCode
+	if paymentCode == "" {
+		paymentCode = extractXenditPaymentCode(resp.Actions)
+	}
 	norm := PaymentDetailNormalized{
 		RetailName:  retailName,
-		PaymentCode: resp.ChannelProperties.PaymentCode,
+		PaymentCode: paymentCode,
 	}
 	return &PaymentCreateResponse{
 		ProviderRef: resp.PaymentRequestID,
@@ -187,6 +193,23 @@ func xenditEwalletChannelCode(code string) string {
 		// GOPAY and any unknown code: not supported by Xendit → force fallback.
 		return ""
 	}
+}
+
+// extractXenditPaymentCode pulls the OTC payment code from Xendit's actions
+// array. Xendit returns: actions:[{"descriptor":"PAYMENT_CODE","type":"PRESENT_TO_CUSTOMER","value":"PTGSX2DABN4379"}]
+func extractXenditPaymentCode(actions []any) string {
+	for _, a := range actions {
+		m, ok := a.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		descriptor, _ := m["descriptor"].(string)
+		val, _ := m["value"].(string)
+		if strings.EqualFold(descriptor, "PAYMENT_CODE") && val != "" {
+			return val
+		}
+	}
+	return ""
 }
 
 // extractXenditQRString pulls the QR string from Xendit's actions array.

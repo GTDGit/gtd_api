@@ -25,6 +25,8 @@ const (
 	InquiryQRPath    = "/snap/v1.0/qr/qr-mpm-status"
 	CreateEmoneyPath = "/snap/v1.0/payment/emoney"
 	InquiryEmoneyPath = "/snap/v1.0/payment/emoney-status"
+	CreateRetailPath  = "/snap/v1.0/payment/modern-retail"
+	InquiryRetailPath = "/snap/v1.0/payment/modern-retail/status"
 
 	DefaultChannelID = "95221"
 
@@ -285,6 +287,57 @@ func (c *Client) InquiryEmoney(ctx context.Context, partnerReferenceNo string) (
 	body := map[string]any{"originalPartnerReferenceNo": partnerReferenceNo}
 	var resp InquiryEmoneyResponse
 	raw, err := c.doSNAPRequest(ctx, http.MethodPost, InquiryEmoneyPath, body, &resp)
+	if err != nil {
+		return nil, err
+	}
+	resp.RawResponse = raw
+	return &resp, nil
+}
+
+// CreateRetail initiates a Pakailink modern-retail payment (Alfamart/Indomaret).
+func (c *Client) CreateRetail(ctx context.Context, req RetailRequest) (*RetailResponse, error) {
+	additionalInfo := map[string]any{
+		"productCode": req.ProductCode,
+	}
+	if req.Remark != "" {
+		additionalInfo["remark"] = req.Remark
+	}
+	if req.CallbackURL != "" {
+		additionalInfo["callbackUrl"] = req.CallbackURL
+	}
+	body := map[string]any{
+		"partnerReferenceNo": req.PartnerReferenceNo,
+		"customerId":         req.CustomerID,
+		"customerName":       req.CustomerName,
+		"totalAmount": Amount{
+			Value:    formatAmount(req.TotalAmount),
+			Currency: "IDR",
+		},
+		"additionalInfo": additionalInfo,
+	}
+	if req.CustomerPhone != "" {
+		body["customerPhone"] = req.CustomerPhone
+	}
+	if req.CustomerEmail != "" {
+		body["customerEmail"] = req.CustomerEmail
+	}
+	if req.ExpiredDate != "" {
+		body["expiredDate"] = req.ExpiredDate
+	}
+	var resp RetailResponse
+	raw, err := c.doSNAPRequest(ctx, http.MethodPost, CreateRetailPath, body, &resp)
+	if err != nil {
+		return nil, err
+	}
+	resp.RawResponse = raw
+	return &resp, nil
+}
+
+// InquiryRetail queries the status of a Pakailink modern-retail transaction.
+func (c *Client) InquiryRetail(ctx context.Context, partnerReferenceNo string) (*InquiryRetailResponse, error) {
+	body := map[string]any{"originalPartnerReferenceNo": partnerReferenceNo}
+	var resp InquiryRetailResponse
+	raw, err := c.doSNAPRequest(ctx, http.MethodPost, InquiryRetailPath, body, &resp)
 	if err != nil {
 		return nil, err
 	}

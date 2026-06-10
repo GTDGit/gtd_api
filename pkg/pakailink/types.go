@@ -180,6 +180,52 @@ type InquiryEmoneyResponse struct {
 	RawResponse                json.RawMessage `json:"-"`
 }
 
+// RetailRequest is the input for Pakailink modern-retail payment (Service 31).
+type RetailRequest struct {
+	PartnerReferenceNo string
+	CustomerID         string
+	CustomerName       string
+	CustomerPhone      string
+	CustomerEmail      string
+	TotalAmount        int64
+	ProductCode        string // ALFAMART, INDOMARET
+	Remark             string
+	CallbackURL        string
+	ExpiredDate        string // ISO 8601 +07:00 optional
+}
+
+type RetailResponse struct {
+	ResponseCode    string          `json:"responseCode"`
+	ResponseMessage string          `json:"responseMessage"`
+	PaymentData     RetailData      `json:"paymentData"`
+	RawResponse     json.RawMessage `json:"-"`
+}
+
+type RetailData struct {
+	PartnerReferenceNo string         `json:"partnerReferenceNo,omitempty"`
+	ReferenceNo        string         `json:"referenceNo,omitempty"`
+	PaymentCode        string         `json:"paymentCode,omitempty"`
+	ProductCode        string         `json:"productCode,omitempty"`
+	CustomerName       string         `json:"customerName,omitempty"`
+	TotalAmount        Amount         `json:"totalAmount,omitempty"`
+	ExpiredDate        string         `json:"expiredDate,omitempty"`
+	AdditionalInfo     map[string]any `json:"additionalInfo,omitempty"`
+}
+
+type InquiryRetailResponse struct {
+	ResponseCode               string          `json:"responseCode"`
+	ResponseMessage            string          `json:"responseMessage"`
+	OriginalPartnerReferenceNo string          `json:"originalPartnerReferenceNo"`
+	OriginalReferenceNo        string          `json:"originalReferenceNo,omitempty"`
+	ServiceCode                string          `json:"serviceCode,omitempty"`
+	TransactionDate            string          `json:"transactionDate,omitempty"`
+	LatestTransactionStatus    string          `json:"latestTransactionStatus"`
+	TransactionStatusDesc      string          `json:"transactionStatusDesc,omitempty"`
+	Amount                     Amount          `json:"amount,omitempty"`
+	AdditionalInfo             map[string]any  `json:"additionalInfo,omitempty"`
+	RawResponse                json.RawMessage `json:"-"`
+}
+
 // WebhookPayload is the combined shape covering VA payment + QRIS MPM notifications.
 // VA callbacks wrap fields in transactionData; QRIS callbacks send fields flat at the root.
 type WebhookPayload struct {

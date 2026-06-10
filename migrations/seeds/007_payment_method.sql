@@ -123,11 +123,11 @@ INSERT INTO payment_methods (type, code, name, provider, fee_type, fee_flat, fee
 -- Retail
 ('RETAIL', 'INDOMARET', 'Indomaret', 'xendit', 'flat', 5000, 0, 10000, 5000000, 86400, 16, true,
 '{
-  "steps": ["Kunjungi gerai Indomaret terdekat", "Sampaikan untuk pembayaran Xendit", "Berikan kode pembayaran", "Bayar sesuai nominal", "Simpan struk sebagai bukti"]
+  "steps": ["Kunjungi gerai Indomaret terdekat", "Sampaikan ke kasir ingin bayar tagihan", "Berikan kode pembayaran", "Bayar sesuai nominal", "Simpan struk sebagai bukti"]
 }'::jsonb),
 
 ('RETAIL', 'ALFAMART', 'Alfamart', 'xendit', 'flat', 5000, 0, 10000, 5000000, 86400, 17, true,
 '{
-  "steps": ["Kunjungi gerai Alfamart terdekat", "Sampaikan untuk pembayaran Xendit", "Berikan kode pembayaran", "Bayar sesuai nominal", "Simpan struk sebagai bukti"]
+  "steps": ["Kunjungi gerai Alfamart terdekat", "Sampaikan ke kasir ingin bayar tagihan", "Berikan kode pembayaran", "Bayar sesuai nominal", "Simpan struk sebagai bukti"]
 }'::jsonb)
 ON CONFLICT (type, code) DO NOTHING;

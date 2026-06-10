@@ -130,7 +130,8 @@ func (p *XenditProviderClient) createEwallet(ctx context.Context, method *models
 		return nil, newPaymentError(400, "MISSING_FIELD", "customer.phone is required for OVO payments", nil)
 	}
 	if phone != "" {
-		props.AccountMobileNumber = phone
+		// Xendit account_mobile_number requires E.164 with leading "+": ^\+[0-9]\d{1,14}$
+		props.AccountMobileNumber = "+" + phone
 	}
 	if req.ReturnURL != "" {
 		props.SuccessReturnURL = req.ReturnURL

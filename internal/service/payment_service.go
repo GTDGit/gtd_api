@@ -2,7 +2,9 @@ package service
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -469,7 +471,7 @@ func (s *PaymentService) CreatePayment(ctx context.Context, req *CreatePaymentRe
 			Type:          method.Type,
 			Code:          method.Code,
 			BankCode:      bankCode,
-			PartnerRef:    payment.PaymentID,
+			PartnerRef:    payment.PartnerRef,
 			Amount:        req.Amount,
 			Fee:           fee,
 			TotalAmount:   totalAmount,
@@ -744,13 +746,23 @@ func (s *PaymentService) ExpirePendingPayments(ctx context.Context, limit int) e
 // If inquiry fails (provider unreachable), we fall back to the webhook status so
 // payments are not silently dropped.
 func (s *PaymentService) ApplyWebhook(ctx context.Context, provider models.PaymentProvider, partnerRef string, event PaymentWebhookEvent) error {
-	p, err := s.paymentRepo.GetByPaymentID(ctx, partnerRef)
+	// Providers echo our partnerReferenceNo (== partner_ref) on notifications.
+	// Resolve by partner_ref first; fall back to payment_id (legacy rows created
+	// before partner_ref existed) and finally provider_ref.
+	p, err := s.paymentRepo.GetByPartnerRef(ctx, partnerRef)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			// Try lookup by provider_ref as some providers echo their own id.
-			p, err = s.paymentRepo.GetByProviderRef(ctx, provider, partnerRef)
+			p, err = s.paymentRepo.GetByPaymentID(ctx, partnerRef)
 			if err != nil {
-				return err
+				if errors.Is(err, sql.ErrNoRows) {
+					// Try lookup by provider_ref as some providers echo their own id.
+					p, err = s.paymentRepo.GetByProviderRef(ctx, provider, partnerRef)
+					if err != nil {
+						return err
+					}
+				} else {
+					return err
+				}
 			}
 		} else {
 			return err
@@ -844,6 +856,7 @@ func createWithGeneratedID(p *models.Payment, insert func(*models.Payment) error
 	var lastErr error
 	for i := 0; i < 5; i++ {
 		p.PaymentID = newPaymentPublicID("")
+		p.PartnerRef = newPartnerRef()
 		lastErr = insert(p)
 		if lastErr == nil {
 			return nil
@@ -1110,6 +1123,21 @@ func formatPaymentTime(t time.Time) string {
 
 func newPaymentPublicID(_ string) string {
 	return uuid.New().String()
+}
+
+// newPartnerRef returns the reference we send to upstream providers. It is kept
+// at 24 chars (<=25) because several providers (e.g. DANA QRIS) cap
+// partnerReferenceNo at 25 characters; using one short, stable value for both
+// create and inquiry avoids reference-length mismatches. 12 random bytes give
+// 96 bits of entropy, so collisions are not a practical concern; the unique
+// index on partner_ref plus the insert retry loop guard the remaining edge.
+func newPartnerRef() string {
+	var b [12]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		// Fall back to a UUID-derived value (still unique); truncated to 24 chars.
+		return strings.ReplaceAll(uuid.New().String(), "-", "")[:24]
+	}
+	return hex.EncodeToString(b[:])
 }
 
 func computeTotal(subtotal, fee int64, feePaidBy models.FeePaidBy) int64 {

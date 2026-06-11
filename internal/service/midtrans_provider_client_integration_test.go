@@ -252,8 +252,8 @@ func TestMidtransInquiryHitsStatusEndpoint(t *testing.T) {
 			adapter := NewMidtransProviderClient(mtTestClient(t, srv.URL), "")
 
 			payment := &models.Payment{
-				PaymentID: orderID,
-				Amount:    50000,
+				PartnerRef: orderID,
+				Amount:     50000,
 			}
 
 			result, err := adapter.InquiryPayment(context.Background(), payment)
@@ -294,7 +294,7 @@ func TestMidtransCancelHitsCancelEndpoint(t *testing.T) {
 
 	adapter := NewMidtransProviderClient(mtTestClient(t, srv.URL), "")
 
-	payment := &models.Payment{PaymentID: orderID}
+	payment := &models.Payment{PartnerRef: orderID}
 
 	result, err := adapter.CancelPayment(context.Background(), payment, "Customer cancellation")
 	if err != nil {

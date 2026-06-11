@@ -86,7 +86,7 @@ func (p *OVOProviderClient) InquiryPayment(ctx context.Context, payment *models.
 		return nil, newPaymentError(503, "PROVIDER_UNAVAILABLE", "OVO Direct is not configured", nil)
 	}
 	statusReq := ovo.StatusRequest{
-		PartnerReferenceNo: payment.PaymentID,
+		PartnerReferenceNo: payment.PartnerRef,
 	}
 	if payment.ProviderRef != nil {
 		statusReq.ReferenceNo = *payment.ProviderRef
@@ -113,7 +113,7 @@ func (p *OVOProviderClient) CancelPayment(ctx context.Context, payment *models.P
 		return &PaymentCancelResult{Cancelled: true}, nil
 	}
 	voidReq := ovo.VoidRequest{
-		PartnerReferenceNo: payment.PaymentID,
+		PartnerReferenceNo: payment.PartnerRef,
 		Reason:             firstNonEmpty(reason, "Customer cancellation"),
 	}
 	if payment.ProviderRef != nil {

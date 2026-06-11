@@ -168,7 +168,7 @@ func midtransExpirySeconds(t time.Time) int {
 }
 
 func (p *MidtransProviderClient) InquiryPayment(ctx context.Context, payment *models.Payment) (*PaymentInquiryResult, error) {
-	resp, err := p.client.Status(ctx, payment.PaymentID)
+	resp, err := p.client.Status(ctx, payment.PartnerRef)
 	if err != nil {
 		return nil, mapMidtransError(err)
 	}
@@ -181,7 +181,7 @@ func (p *MidtransProviderClient) InquiryPayment(ctx context.Context, payment *mo
 }
 
 func (p *MidtransProviderClient) CancelPayment(ctx context.Context, payment *models.Payment, reason string) (*PaymentCancelResult, error) {
-	resp, err := p.client.Cancel(ctx, payment.PaymentID)
+	resp, err := p.client.Cancel(ctx, payment.PartnerRef)
 	if err != nil {
 		return nil, mapMidtransError(err)
 	}

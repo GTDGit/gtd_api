@@ -249,7 +249,7 @@ func pakailinkEmoneyProductCode(code string) (string, error) {
 func (p *PakailinkProviderClient) InquiryPayment(ctx context.Context, payment *models.Payment) (*PaymentInquiryResult, error) {
 	switch payment.PaymentType {
 	case models.PaymentTypeVA:
-		resp, err := p.client.InquiryVA(ctx, payment.PaymentID)
+		resp, err := p.client.InquiryVA(ctx, payment.PartnerRef)
 		if err != nil {
 			return nil, mapPakailinkError(err)
 		}
@@ -262,7 +262,7 @@ func (p *PakailinkProviderClient) InquiryPayment(ctx context.Context, payment *m
 			RawResponse: resp.RawResponse,
 		}, nil
 	case models.PaymentTypeQRIS:
-		resp, err := p.client.InquiryQR(ctx, payment.PaymentID)
+		resp, err := p.client.InquiryQR(ctx, payment.PartnerRef)
 		if err != nil {
 			return nil, mapPakailinkError(err)
 		}
@@ -275,7 +275,7 @@ func (p *PakailinkProviderClient) InquiryPayment(ctx context.Context, payment *m
 			RawResponse: resp.RawResponse,
 		}, nil
 	case models.PaymentTypeEwallet:
-		resp, err := p.client.InquiryEmoney(ctx, payment.PaymentID)
+		resp, err := p.client.InquiryEmoney(ctx, payment.PartnerRef)
 		if err != nil {
 			return nil, mapPakailinkError(err)
 		}
@@ -288,7 +288,7 @@ func (p *PakailinkProviderClient) InquiryPayment(ctx context.Context, payment *m
 			RawResponse: resp.RawResponse,
 		}, nil
 	case models.PaymentTypeRetail:
-		resp, err := p.client.InquiryRetail(ctx, payment.PaymentID)
+		resp, err := p.client.InquiryRetail(ctx, payment.PartnerRef)
 		if err != nil {
 			return nil, mapPakailinkError(err)
 		}
@@ -314,8 +314,8 @@ func (p *PakailinkProviderClient) CancelPayment(ctx context.Context, payment *mo
 		return &PaymentCancelResult{Cancelled: true}, nil
 	}
 	req := pakailink.DeleteVARequest{
-		PartnerReferenceNo: payment.PaymentID,
-		CustomerNo:         payment.PaymentID,
+		PartnerReferenceNo: payment.PartnerRef,
+		CustomerNo:         payment.PartnerRef,
 		VirtualAccountNo:   norm.VANumber,
 	}
 	resp, err := p.client.DeleteVA(ctx, req)

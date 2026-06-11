@@ -170,7 +170,7 @@ func (p *DanaProviderClient) createOrder(ctx context.Context, method *models.Pay
 func (p *DanaProviderClient) InquiryPayment(ctx context.Context, payment *models.Payment) (*PaymentInquiryResult, error) {
 	// CPM uses a different inquiry endpoint (serviceCode=60, /rest/v1.1/debit/status)
 	if payment.PaymentCode == "CPM" {
-		resp, err := p.client.InquiryCPMOrder(ctx, payment.PaymentID)
+		resp, err := p.client.InquiryCPMOrder(ctx, payment.PartnerRef)
 		if err != nil {
 			return nil, mapDanaError(err)
 		}
@@ -184,7 +184,7 @@ func (p *DanaProviderClient) InquiryPayment(ctx context.Context, payment *models
 		}, nil
 	}
 	// MPM / e-wallet uses Gapura PG status endpoint (serviceCode=55)
-	resp, err := p.client.InquiryOrder(ctx, payment.PaymentID)
+	resp, err := p.client.InquiryOrder(ctx, payment.PartnerRef)
 	if err != nil {
 		return nil, mapDanaError(err)
 	}
@@ -200,7 +200,7 @@ func (p *DanaProviderClient) InquiryPayment(ctx context.Context, payment *models
 
 func (p *DanaProviderClient) CancelPayment(ctx context.Context, payment *models.Payment, reason string) (*PaymentCancelResult, error) {
 	req := dana.CancelOrderRequest{
-		PartnerReferenceNo: payment.PaymentID,
+		PartnerReferenceNo: payment.PartnerRef,
 		Reason:             firstNonEmpty(reason, "Customer cancellation"),
 	}
 	resp, err := p.client.CancelOrder(ctx, req)

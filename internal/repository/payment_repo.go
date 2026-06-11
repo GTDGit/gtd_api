@@ -31,7 +31,7 @@ func nullablePaymentJSON(v models.NullableRawMessage) any {
 // Payment CRUD
 // ----------------------------------------------------------------------------
 
-const paymentColumns = `id, payment_id, reference_id, client_id, payment_method_id, is_sandbox,
+const paymentColumns = `id, payment_id, reference_id, partner_ref, client_id, payment_method_id, is_sandbox,
     payment_type, payment_code, provider, amount, fee, total_amount, fee_paid_by,
     customer_name, customer_email, customer_phone, status,
     payment_detail, payment_instruction, sender_bank, sender_name, sender_account,
@@ -41,20 +41,20 @@ const paymentColumns = `id, payment_id, reference_id, client_id, payment_method_
 
 func (r *PaymentRepository) CreatePayment(ctx context.Context, p *models.Payment) error {
 	const q = `INSERT INTO payments (
-        payment_id, reference_id, client_id, payment_method_id, is_sandbox,
+        payment_id, reference_id, partner_ref, client_id, payment_method_id, is_sandbox,
         payment_type, payment_code, provider, amount, fee, total_amount, fee_paid_by,
         customer_name, customer_email, customer_phone, status,
         payment_detail, payment_instruction, sender_bank, sender_name, sender_account,
         provider_ref, provider_data, callback_type, callback_url, return_url, description, metadata,
         callback_sent, callback_sent_at, callback_attempts, expired_at
     ) VALUES (
-        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
-        $13, $14, $15, $16, $17, $18, $19, $20, $21,
-        $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+        $14, $15, $16, $17, $18, $19, $20, $21, $22,
+        $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33
     ) RETURNING id, created_at, updated_at`
 
 	return r.db.QueryRowContext(ctx, q,
-		p.PaymentID, p.ReferenceID, p.ClientID, p.PaymentMethodID, p.IsSandbox,
+		p.PaymentID, p.ReferenceID, p.PartnerRef, p.ClientID, p.PaymentMethodID, p.IsSandbox,
 		p.PaymentType, p.PaymentCode, p.Provider, p.Amount, p.Fee, p.TotalAmount, p.FeePaidBy,
 		p.CustomerName, p.CustomerEmail, p.CustomerPhone, p.Status,
 		nullablePaymentJSON(p.PaymentDetail), nullablePaymentJSON(p.PaymentInstruction),
@@ -120,6 +120,12 @@ func (r *PaymentRepository) GetPaymentByID(ctx context.Context, id int) (*models
 
 func (r *PaymentRepository) GetByPaymentID(ctx context.Context, paymentID string) (*models.Payment, error) {
 	return r.selectPayment(ctx, "payment_id = $1", paymentID)
+}
+
+// GetByPartnerRef looks up a payment by the reference we sent to the provider.
+// Provider webhooks echo this value back as partnerReferenceNo/originalPartnerReferenceNo.
+func (r *PaymentRepository) GetByPartnerRef(ctx context.Context, partnerRef string) (*models.Payment, error) {
+	return r.selectPayment(ctx, "partner_ref = $1", partnerRef)
 }
 
 func (r *PaymentRepository) GetByReferenceID(ctx context.Context, clientID int, referenceID string) (*models.Payment, error) {

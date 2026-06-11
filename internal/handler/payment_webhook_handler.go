@@ -238,6 +238,9 @@ type xenditWebhookPayload struct {
 	ExternalID               string `json:"external_id"`
 	CallbackVirtualAccountID string `json:"callback_virtual_account_id"`
 	Amount                   int64  `json:"amount"`
+	// VA account lifecycle notification (creation/activation) carries the VA
+	// account_number but no payment/callback identifiers.
+	AccountNumber string `json:"account_number"`
 }
 
 type xenditEventData struct {
@@ -270,13 +273,14 @@ func (h *PaymentWebhookHandler) HandleXendit(c *gin.Context) {
 		return
 	}
 
-	// VA lifecycle notification (CALLBACK_VIRTUAL_ACCOUNT_STATUS): Xendit announces
-	// that a virtual account was created/activated — it carries no payment_id,
-	// reference_id, or callback_virtual_account_id and means no money has moved.
-	// There is nothing to apply, so ACK to stop retries (mirrors the ACK-only
-	// Pakailink settlement path). The actual paid event arrives separately as
-	// CALLBACK_VIRTUAL_ACCOUNT.
-	if p.EventType == "CALLBACK_VIRTUAL_ACCOUNT_STATUS" {
+	// VA lifecycle notification: Xendit announces that a virtual account was
+	// created/activated — it carries the VA account_number but no payment_id,
+	// reference_id, or callback_virtual_account_id, so no money has moved. There
+	// is nothing to apply, so ACK to stop retries (mirrors the ACK-only Pakailink
+	// settlement path). The actual paid event arrives separately and carries
+	// callback_virtual_account_id (handled below).
+	if p.AccountNumber != "" && p.CallbackVirtualAccountID == "" &&
+		p.EventType == "" && p.Data.Status == "" {
 		_ = h.paymentRepo.UpdatePaymentCallbackProcessed(c.Request.Context(), cb.ID, true, nil)
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 		return

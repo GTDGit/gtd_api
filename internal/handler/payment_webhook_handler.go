@@ -270,6 +270,18 @@ func (h *PaymentWebhookHandler) HandleXendit(c *gin.Context) {
 		return
 	}
 
+	// VA lifecycle notification (CALLBACK_VIRTUAL_ACCOUNT_STATUS): Xendit announces
+	// that a virtual account was created/activated — it carries no payment_id,
+	// reference_id, or callback_virtual_account_id and means no money has moved.
+	// There is nothing to apply, so ACK to stop retries (mirrors the ACK-only
+	// Pakailink settlement path). The actual paid event arrives separately as
+	// CALLBACK_VIRTUAL_ACCOUNT.
+	if p.EventType == "CALLBACK_VIRTUAL_ACCOUNT_STATUS" {
+		_ = h.paymentRepo.UpdatePaymentCallbackProcessed(c.Request.Context(), cb.ID, true, nil)
+		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+		return
+	}
+
 	// Legacy Fixed-VA paid notification: identified by callback_virtual_account_id
 	// with no v3 event/status. The payload's arrival means the VA was paid; it is
 	// keyed by external_id == our PaymentID.

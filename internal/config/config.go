@@ -457,7 +457,7 @@ func Load() (*Config, error) {
 			BaseURL:      getEnv("XENDIT_BASE_URL", ""),
 			APIKey:       getEnv("XENDIT_API_KEY", ""),
 			APIVersion:   getEnv("XENDIT_API_VERSION", "2024-11-11"),
-			WebhookToken: getEnv("XENDIT_WEBHOOK_TOKEN", ""),
+			WebhookToken: getEnv("XENDIT_CALLBACK_TOKEN", ""),
 			CallbackURL:  getEnv("XENDIT_CALLBACK_URL", ""),
 		},
 		OVO: OVOConfig{

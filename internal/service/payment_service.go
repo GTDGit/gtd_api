@@ -221,6 +221,7 @@ type MethodEntry struct {
 type PaymentService struct {
 	paymentRepo *repository.PaymentRepository
 	clientRepo  *repository.ClientRepository
+	reconRepo   *repository.ReconciliationRepository
 	router      *PaymentProviderRouter
 	selector    *ProviderSelector
 	callbackSvc *PaymentCallbackService
@@ -230,12 +231,14 @@ type PaymentService struct {
 func NewPaymentService(
 	paymentRepo *repository.PaymentRepository,
 	clientRepo *repository.ClientRepository,
+	reconRepo *repository.ReconciliationRepository,
 	router *PaymentProviderRouter,
 	callbackSvc *PaymentCallbackService,
 ) *PaymentService {
 	return &PaymentService{
 		paymentRepo: paymentRepo,
 		clientRepo:  clientRepo,
+		reconRepo:   reconRepo,
 		router:      router,
 		selector:    NewProviderSelector(paymentRepo, router),
 		callbackSvc: callbackSvc,
@@ -782,27 +785,69 @@ func (s *PaymentService) ApplyWebhook(ctx context.Context, provider models.Payme
 		p.ProviderRef = &v
 	}
 
-	// Validate via provider status API (authoritative source of truth).
-	// On success use the inquiry result; on any error fall back to webhook payload status.
+	// Validate against the provider's status API — the authoritative source of
+	// truth. SNAP webhooks (Pakailink/DANA) cannot be signature-verified with
+	// keys we hold, so we never trust the webhook body: we re-query the provider
+	// and act only on what it confirms.
+	providerClient, routeErr := s.router.Get(p.Provider)
+	if routeErr != nil {
+		// No adapter to verify with — cannot validate. Record the webhook payload
+		// for audit, leave status untouched, and let PaymentStatusWorker retry.
+		log.Warn().Err(routeErr).
+			Str("provider", string(p.Provider)).
+			Str("paymentId", p.PaymentID).
+			Msg("payment webhook: no provider client to verify, holding for worker retry")
+		return s.paymentRepo.UpdatePayment(ctx, p)
+	}
+
+	result, inquiryErr := providerClient.InquiryPayment(ctx, p)
+	if inquiryErr != nil || result == nil {
+		// Inquiry failed (provider down/timeout): we cannot validate the webhook
+		// claim. Do not transition, do not forward to client, do not open a
+		// reconciliation — the worker re-inquires on its interval and will apply
+		// the real status once the provider is reachable.
+		log.Warn().Err(inquiryErr).
+			Str("provider", string(p.Provider)).
+			Str("paymentId", p.PaymentID).
+			Msg("payment webhook: inquiry validation failed, holding for worker retry")
+		return s.paymentRepo.UpdatePayment(ctx, p)
+	}
+
+	if result.ProviderRef != "" {
+		v := result.ProviderRef
+		p.ProviderRef = &v
+	}
+	if len(result.RawResponse) > 0 {
+		p.ProviderData = mergeProviderData(p.ProviderData, "inquiry", result.RawResponse)
+	}
+
+	// When the inquiry is conclusive (status non-empty), the webhook claim must
+	// agree with it on both status and paid amount. Disagreement freezes the
+	// payment into reconciliation instead of being applied silently.
 	confirmedStatus := event.Status
-	if providerClient, routeErr := s.router.Get(p.Provider); routeErr == nil {
-		if result, inquiryErr := providerClient.InquiryPayment(ctx, p); inquiryErr == nil && result != nil {
-			if result.Status != "" {
-				confirmedStatus = result.Status
+	if result.Status != "" {
+		statusMatch := event.Status == result.Status
+		// 0 means that side did not report an amount — don't force a mismatch on it.
+		amountMatch := event.PaidAmount == 0 || result.PaidAmount == 0 || event.PaidAmount == result.PaidAmount
+		if !statusMatch || !amountMatch {
+			s.openReconciliation(ctx, p, event, result, statusMatch, amountMatch)
+			// Persist the audit trail (webhook + inquiry payloads merged) but keep
+			// status unchanged and send nothing to the client. Return nil so the
+			// provider is ACKed and does not retry; resolution is manual or via worker.
+			if err := s.paymentRepo.UpdatePayment(ctx, p); err != nil {
+				return err
 			}
-			if result.ProviderRef != "" {
-				v := result.ProviderRef
-				p.ProviderRef = &v
-			}
-			if len(result.RawResponse) > 0 {
-				p.ProviderData = mergeProviderData(p.ProviderData, "inquiry", result.RawResponse)
-			}
-		} else if inquiryErr != nil {
-			log.Warn().Err(inquiryErr).
+			log.Warn().
 				Str("provider", string(p.Provider)).
 				Str("paymentId", p.PaymentID).
-				Msg("payment webhook: inquiry validation failed, falling back to webhook status")
+				Str("webhookStatus", string(event.Status)).
+				Str("inquiryStatus", string(result.Status)).
+				Bool("statusMatch", statusMatch).
+				Bool("amountMatch", amountMatch).
+				Msg("payment webhook: provider disagrees with webhook, held for reconciliation")
+			return nil
 		}
+		confirmedStatus = result.Status
 	}
 
 	prevStatus := p.Status
@@ -818,6 +863,14 @@ func (s *PaymentService) ApplyWebhook(ctx context.Context, provider models.Payme
 	if err := s.paymentRepo.UpdatePayment(ctx, p); err != nil {
 		return err
 	}
+
+	// Webhook and inquiry agree: clear any open reconciliation for this payment.
+	if s.reconRepo != nil {
+		if _, err := s.reconRepo.ResolveOpenByPaymentID(ctx, p.PaymentID, string(p.Status), models.ReconResolverWebhook, "webhook and inquiry agree"); err != nil {
+			log.Warn().Err(err).Str("paymentId", p.PaymentID).Msg("payment webhook: resolve open reconciliation")
+		}
+	}
+
 	if prevStatus == p.Status {
 		return nil
 	}
@@ -828,6 +881,49 @@ func (s *PaymentService) ApplyWebhook(ctx context.Context, provider models.Payme
 	go s.EnqueueCallback(context.Background(), p, eventName)
 	return nil
 }
+
+// openReconciliation records (or refreshes) an open reconciliation row when a
+// webhook claim disagrees with the provider inquiry. It never transitions the
+// payment or contacts the client — that is the caller's decision.
+func (s *PaymentService) openReconciliation(ctx context.Context, p *models.Payment, event PaymentWebhookEvent, result *PaymentInquiryResult, statusMatch, amountMatch bool) {
+	if s.reconRepo == nil {
+		return
+	}
+	reason := models.ReconReasonStatusAmountMismatch
+	switch {
+	case statusMatch:
+		reason = models.ReconReasonAmountMismatch
+	case amountMatch:
+		reason = models.ReconReasonStatusMismatch
+	}
+	rec := &models.PaymentReconciliation{
+		PaymentID:      p.PaymentID,
+		Provider:       p.Provider,
+		Reason:         reason,
+		WebhookStatus:  reconStrPtr(string(event.Status)),
+		InquiryStatus:  reconStrPtr(string(result.Status)),
+		ExpectedAmount: reconInt64Ptr(p.TotalAmount),
+	}
+	if event.PaidAmount != 0 {
+		rec.WebhookAmount = reconInt64Ptr(event.PaidAmount)
+	}
+	if result.PaidAmount != 0 {
+		rec.InquiryAmount = reconInt64Ptr(result.PaidAmount)
+	}
+	if len(event.RawPayload) > 0 {
+		rec.WebhookPayload = models.NullableRawMessage(event.RawPayload)
+	}
+	if len(result.RawResponse) > 0 {
+		rec.InquiryPayload = models.NullableRawMessage(result.RawResponse)
+	}
+	if err := s.reconRepo.UpsertOpen(ctx, rec); err != nil {
+		log.Error().Err(err).Str("paymentId", p.PaymentID).Msg("payment webhook: open reconciliation")
+	}
+}
+
+func reconStrPtr(v string) *string { return &v }
+
+func reconInt64Ptr(v int64) *int64 { return &v }
 
 // PaymentWebhookEvent carries the normalized webhook outcome for ApplyWebhook.
 type PaymentWebhookEvent struct {
@@ -918,6 +1014,14 @@ func (s *PaymentService) refreshStatus(ctx context.Context, p *models.Payment) (
 		}
 		if err := s.paymentRepo.UpdatePayment(ctx, p); err != nil {
 			return p, err
+		}
+		// The worker re-inquired and the provider settled to a new status: this is
+		// the authoritative truth, so auto-resolve any open reconciliation that was
+		// frozen earlier by a disagreeing webhook.
+		if s.reconRepo != nil {
+			if _, rerr := s.reconRepo.ResolveOpenByPaymentID(ctx, p.PaymentID, string(p.Status), models.ReconResolverWorker, "worker inquiry confirmed"); rerr != nil {
+				log.Warn().Err(rerr).Str("paymentId", p.PaymentID).Msg("worker: resolve open reconciliation")
+			}
 		}
 		if s.notifier != nil {
 			s.notifier.NotifyPaymentStatusChanged(p)

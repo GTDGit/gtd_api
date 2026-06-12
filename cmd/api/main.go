@@ -100,6 +100,7 @@ func main() {
 	transferRepo := repository.NewTransferRepository(db)
 	ppobProviderRepo := repository.NewPPOBProviderRepository(db)
 	paymentRepo := repository.NewPaymentRepository(db)
+	reconRepo := repository.NewReconciliationRepository(db)
 
 	// 5a. Initialize PPOB provider clients
 	kioskbankProdClient, kioskbankDevClient := buildKiosbankClients(cfg.Kiosbank)
@@ -415,7 +416,7 @@ func main() {
 	}
 
 	paymentCallbackSvc := service.NewPaymentCallbackService(paymentRepo, clientRepo)
-	paymentSvc := service.NewPaymentService(paymentRepo, clientRepo, paymentRouter, paymentCallbackSvc)
+	paymentSvc := service.NewPaymentService(paymentRepo, clientRepo, reconRepo, paymentRouter, paymentCallbackSvc)
 	paymentSvc.SetNotifier(sseNotifier)
 	adminPaymentSvc := service.NewAdminPaymentService(paymentRepo, paymentRouter)
 

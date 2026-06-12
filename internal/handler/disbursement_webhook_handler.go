@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"crypto/rsa"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -20,21 +21,21 @@ import (
 
 // DisbursementWebhookHandler receives provider-side callbacks for transfers.
 type DisbursementWebhookHandler struct {
-	transferRepo    *repository.TransferRepository
-	transferSvc     *service.TransferService
-	pakailinkSecret string
+	transferRepo *repository.TransferRepository
+	transferSvc  *service.TransferService
+	pakailinkPub *rsa.PublicKey
 }
 
 // NewDisbursementWebhookHandler constructs a DisbursementWebhookHandler.
 func NewDisbursementWebhookHandler(
 	transferRepo *repository.TransferRepository,
 	transferSvc *service.TransferService,
-	pakailinkSecret string,
+	pakailinkPub *rsa.PublicKey,
 ) *DisbursementWebhookHandler {
 	return &DisbursementWebhookHandler{
-		transferRepo:    transferRepo,
-		transferSvc:     transferSvc,
-		pakailinkSecret: pakailinkSecret,
+		transferRepo: transferRepo,
+		transferSvc:  transferSvc,
+		pakailinkPub: pakailinkPub,
 	}
 }
 
@@ -50,7 +51,10 @@ func (h *DisbursementWebhookHandler) HandlePakailink(c *gin.Context) {
 
 	timestamp := c.GetHeader("X-TIMESTAMP")
 	signature := c.GetHeader("X-SIGNATURE")
-	path := c.Request.URL.Path
+	pathCandidates := []string{
+		c.Request.URL.Path,
+		"https://" + c.Request.Host + c.Request.URL.Path,
+	}
 
 	cb := &models.TransferCallback{
 		Provider:         models.DisbursementProviderPakaiLink,
@@ -66,7 +70,7 @@ func (h *DisbursementWebhookHandler) HandlePakailink(c *gin.Context) {
 		return
 	}
 
-	valid := pakailink.VerifyWebhookSignature("POST", path, "", body, timestamp, signature, h.pakailinkSecret)
+	valid := pakailink.VerifyWebhookSignature("POST", pathCandidates, body, timestamp, signature, h.pakailinkPub)
 	if err := h.transferRepo.UpdateTransferCallbackSignature(c.Request.Context(), cb.ID, valid); err != nil {
 		log.Warn().Err(err).Msg("pakailink disbursement webhook: update signature flag")
 	}

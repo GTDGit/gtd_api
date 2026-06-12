@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"crypto/rsa"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -24,28 +25,29 @@ import (
 
 // PaymentWebhookHandler receives provider-side webhooks for payments.
 type PaymentWebhookHandler struct {
-	paymentRepo      *repository.PaymentRepository
-	paymentSvc       *service.PaymentService
-	pakailinkSecret  string
-	danaClientSecret string
-	midtransKey      string
-	xenditToken      string
-	ovoSecret        string
+	paymentRepo  *repository.PaymentRepository
+	paymentSvc   *service.PaymentService
+	pakailinkPub *rsa.PublicKey
+	danaPub      *rsa.PublicKey
+	midtransKey  string
+	xenditToken  string
+	ovoSecret    string
 }
 
 func NewPaymentWebhookHandler(
 	paymentRepo *repository.PaymentRepository,
 	paymentSvc *service.PaymentService,
-	pakailinkSecret, danaClientSecret, midtransServerKey, xenditWebhookToken, ovoClientSecret string,
+	pakailinkPub, danaPub *rsa.PublicKey,
+	midtransServerKey, xenditWebhookToken, ovoClientSecret string,
 ) *PaymentWebhookHandler {
 	return &PaymentWebhookHandler{
-		paymentRepo:      paymentRepo,
-		paymentSvc:       paymentSvc,
-		pakailinkSecret:  pakailinkSecret,
-		danaClientSecret: danaClientSecret,
-		midtransKey:      midtransServerKey,
-		xenditToken:      xenditWebhookToken,
-		ovoSecret:        ovoClientSecret,
+		paymentRepo:  paymentRepo,
+		paymentSvc:   paymentSvc,
+		pakailinkPub: pakailinkPub,
+		danaPub:      danaPub,
+		midtransKey:  midtransServerKey,
+		xenditToken:  xenditWebhookToken,
+		ovoSecret:    ovoClientSecret,
 	}
 }
 
@@ -65,8 +67,13 @@ func (h *PaymentWebhookHandler) HandlePakailink(c *gin.Context) {
 	}
 	timestamp := c.GetHeader("X-TIMESTAMP")
 	signature := c.GetHeader("X-SIGNATURE")
-	path := c.Request.URL.Path
-	valid := pakailink.VerifyWebhookSignature("POST", path, "", body, timestamp, signature, h.pakailinkSecret)
+	// Pakailink docs label the signed field "PATH URL CALLBACK" but their example
+	// shows a full URL, so try both the request path and the full external URL.
+	pathCandidates := []string{
+		c.Request.URL.Path,
+		"https://" + c.Request.Host + c.Request.URL.Path,
+	}
+	valid := pakailink.VerifyWebhookSignature("POST", pathCandidates, body, timestamp, signature, h.pakailinkPub)
 	if err := h.paymentRepo.UpdatePaymentCallbackSignature(c.Request.Context(), cb.ID, valid); err != nil {
 		log.Warn().Err(err).Msg("pakailink webhook: update signature flag")
 	}
@@ -113,12 +120,12 @@ func (h *PaymentWebhookHandler) HandlePakailink(c *gin.Context) {
 // ---------------------------------------------------------------------------
 
 type danaWebhookPayload struct {
-	OriginalPartnerReferenceNo string             `json:"originalPartnerReferenceNo"`
-	OriginalReferenceNo        string             `json:"originalReferenceNo"`
-	LatestTransactionStatus    string             `json:"latestTransactionStatus"`
-	TransactionStatusDesc      string             `json:"transactionStatusDesc"`
-	Amount                     danaWebhookAmount  `json:"amount"`
-	AdditionalInfo             json.RawMessage    `json:"additionalInfo,omitempty"`
+	OriginalPartnerReferenceNo string            `json:"originalPartnerReferenceNo"`
+	OriginalReferenceNo        string            `json:"originalReferenceNo"`
+	LatestTransactionStatus    string            `json:"latestTransactionStatus"`
+	TransactionStatusDesc      string            `json:"transactionStatusDesc"`
+	Amount                     danaWebhookAmount `json:"amount"`
+	AdditionalInfo             json.RawMessage   `json:"additionalInfo,omitempty"`
 }
 
 type danaWebhookAmount struct {
@@ -137,7 +144,11 @@ func (h *PaymentWebhookHandler) HandleDANA(c *gin.Context) {
 	}
 	timestamp := c.GetHeader("X-TIMESTAMP")
 	signature := c.GetHeader("X-SIGNATURE")
-	valid := dana.VerifyWebhookSignature("POST", c.Request.URL.Path, "", body, timestamp, signature, h.danaClientSecret)
+	pathCandidates := []string{
+		c.Request.URL.Path,
+		"https://" + c.Request.Host + c.Request.URL.Path,
+	}
+	valid := dana.VerifyWebhookSignature("POST", pathCandidates, body, timestamp, signature, h.danaPub)
 	if err := h.paymentRepo.UpdatePaymentCallbackSignature(c.Request.Context(), cb.ID, valid); err != nil {
 		log.Warn().Err(err).Msg("dana webhook: update signature flag")
 	}
@@ -225,14 +236,14 @@ func (h *PaymentWebhookHandler) HandleMidtrans(c *gin.Context) {
 // ---------------------------------------------------------------------------
 
 type xenditWebhookPayload struct {
-	EventType         string          `json:"event"`
-	Data              xenditEventData `json:"data"`
+	EventType string          `json:"event"`
+	Data      xenditEventData `json:"data"`
 	// Raw fields for legacy shapes that embed them at the top level.
-	ID                string          `json:"id"`
-	ReferenceID       string          `json:"reference_id"`
-	Status            string          `json:"status"`
-	RequestAmount     int64           `json:"request_amount"`
-	ChannelCode       string          `json:"channel_code"`
+	ID            string `json:"id"`
+	ReferenceID   string `json:"reference_id"`
+	Status        string `json:"status"`
+	RequestAmount int64  `json:"request_amount"`
+	ChannelCode   string `json:"channel_code"`
 	// Legacy Fixed-VA paid notification: keyed by external_id (our PaymentID),
 	// carries callback_virtual_account_id; arrival means PAID (no status field).
 	ExternalID               string `json:"external_id"`

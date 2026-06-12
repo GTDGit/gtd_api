@@ -29,10 +29,10 @@ const (
 	CancelPath       = "/payment-gateway/v1.0/debit/cancel.htm"
 	RefundPath       = "/payment-gateway/v1.0/debit/refund.htm"
 	GenerateQRISPath = "/v1.0/qr/qr-mpm-generate.htm" // QRIS Acquirer endpoint (unused after switch to Custom Checkout)
-	CPMPaymentPath    = "/v1.0/qr/qr-cpm-payment.htm"  // QRIS Acquirer CPM endpoint
-	CPMInquiryPath    = "/rest/v1.1/debit/status"       // QRIS Acquirer CPM query (serviceCode=60)
+	CPMPaymentPath   = "/v1.0/qr/qr-cpm-payment.htm"  // QRIS Acquirer CPM endpoint
+	CPMInquiryPath   = "/rest/v1.1/debit/status"      // QRIS Acquirer CPM query (serviceCode=60)
 
-	DefaultChannelID = "95221"
+	DefaultChannelID    = "95221"
 	ServiceCodeDebit    = "54" // Create Order (payment-host-to-host)
 	ServiceCodeQuery    = "55" // Query Payment (Gapura PG / QRIS MPM status)
 	ServiceCodeCPMQuery = "60" // Query Payment (QRIS CPM Acquirer status)
@@ -90,6 +90,14 @@ func NewClient(cfg Config) (*Client, error) {
 
 func (c *Client) ClientSecret() string { return c.cfg.ClientSecret }
 func (c *Client) MerchantID() string   { return c.cfg.MerchantID }
+
+// PublicKey returns the RSA public key derived from our configured private key.
+func (c *Client) PublicKey() *rsa.PublicKey {
+	if c.privateKey == nil {
+		return nil
+	}
+	return &c.privateKey.PublicKey
+}
 
 func (c *Client) GetAccessToken(ctx context.Context) (string, error) {
 	c.mu.Lock()

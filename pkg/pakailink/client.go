@@ -17,13 +17,13 @@ import (
 )
 
 const (
-	TokenPath          = "/snap/v1.0/access-token/b2b"
-	CreateVAPath       = "/snap/v1.0/transfer-va/create-va"
-	InquiryVAPath      = "/snap/v1.0/transfer-va/create-va-status"
-	DeleteVAPath       = "/snap/v1.0/transfer-va/delete-va"
-	GenerateQRPath   = "/snap/v1.0/qr/qr-mpm-generate"
-	InquiryQRPath    = "/snap/v1.0/qr/qr-mpm-status"
-	CreateEmoneyPath = "/snap/v1.0/payment/emoney"
+	TokenPath         = "/snap/v1.0/access-token/b2b"
+	CreateVAPath      = "/snap/v1.0/transfer-va/create-va"
+	InquiryVAPath     = "/snap/v1.0/transfer-va/create-va-status"
+	DeleteVAPath      = "/snap/v1.0/transfer-va/delete-va"
+	GenerateQRPath    = "/snap/v1.0/qr/qr-mpm-generate"
+	InquiryQRPath     = "/snap/v1.0/qr/qr-mpm-status"
+	CreateEmoneyPath  = "/snap/v1.0/payment/emoney"
 	InquiryEmoneyPath = "/snap/v1.0/payment/emoney-status"
 	CreateRetailPath  = "/snap/v1.0/payment/modern-retail"
 	InquiryRetailPath = "/snap/v1.0/payment/modern-retail/status"
@@ -86,6 +86,14 @@ func NewClient(cfg Config) (*Client, error) {
 // ClientSecret exposes the configured secret so webhook verification helpers
 // can reuse it without reaching into the struct directly.
 func (c *Client) ClientSecret() string { return c.cfg.ClientSecret }
+
+// PublicKey returns the RSA public key derived from our configured private key.
+func (c *Client) PublicKey() *rsa.PublicKey {
+	if c.privateKey == nil {
+		return nil
+	}
+	return &c.privateKey.PublicKey
+}
 
 // GetAccessToken returns a cached token or mints a new one via SNAP B2B.
 func (c *Client) GetAccessToken(ctx context.Context) (string, error) {

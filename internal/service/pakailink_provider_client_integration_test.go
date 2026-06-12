@@ -2,16 +2,15 @@ package service
 
 import (
 	"context"
-	"crypto/hmac"
+	"crypto"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
-	"crypto/sha512"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
-	"crypto/x509"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -339,26 +338,35 @@ func TestPakailinkIntegration_InquiryVA_MapsProviderStatus(t *testing.T) {
 	}
 }
 
-// Req 10.6: Pakailink callbacks are verified with the SNAP symmetric signature
-// before processing. This exercises the smallest meaningful surface of the
-// callback path: a signature produced with the shared client secret verifies,
-// the payload parses, and its transaction status maps to the internal status.
-// (Full webhook ingestion lives in the HTTP handler layer; here we cover the
-// provider-package verification + parsing the adapter relies on.)
+// Req 10.6: Pakailink callbacks are verified with the SNAP asymmetric signature
+// (SHA256withRSA) before processing. This exercises the smallest meaningful
+// surface of the callback path: a signature produced with an RSA private key
+// verifies under the matching public key, the payload parses, and its
+// transaction status maps to the internal status. (Full webhook ingestion lives
+// in the HTTP handler layer; here we cover the provider-package verification +
+// parsing the adapter relies on.)
 func TestPakailinkIntegration_Callback_VerifyAndParse(t *testing.T) {
-	const secret = "pl-test-secret"
 	const path = "/v1/webhook/pakailink"
 	const timestamp = "2024-01-02T15:04:05+07:00"
 
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generate RSA key: %v", err)
+	}
+	otherKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generate other RSA key: %v", err)
+	}
+
 	body := []byte(`{"responseCode":"2002600","responseMessage":"Success","originalPartnerReferenceNo":"pl-ref-001","latestTransactionStatus":"00","serviceCode":"52","amount":{"value":"25000.00","currency":"IDR"}}`)
 
-	// Recompute the signature exactly as a verifier would, then confirm it passes.
-	sig := plTestSNAPSymmetricSig("POST", path, "", body, timestamp, secret)
-	if !pakailink.VerifyWebhookSignature("POST", path, "", body, timestamp, sig, secret) {
-		t.Fatal("expected webhook signature to verify with shared secret")
+	// Sign exactly as the provider would, then confirm it verifies.
+	sig := plTestSNAPAsymmetricSig("POST", path, body, timestamp, key)
+	if !pakailink.VerifyWebhookSignature("POST", []string{path}, body, timestamp, sig, &key.PublicKey) {
+		t.Fatal("expected webhook signature to verify with matching public key")
 	}
-	if pakailink.VerifyWebhookSignature("POST", path, "", body, timestamp, sig, "wrong-secret") {
-		t.Fatal("signature must not verify under a different secret")
+	if pakailink.VerifyWebhookSignature("POST", []string{path}, body, timestamp, sig, &otherKey.PublicKey) {
+		t.Fatal("signature must not verify under a different public key")
 	}
 
 	var payload pakailink.WebhookPayload
@@ -371,20 +379,22 @@ func TestPakailinkIntegration_Callback_VerifyAndParse(t *testing.T) {
 	}
 }
 
-// plTestSNAPSymmetricSig independently reproduces the SNAP symmetric signature
-// (Base64(HMAC-SHA512(<method>:<path>:<token>:<sha256hex(body)>:<timestamp>, secret)))
-// used by pkg/pakailink. The webhook body in the test is already compact JSON,
-// so no JSON minification is needed for the hash to match the package's signer.
-func plTestSNAPSymmetricSig(method, path, token string, body []byte, timestamp, secret string) string {
+// plTestSNAPAsymmetricSig independently reproduces the SNAP asymmetric signature
+// (Base64(RSA-SHA256(<method>:<path>:<sha256hex(body)>:<timestamp>))) used by
+// pkg/pakailink. The webhook body in the test is already compact JSON, so no
+// JSON minification is needed for the hash to match the package's verifier.
+func plTestSNAPAsymmetricSig(method, path string, body []byte, timestamp string, key *rsa.PrivateKey) string {
 	bodyHash := sha256.Sum256(body)
 	stringToSign := strings.Join([]string{
 		method,
 		path,
-		token,
 		strings.ToLower(hex.EncodeToString(bodyHash[:])),
 		timestamp,
 	}, ":")
-	mac := hmac.New(sha512.New, []byte(secret))
-	mac.Write([]byte(stringToSign))
-	return base64.StdEncoding.EncodeToString(mac.Sum(nil))
+	digest := sha256.Sum256([]byte(stringToSign))
+	sig, err := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, digest[:])
+	if err != nil {
+		panic(err)
+	}
+	return base64.StdEncoding.EncodeToString(sig)
 }

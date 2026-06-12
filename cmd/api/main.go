@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/rsa"
 	"database/sql"
 	"fmt"
 	"net/http"
@@ -418,12 +419,16 @@ func main() {
 	paymentSvc.SetNotifier(sseNotifier)
 	adminPaymentSvc := service.NewAdminPaymentService(paymentRepo, paymentRouter)
 
-	// Resolve webhook secrets for inbound signature verification.
-	pakailinkWebhookSecret := cfg.Payment.Pakailink.ClientSecret
+	// Resolve webhook verification material. Pakailink and DANA sign inbound
+	// callbacks with RSA (SHA256withRSA), verified with the sender's public key.
+	var pakailinkPub *rsa.PublicKey
 	if pakailinkClient != nil {
-		pakailinkWebhookSecret = pakailinkClient.ClientSecret()
+		pakailinkPub = pakailinkClient.PublicKey()
 	}
-	danaWebhookSecret := cfg.Payment.Dana.ClientSecret
+	var danaPub *rsa.PublicKey
+	if danaClient != nil {
+		danaPub = danaClient.PublicKey()
+	}
 	midtransWebhookSecret := cfg.Payment.Midtrans.ServerKey
 	if cfg.Payment.Midtrans.WebhookSecret != "" {
 		midtransWebhookSecret = cfg.Payment.Midtrans.WebhookSecret
@@ -447,8 +452,8 @@ func main() {
 		PaymentWebhook: handler.NewPaymentWebhookHandler(
 			paymentRepo,
 			paymentSvc,
-			pakailinkWebhookSecret,
-			danaWebhookSecret,
+			pakailinkPub,
+			danaPub,
 			midtransWebhookSecret,
 			xenditWebhookToken,
 			cfg.Payment.OVO.ClientSecret,
@@ -456,7 +461,7 @@ func main() {
 		DisbursementWebhook: handler.NewDisbursementWebhookHandler(
 			transferRepo,
 			transferSvc,
-			pakailinkWebhookSecret,
+			pakailinkPub,
 		),
 	}
 

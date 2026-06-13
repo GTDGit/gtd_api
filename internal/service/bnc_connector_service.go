@@ -79,8 +79,8 @@ type bncConnectorClaims struct {
 }
 
 type BNCConnectorService struct {
-	transferRepo       *repository.TransferRepository
-	transferService    *TransferService
+	payoutRepo         *repository.PayoutRepository
+	payoutService      *PayoutService
 	jwtSecret          []byte
 	clientSecret       string
 	expectedClientKey  string
@@ -89,8 +89,8 @@ type BNCConnectorService struct {
 }
 
 func NewBNCConnectorService(
-	transferRepo *repository.TransferRepository,
-	transferService *TransferService,
+	payoutRepo *repository.PayoutRepository,
+	payoutService *PayoutService,
 	jwtSecret string,
 	clientSecret string,
 	expectedClientKey string,
@@ -104,8 +104,8 @@ func NewBNCConnectorService(
 	}
 
 	return &BNCConnectorService{
-		transferRepo:       transferRepo,
-		transferService:    transferService,
+		payoutRepo:         payoutRepo,
+		payoutService:      payoutService,
 		jwtSecret:          []byte(strings.TrimSpace(jwtSecret)),
 		clientSecret:       strings.TrimSpace(clientSecret),
 		expectedClientKey:  strings.TrimSpace(expectedClientKey),
@@ -183,7 +183,7 @@ func (s *BNCConnectorService) HandleTransferNotify(
 	path string,
 	body []byte,
 ) error {
-	if s.transferRepo == nil || s.transferService == nil {
+	if s.payoutRepo == nil || s.payoutService == nil {
 		return newBNCConnectorError(http.StatusServiceUnavailable, "5032500", "Transfer notification service unavailable", nil)
 	}
 
@@ -198,25 +198,25 @@ func (s *BNCConnectorService) HandleTransferNotify(
 	timestamp := strings.TrimSpace(headers.Get("X-TIMESTAMP"))
 	signature := strings.TrimSpace(headers.Get("X-SIGNATURE"))
 
-	callback := &models.TransferCallback{
+	callback := &models.PayoutCallback{
 		Provider:         models.DisbursementProviderBNC,
 		ProviderRef:      stringPtr(payload.ProviderRef()),
 		Headers:          marshalHeaders(headers),
 		Payload:          models.NullableRawMessage(body),
 		Signature:        stringPtr(signature),
 		IsValidSignature: false,
-		TransferID:       stringPtr(payload.TransferID()),
+		PayoutID:         stringPtr(payload.PayoutID()),
 		Status:           stringPtr(strings.TrimSpace(payload.LatestTransactionStatus)),
 		IsProcessed:      false,
 	}
-	if err := s.transferRepo.CreateTransferCallback(ctx, callback); err != nil {
+	if err := s.payoutRepo.CreatePayoutCallback(ctx, callback); err != nil {
 		return newBNCConnectorError(http.StatusInternalServerError, "5002500", "Failed to persist callback", err)
 	}
 
 	processErr := func(err error, processed bool) error {
 		msg := stringPtr(err.Error())
-		if updateErr := s.transferRepo.UpdateTransferCallbackProcessed(ctx, callback.ID, processed, msg); updateErr != nil {
-			log.Warn().Err(updateErr).Int("callback_id", callback.ID).Msg("failed to update transfer callback status")
+		if updateErr := s.payoutRepo.UpdatePayoutCallbackProcessed(ctx, callback.ID, processed, msg); updateErr != nil {
+			log.Warn().Err(updateErr).Int("callback_id", callback.ID).Msg("failed to update payout callback status")
 		}
 		return err
 	}
@@ -235,23 +235,23 @@ func (s *BNCConnectorService) HandleTransferNotify(
 	}
 
 	callback.IsValidSignature = true
-	if err := s.transferRepo.UpdateTransferCallbackSignature(ctx, callback.ID, true); err != nil {
-		log.Warn().Err(err).Int("callback_id", callback.ID).Msg("failed to update transfer callback signature status")
+	if err := s.payoutRepo.UpdatePayoutCallbackSignature(ctx, callback.ID, true); err != nil {
+		log.Warn().Err(err).Int("callback_id", callback.ID).Msg("failed to update payout callback signature status")
 	}
-	if err := s.transferRepo.UpdateTransferCallbackProcessed(ctx, callback.ID, false, nil); err != nil {
-		log.Warn().Err(err).Int("callback_id", callback.ID).Msg("failed to clear transfer callback processing error")
+	if err := s.payoutRepo.UpdatePayoutCallbackProcessed(ctx, callback.ID, false, nil); err != nil {
+		log.Warn().Err(err).Int("callback_id", callback.ID).Msg("failed to clear payout callback processing error")
 	}
 
-	if err := s.transferService.ApplyBNCNotification(ctx, &payload, body); err != nil {
-		var transferErr *TransferServiceError
-		if errors.As(err, &transferErr) && transferErr.HTTPStatus == http.StatusNotFound {
+	if err := s.payoutService.ApplyBNCNotification(ctx, &payload, body); err != nil {
+		var payoutErr *PayoutServiceError
+		if errors.As(err, &payoutErr) && payoutErr.HTTPStatus == http.StatusNotFound {
 			return processErr(newBNCConnectorError(http.StatusNotFound, "4042501", "Transfer not found", err), true)
 		}
 		return processErr(newBNCConnectorError(http.StatusInternalServerError, "5002501", "Failed to process transfer notification", err), true)
 	}
 
-	if err := s.transferRepo.UpdateTransferCallbackProcessed(ctx, callback.ID, true, nil); err != nil {
-		log.Warn().Err(err).Int("callback_id", callback.ID).Msg("failed to mark transfer callback as processed")
+	if err := s.payoutRepo.UpdatePayoutCallbackProcessed(ctx, callback.ID, true, nil); err != nil {
+		log.Warn().Err(err).Int("callback_id", callback.ID).Msg("failed to mark payout callback as processed")
 	}
 
 	return nil

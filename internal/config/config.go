@@ -205,6 +205,19 @@ type BRIConfig struct {
 type DisbursementConfig struct {
 	BNC       BNCConfig
 	Pakailink PakailinkDisbursementConfig
+	Dana      DanaDisbursementConfig
+	// DefaultBankInterbankFee is the fallback fee (IDR) applied to interbank
+	// bank payouts when the provider does not report one.
+	DefaultBankInterbankFee int64
+}
+
+// DanaDisbursementConfig enables DANA Direct as a payout provider (bank
+// transfer + DANA-wallet top-up). Credentials/signing keys are reused from the
+// payment DANA configuration.
+type DanaDisbursementConfig struct {
+	Enabled       bool
+	CallbackURL   string
+	MerchantPhone string // business phone used as customerNumber for bank ops
 }
 
 // PakailinkDisbursementConfig holds the disbursement-specific callback URL for
@@ -368,6 +381,12 @@ func Load() (*Config, error) {
 			CallbackURL: getEnv("PAKAILINK_DISBURSEMENT_CALLBACK_URL", ""),
 			SourceLabel: getEnv("PAKAILINK_DISBURSEMENT_SOURCE_LABEL", ""),
 		},
+		Dana: DanaDisbursementConfig{
+			Enabled:       getEnv("DANA_DISBURSEMENT_ENABLED", "false") == "true",
+			CallbackURL:   getEnv("DANA_DISBURSEMENT_CALLBACK_URL", ""),
+			MerchantPhone: getEnv("DANA_DISBURSEMENT_MERCHANT_PHONE", ""),
+		},
+		DefaultBankInterbankFee: int64(getEnvInt("DISBURSEMENT_DEFAULT_BANK_FEE", 2500)),
 	}
 	if cfg.Disbursement.BNC.BaseURL == "" {
 		switch cfg.Disbursement.BNC.Env {

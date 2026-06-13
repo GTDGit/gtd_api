@@ -11,11 +11,13 @@ import (
 	"github.com/GTDGit/gtd_api/internal/models"
 )
 
+// BNCTransferNotificationAmount is the amount object in a BNC transfer notify.
 type BNCTransferNotificationAmount struct {
 	Value    string `json:"value"`
 	Currency string `json:"currency"`
 }
 
+// BNCTransferNotification is the inbound BNC transfer-result notification.
 type BNCTransferNotification struct {
 	ResponseCode               string                        `json:"responseCode"`
 	ResponseMessage            string                        `json:"responseMessage"`
@@ -34,7 +36,7 @@ type BNCTransferNotification struct {
 	Amount                     BNCTransferNotificationAmount `json:"amount"`
 }
 
-func (n *BNCTransferNotification) TransferID() string {
+func (n *BNCTransferNotification) PayoutID() string {
 	return firstNonEmptyString(n.OriginalPartnerReferenceNo, n.PartnerReferenceNo)
 }
 
@@ -42,63 +44,57 @@ func (n *BNCTransferNotification) ProviderRef() string {
 	return firstNonEmptyString(n.OriginalReferenceNo, n.ReferenceNo)
 }
 
-func (s *TransferService) ApplyBNCNotification(
-	ctx context.Context,
-	notification *BNCTransferNotification,
-	rawPayload json.RawMessage,
-) error {
+// ApplyBNCNotification updates payout state from an inbound BNC transfer notify.
+func (s *PayoutService) ApplyBNCNotification(ctx context.Context, notification *BNCTransferNotification, rawPayload json.RawMessage) error {
 	if notification == nil {
-		return newTransferError(400, "INVALID_NOTIFICATION", "Invalid transfer notification", nil)
+		return newPayoutError(400, "INVALID_NOTIFICATION", "Invalid transfer notification", nil)
+	}
+	payoutID := strings.TrimSpace(notification.PayoutID())
+	if payoutID == "" {
+		return newPayoutError(400, "INVALID_NOTIFICATION", "Missing payout identifier", nil)
 	}
 
-	transferID := strings.TrimSpace(notification.TransferID())
-	if transferID == "" {
-		return newTransferError(400, "INVALID_NOTIFICATION", "Missing transfer identifier", nil)
-	}
-
-	transfer, err := s.transferRepo.GetTransferByTransferID(ctx, transferID)
+	payout, err := s.repo.GetPayoutByPayoutID(ctx, payoutID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return newTransferError(404, "TRANSFER_NOT_FOUND", "Transfer not found", err)
+			return newPayoutError(404, "PAYOUT_NOT_FOUND", "Payout not found", err)
 		}
 		return err
 	}
 
 	if providerRef := strings.TrimSpace(notification.ProviderRef()); providerRef != "" {
-		transfer.ProviderRef = stringPtr(providerRef)
+		payout.ProviderRef = stringPtr(providerRef)
 	}
-	transfer.ProviderData = mergeTransferProviderData(transfer.ProviderData, "callback", rawPayload)
+	payout.ProviderData = mergePayoutProviderData(payout.ProviderData, "callback", rawPayload)
 
 	statusCode := strings.ToUpper(strings.TrimSpace(notification.LatestTransactionStatus))
 	finalTime := parseBNCNotificationTime(notification.FinishedTime, notification.TransactionDate)
 
 	switch statusCode {
 	case "00", "SUCCESS":
-		transfer.Status = models.TransferStatusSuccess
-		transfer.CompletedAt = &finalTime
-		transfer.FailedAt = nil
-		transfer.FailedReason = nil
-		transfer.FailedCode = nil
+		payout.Status = models.PayoutStatusSuccess
+		payout.CompletedAt = &finalTime
+		payout.FailedAt = nil
+		payout.FailedReason = nil
+		payout.FailedCode = nil
 	case "06", "05", "FAILED", "CANCELLED":
-		transfer.Status = models.TransferStatusFailed
-		transfer.CompletedAt = nil
-		transfer.FailedAt = &finalTime
-		transfer.FailedReason = stringPtr(nonEmptyOrDefault(notification.TransactionStatusDesc, "Transfer failed"))
-		transfer.FailedCode = stringPtr(nonEmptyOrDefault(notification.LatestTransactionStatus, notification.ResponseCode))
+		payout.Status = models.PayoutStatusFailed
+		payout.CompletedAt = nil
+		payout.FailedAt = &finalTime
+		payout.FailedReason = stringPtr(nonEmptyOrDefault(notification.TransactionStatusDesc, "Payout failed"))
+		payout.FailedCode = stringPtr(nonEmptyOrDefault(notification.LatestTransactionStatus, notification.ResponseCode))
 	case "03", "02", "01", "PENDING", "PAYING", "INITIATED":
-		transfer.Status = models.TransferStatusPending
+		payout.Status = models.PayoutStatusPending
 	default:
-		transfer.Status = models.TransferStatusProcessing
+		payout.Status = models.PayoutStatusProcessing
 	}
 
-	if err := s.transferRepo.UpdateTransfer(ctx, transfer); err != nil {
+	if err := s.repo.UpdatePayout(ctx, payout); err != nil {
 		return err
 	}
-
-	if transfer.Status == models.TransferStatusSuccess || transfer.Status == models.TransferStatusFailed {
-		s.trySendFinalCallback(ctx, transfer)
+	if payout.Status == models.PayoutStatusSuccess || payout.Status == models.PayoutStatusFailed {
+		s.trySendFinalCallback(ctx, payout)
 	}
-
 	return nil
 }
 

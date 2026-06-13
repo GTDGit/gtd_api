@@ -31,7 +31,13 @@ const (
 	snapTokenPath             = "/snap/v1.0/access-token/b2b"
 	internalInquiryPath       = "/intrabank/snap/v2.0/account-inquiry-internal"
 	intrabankTransferPath     = "/intrabank/snap/v2.0/transfer-intrabank"
+	externalInquiryPath       = "/interbank/snap/v2.0/account-inquiry-external"
+	interbankTransferPath     = "/interbank/snap/v2.0/transfer-interbank"
 	transferStatusPath        = "/snap/v1.0/transfer/status"
+
+	// Interbank service codes (additionalInfo.serviceCode).
+	interbankInquiryServiceCode  = "16" // account inquiry via GPN interbank
+	interbankTransferServiceCode = "18" // transfer via GPN interbank
 	brivaCreatePath           = "/snap/v1.0/transfer-va/create-va"
 	brivaUpdatePath           = "/snap/v1.0/transfer-va/update-va"
 	brivaUpdateStatusPath     = "/snap/v1.0/transfer-va/update-status"
@@ -180,8 +186,22 @@ func (c *Client) InternalAccountInquiry(ctx context.Context, accountNo string) (
 	return &resp, nil
 }
 
-func (c *Client) ExternalAccountInquiry(_ context.Context, _ string, _ string) (*bnc.AccountInquiryResponse, error) {
-	return nil, fmt.Errorf("bri external account inquiry is not implemented")
+func (c *Client) ExternalAccountInquiry(ctx context.Context, bankCode, accountNo string) (*bnc.AccountInquiryResponse, error) {
+	body := map[string]any{
+		"beneficiaryBankCode":  strings.TrimSpace(bankCode),
+		"beneficiaryAccountNo": strings.TrimSpace(accountNo),
+		"additionalInfo": map[string]any{
+			"serviceCode": interbankInquiryServiceCode,
+		},
+	}
+
+	var resp bnc.AccountInquiryResponse
+	raw, err := c.doSNAPRequest(ctx, http.MethodPost, externalInquiryPath, body, &resp)
+	if err != nil {
+		return nil, err
+	}
+	resp.RawResponse = raw
+	return &resp, nil
 }
 
 func (c *Client) IntrabankTransfer(ctx context.Context, req bnc.TransferRequest) (*bnc.TransferResponse, error) {
@@ -209,8 +229,33 @@ func (c *Client) IntrabankTransfer(ctx context.Context, req bnc.TransferRequest)
 	return &resp, nil
 }
 
-func (c *Client) InterbankTransfer(_ context.Context, _ bnc.TransferRequest) (*bnc.TransferResponse, error) {
-	return nil, fmt.Errorf("bri interbank transfer is not implemented")
+func (c *Client) InterbankTransfer(ctx context.Context, req bnc.TransferRequest) (*bnc.TransferResponse, error) {
+	body := map[string]any{
+		"partnerReferenceNo": req.PartnerReferenceNo,
+		"amount": bnc.Amount{
+			Value:    formatAmount(req.Amount),
+			Currency: "IDR",
+		},
+		"beneficiaryAccountName": req.BeneficiaryAccountName,
+		"beneficiaryAccountNo":   req.BeneficiaryAccountNo,
+		"beneficiaryBankCode":    req.BeneficiaryBankCode,
+		"sourceAccountNo":        c.cfg.SourceAccount,
+		"transactionDate":        formatSNAPTimestamp(req.TransactionDate),
+		"additionalInfo": map[string]any{
+			"serviceCode": interbankTransferServiceCode,
+		},
+	}
+	if strings.TrimSpace(req.Remark) != "" {
+		body["remark"] = strings.TrimSpace(req.Remark)
+	}
+
+	var resp bnc.TransferResponse
+	raw, err := c.doSNAPRequest(ctx, http.MethodPost, interbankTransferPath, body, &resp)
+	if err != nil {
+		return nil, err
+	}
+	resp.RawResponse = raw
+	return &resp, nil
 }
 
 func (c *Client) TransferStatus(ctx context.Context, req bnc.TransferStatusRequest) (*bnc.TransferStatusResponse, error) {

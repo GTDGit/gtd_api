@@ -19,22 +19,22 @@ import (
 	"github.com/GTDGit/gtd_api/pkg/pakailink"
 )
 
-// DisbursementWebhookHandler receives provider-side callbacks for transfers.
+// DisbursementWebhookHandler receives provider-side callbacks for payouts.
 type DisbursementWebhookHandler struct {
-	transferRepo *repository.TransferRepository
-	transferSvc  *service.TransferService
+	payoutRepo *repository.PayoutRepository
+	payoutSvc  *service.PayoutService
 	pakailinkPub *rsa.PublicKey
 }
 
 // NewDisbursementWebhookHandler constructs a DisbursementWebhookHandler.
 func NewDisbursementWebhookHandler(
-	transferRepo *repository.TransferRepository,
-	transferSvc *service.TransferService,
+	payoutRepo *repository.PayoutRepository,
+	payoutSvc *service.PayoutService,
 	pakailinkPub *rsa.PublicKey,
 ) *DisbursementWebhookHandler {
 	return &DisbursementWebhookHandler{
-		transferRepo: transferRepo,
-		transferSvc:  transferSvc,
+		payoutRepo: payoutRepo,
+		payoutSvc:  payoutSvc,
 		pakailinkPub: pakailinkPub,
 	}
 }
@@ -56,7 +56,7 @@ func (h *DisbursementWebhookHandler) HandlePakailink(c *gin.Context) {
 		"https://" + c.Request.Host + c.Request.URL.Path,
 	}
 
-	cb := &models.TransferCallback{
+	cb := &models.PayoutCallback{
 		Provider:         models.DisbursementProviderPakaiLink,
 		Headers:          headersAsJSON(c.Request.Header),
 		Payload:          models.NullableRawMessage(body),
@@ -64,14 +64,14 @@ func (h *DisbursementWebhookHandler) HandlePakailink(c *gin.Context) {
 		IsValidSignature: false,
 		IsProcessed:      false,
 	}
-	if err := h.transferRepo.CreateTransferCallback(c.Request.Context(), cb); err != nil {
+	if err := h.payoutRepo.CreatePayoutCallback(c.Request.Context(), cb); err != nil {
 		log.Error().Err(err).Msg("pakailink disbursement webhook: persist raw callback")
 		c.JSON(http.StatusInternalServerError, gin.H{"responseCode": "5004400", "responseMessage": "Failed to record callback"})
 		return
 	}
 
 	valid := pakailink.VerifyWebhookSignature("POST", pathCandidates, body, timestamp, signature, h.pakailinkPub)
-	if err := h.transferRepo.UpdateTransferCallbackSignature(c.Request.Context(), cb.ID, valid); err != nil {
+	if err := h.payoutRepo.UpdatePayoutCallbackSignature(c.Request.Context(), cb.ID, valid); err != nil {
 		log.Warn().Err(err).Msg("pakailink disbursement webhook: update signature flag")
 	}
 	if !valid {
@@ -97,7 +97,7 @@ func (h *DisbursementWebhookHandler) HandlePakailink(c *gin.Context) {
 	paid, _ := pakailink.ParseWebhookAmount(data.PaidAmount)
 	fee, _ := pakailink.ParseWebhookAmount(data.FeeAmount)
 
-	transfer, err := h.transferSvc.ApplyPakailinkCallback(c.Request.Context(), service.PakailinkCallbackEvent{
+	payout, err := h.payoutSvc.ApplyPakailinkCallback(c.Request.Context(), service.PakailinkCallbackEvent{
 		PaymentFlagStatus: data.PaymentFlagStatus,
 		PartnerReference:  partnerRef,
 		ReferenceNo:       data.ReferenceNo,
@@ -111,7 +111,7 @@ func (h *DisbursementWebhookHandler) HandlePakailink(c *gin.Context) {
 		// Unknown reference is still a valid 200 response per SNAP, so the
 		// provider stops retrying — but we record the error.
 		if errors.Is(err, sql.ErrNoRows) {
-			h.markError(c.Request.Context(), cb.ID, "transfer not found")
+			h.markError(c.Request.Context(), cb.ID, "payout not found")
 			c.JSON(http.StatusOK, gin.H{"responseCode": "2004400", "responseMessage": "Successful"})
 			return
 		}
@@ -120,9 +120,9 @@ func (h *DisbursementWebhookHandler) HandlePakailink(c *gin.Context) {
 		return
 	}
 
-	transferIDPtr := transfer.TransferID
-	statusStr := string(transfer.Status)
-	if err := h.markProcessed(c.Request.Context(), cb.ID, &transferIDPtr, &statusStr); err != nil {
+	payoutIDPtr := payout.PayoutID
+	statusStr := string(payout.Status)
+	if err := h.markProcessed(c.Request.Context(), cb.ID, &payoutIDPtr, &statusStr); err != nil {
 		log.Warn().Err(err).Msg("pakailink disbursement webhook: mark processed")
 	}
 
@@ -131,13 +131,13 @@ func (h *DisbursementWebhookHandler) HandlePakailink(c *gin.Context) {
 
 func (h *DisbursementWebhookHandler) markError(ctx context.Context, id int, msg string) {
 	m := msg
-	_ = h.transferRepo.UpdateTransferCallbackProcessed(ctx, id, false, &m)
+	_ = h.payoutRepo.UpdatePayoutCallbackProcessed(ctx, id, false, &m)
 }
 
-func (h *DisbursementWebhookHandler) markProcessed(ctx context.Context, id int, transferID, status *string) error {
-	_ = transferID
+func (h *DisbursementWebhookHandler) markProcessed(ctx context.Context, id int, payoutID, status *string) error {
+	_ = payoutID
 	_ = status
-	return h.transferRepo.UpdateTransferCallbackProcessed(ctx, id, true, nil)
+	return h.payoutRepo.UpdatePayoutCallbackProcessed(ctx, id, true, nil)
 }
 
 func headersAsJSON(h http.Header) models.NullableRawMessage {

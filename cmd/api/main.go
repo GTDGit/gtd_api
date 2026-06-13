@@ -97,7 +97,6 @@ func main() {
 	trxRepo := repository.NewTransactionRepository(db)
 	cbRepo := repository.NewCallbackRepository(db)
 	bankCodeRepo := repository.NewBankCodeRepository(db)
-	transferRepo := repository.NewTransferRepository(db)
 	ppobProviderRepo := repository.NewPPOBProviderRepository(db)
 	paymentRepo := repository.NewPaymentRepository(db)
 	reconRepo := repository.NewReconciliationRepository(db)
@@ -324,26 +323,45 @@ func main() {
 	providerCallbackSvc := service.NewProviderCallbackService(ppobProviderRepo, trxRepo, callbackSvc)
 	providerCallbackSvc.SetNotifier(sseNotifier)
 	providerCallbackSvc.SetRetrier(trxSvc)
-	transferCallbackSvc := service.NewTransferCallbackService(clientRepo, bankCodeRepo)
-	transferSvc := service.NewTransferService(
-		transferRepo,
-		bankCodeRepo,
-		bncClient,
-		briClient,
-		transferCallbackSvc,
-		cfg.Disbursement.BNC.SourceAccount,
-		cfg.BRI.SourceAccount,
-	)
-	if pakailinkClient != nil && cfg.Disbursement.Pakailink.Enabled {
-		transferSvc.SetPakailinkClient(
-			service.NewPakailinkTransferAdapter(pakailinkClient, cfg.Disbursement.Pakailink.CallbackURL),
-			cfg.Disbursement.Pakailink.SourceLabel,
-		)
-		log.Info().Msg("PakaiLink disbursement adapter registered (handles all banks)")
+	payoutCallbackSvc := service.NewPayoutCallbackService(clientRepo, bankCodeRepo)
+	payoutRouter := service.NewPayoutProviderRouter()
+	if bncClient != nil && cfg.Disbursement.BNC.SourceAccount != "" {
+		payoutRouter.Register(service.NewBankPayoutAdapter(
+			models.DisbursementProviderBNC, bncClient, "490", cfg.Disbursement.BNC.SourceAccount,
+		))
+		log.Info().Msg("BNC payout adapter registered")
 	}
+	if briClient != nil && cfg.BRI.SourceAccount != "" {
+		payoutRouter.Register(service.NewBankPayoutAdapter(
+			models.DisbursementProviderBRI, briClient, "002", cfg.BRI.SourceAccount,
+		))
+		log.Info().Msg("BRI payout adapter registered")
+	}
+	if pakailinkClient != nil && cfg.Disbursement.Pakailink.Enabled {
+		payoutRouter.Register(service.NewPakailinkPayoutAdapter(
+			pakailinkClient, cfg.Disbursement.Pakailink.CallbackURL,
+		))
+		log.Info().Msg("PakaiLink payout adapter registered (bank + e-wallet)")
+	}
+	if danaClient != nil && cfg.Disbursement.Dana.Enabled {
+		payoutRouter.Register(service.NewDanaPayoutAdapter(
+			danaClient, cfg.Disbursement.Dana.MerchantPhone,
+		))
+		log.Info().Msg("DANA payout adapter registered (bank + DANA wallet)")
+	}
+	payoutRepo := repository.NewPayoutRepository(db)
+	payoutSelector := service.NewPayoutSelector(payoutRepo, payoutRouter)
+	payoutSvc := service.NewPayoutService(
+		payoutRepo,
+		bankCodeRepo,
+		payoutSelector,
+		payoutRouter,
+		payoutCallbackSvc,
+		cfg.Disbursement.DefaultBankInterbankFee,
+	)
 	bncConnectorSvc := service.NewBNCConnectorService(
-		transferRepo,
-		transferSvc,
+		payoutRepo,
+		payoutSvc,
 		cfg.JWTSecret,
 		cfg.Disbursement.BNC.ClientSecret,
 		cfg.Disbursement.BNC.ConnectorClientKey,
@@ -444,7 +462,7 @@ func main() {
 		Transaction:      handler.NewTransactionHandler(trxSvc, productSvc),
 		Webhook:          handler.NewWebhookHandler(callbackSvc, cfg.Digiflazz.WebhookSecret),
 		BankCode:         handler.NewBankCodeHandler(bankCodeRepo),
-		Transfer:         handler.NewTransferHandler(transferSvc),
+		Transfer:         handler.NewPayoutHandler(payoutSvc),
 		BNCConnector:     handler.NewBNCConnectorHandler(bncConnectorSvc),
 		BRIConnector:     handler.NewBRIConnectorHandler(briConnectorSvc),
 		ProviderCallback: handler.NewProviderCallbackHandler(providerCallbackSvc, cfg.Alterra.CallbackPublicKey),
@@ -460,8 +478,8 @@ func main() {
 			cfg.Payment.OVO.ClientSecret,
 		),
 		DisbursementWebhook: handler.NewDisbursementWebhookHandler(
-			transferRepo,
-			transferSvc,
+			payoutRepo,
+			payoutSvc,
 			pakailinkPub,
 		),
 	}
@@ -498,8 +516,8 @@ func main() {
 		cfg.Kiosbank.StatusCheckMinAge,
 		cfg.Kiosbank.StatusCheckMaxAge,
 	).Start(ctx)
-	go worker.NewTransferStatusWorker(
-		transferSvc,
+	go worker.NewPayoutStatusWorker(
+		payoutSvc,
 		cfg.Worker.StatusCheckInterval,
 		cfg.Worker.StatusCheckStaleAfter,
 		cfg.Worker.StatusCheckMaxAge,
@@ -560,7 +578,7 @@ type Handlers struct {
 	Transaction         *handler.TransactionHandler
 	Webhook             *handler.WebhookHandler
 	BankCode            *handler.BankCodeHandler
-	Transfer            *handler.TransferHandler
+	Transfer            *handler.PayoutHandler
 	BNCConnector        *handler.BNCConnectorHandler
 	BRIConnector        *handler.BRIConnectorHandler
 	ProviderCallback    *handler.ProviderCallbackHandler
@@ -605,12 +623,12 @@ func setupRoutes(router *gin.Engine, handlers *Handlers, authMiddleware *middlew
 	// Bank codes (protected with client API key + disbursement scope)
 	router.GET("/v1/bank-codes", authMiddleware.Handle(), middleware.RequireScope(middleware.ScopeDisbursement), handlers.BankCode.GetBankCodes)
 
-	transfer := router.Group("/v1/transfer")
-	transfer.Use(authMiddleware.Handle(), middleware.RequireScope(middleware.ScopeDisbursement))
+	payout := router.Group("/v1/payout")
+	payout.Use(authMiddleware.Handle(), middleware.RequireScope(middleware.ScopeDisbursement))
 	{
-		transfer.POST("/inquiry", handlers.Transfer.CreateInquiry)
-		transfer.POST("", handlers.Transfer.CreateTransfer)
-		transfer.GET("/:transferId", handlers.Transfer.GetTransfer)
+		payout.POST("/inquiry", handlers.Transfer.CreateInquiry)
+		payout.POST("", handlers.Transfer.CreatePayout)
+		payout.GET("/:payoutId", handlers.Transfer.GetPayout)
 	}
 
 	// Payment client API (protected with client API key + payment scope).

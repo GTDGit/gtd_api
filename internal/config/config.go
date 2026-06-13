@@ -18,6 +18,8 @@ type Config struct {
 	Env       string
 	JWTSecret string
 
+	InternalAPIToken string // shared secret for service-to-service /v1/internal/* routes
+
 	DB           DatabaseConfig
 	Redis        RedisConfig
 	Digiflazz    DigiflazzConfig
@@ -36,21 +38,36 @@ type PaymentConfig struct {
 	Midtrans  MidtransConfig
 	Xendit    XenditConfig
 	OVO       OVOConfig
+	Nobu      NobuConfig
 }
 
 type PakailinkConfig struct {
-	Env            string
-	BaseURL        string
-	ClientID       string
-	ClientSecret   string
-	PartnerID      string
-	ChannelID      string
-	PrivateKeyPath string
-	PrivateKeyPEM  string
-	CallbackURL    string
-	TerminalID     string // QRIS: terminal ID for QRIS MPM generation
-	StoreID        string // QRIS: store ID (optional)
-	MerchantID     string // QRIS: merchant ID (optional)
+	Env             string
+	BaseURL         string
+	ClientID        string
+	ClientSecret    string
+	PartnerID       string
+	ChannelID       string
+	PrivateKeyPath  string
+	PrivateKeyPEM   string
+	CallbackURL     string
+	QRISCallbackURL string // static QRIS payment notify callback URL
+	TerminalID      string // QRIS: terminal ID for QRIS MPM generation
+	StoreID         string // QRIS: store ID (optional)
+	MerchantID      string // QRIS: merchant ID (optional)
+}
+
+// NobuConfig holds Nobu QRIS connector credentials. Nobu has no register API
+// (merchants are onboarded via an Excel form); these drive the inbound
+// token-issue + notify verification connector.
+type NobuConfig struct {
+	Env                    string
+	ClientID               string // also used as expected X-CLIENT-KEY
+	ClientSecret           string // HMAC-SHA512 key for notify signature
+	PartnerID              string
+	ConnectorPublicKeyPEM  string // Nobu's RSA public key (verifies token-request signature)
+	ConnectorPublicKeyPath string
+	CallbackURL            string
 }
 
 type DanaConfig struct {
@@ -215,7 +232,6 @@ type DisbursementConfig struct {
 // transfer + DANA-wallet top-up). Credentials/signing keys are reused from the
 // payment DANA configuration.
 type DanaDisbursementConfig struct {
-	Enabled       bool
 	CallbackURL   string
 	MerchantPhone string // business phone used as customerNumber for bank ops
 }
@@ -260,6 +276,7 @@ func Load() (*Config, error) {
 	cfg.Port = getEnv("PORT", "8080")
 	cfg.Env = getEnv("ENV", "development")
 	cfg.JWTSecret = getEnv("JWT_SECRET", "")
+	cfg.InternalAPIToken = getEnv("INTERNAL_API_TOKEN", "")
 
 	// Database
 	cfg.DB = DatabaseConfig{
@@ -382,7 +399,6 @@ func Load() (*Config, error) {
 			SourceLabel: getEnv("PAKAILINK_DISBURSEMENT_SOURCE_LABEL", ""),
 		},
 		Dana: DanaDisbursementConfig{
-			Enabled:       getEnv("DANA_DISBURSEMENT_ENABLED", "false") == "true",
 			CallbackURL:   getEnv("DANA_DISBURSEMENT_CALLBACK_URL", ""),
 			MerchantPhone: getEnv("DANA_DISBURSEMENT_MERCHANT_PHONE", ""),
 		},
@@ -435,18 +451,19 @@ func Load() (*Config, error) {
 	// Payment providers
 	cfg.Payment = PaymentConfig{
 		Pakailink: PakailinkConfig{
-			Env:            getEnv("PAKAILINK_ENV", "SANDBOX"),
-			BaseURL:        getEnv("PAKAILINK_BASE_URL", ""),
-			ClientID:       getEnv("PAKAILINK_CLIENT_ID", ""),
-			ClientSecret:   getEnv("PAKAILINK_CLIENT_SECRET", ""),
-			PartnerID:      getEnv("PAKAILINK_PARTNER_ID", ""),
-			ChannelID:      getEnv("PAKAILINK_CHANNEL_ID", ""),
-			PrivateKeyPath: getEnv("PAKAILINK_PRIVATE_KEY_PATH", ""),
-			PrivateKeyPEM:  getEnv("PAKAILINK_PRIVATE_KEY_PEM", ""),
-			CallbackURL:    getEnv("PAKAILINK_CALLBACK_URL", ""),
-			TerminalID:     getEnv("PAKAILINK_TERMINAL_ID", ""),
-			StoreID:        getEnv("PAKAILINK_STORE_ID", ""),
-			MerchantID:     getEnv("PAKAILINK_MERCHANT_ID", ""),
+			Env:             getEnv("PAKAILINK_ENV", "SANDBOX"),
+			BaseURL:         getEnv("PAKAILINK_BASE_URL", ""),
+			ClientID:        getEnv("PAKAILINK_CLIENT_ID", ""),
+			ClientSecret:    getEnv("PAKAILINK_CLIENT_SECRET", ""),
+			PartnerID:       getEnv("PAKAILINK_PARTNER_ID", ""),
+			ChannelID:       getEnv("PAKAILINK_CHANNEL_ID", ""),
+			PrivateKeyPath:  getEnv("PAKAILINK_PRIVATE_KEY_PATH", ""),
+			PrivateKeyPEM:   getEnv("PAKAILINK_PRIVATE_KEY_PEM", ""),
+			CallbackURL:     getEnv("PAKAILINK_CALLBACK_URL", ""),
+			QRISCallbackURL: getEnv("PAKAILINK_QRIS_CALLBACK_URL", ""),
+			TerminalID:      getEnv("PAKAILINK_TERMINAL_ID", ""),
+			StoreID:         getEnv("PAKAILINK_STORE_ID", ""),
+			MerchantID:      getEnv("PAKAILINK_MERCHANT_ID", ""),
 		},
 		Dana: DanaConfig{
 			Env:             getEnv("DANA_ENV", "SANDBOX"),
@@ -487,6 +504,15 @@ func Load() (*Config, error) {
 			ClientSecret: getEnv("OVO_CLIENT_SECRET", ""),
 			APIKey:       getEnv("OVO_API_KEY", ""),
 			CallbackURL:  getEnv("OVO_CALLBACK_URL", ""),
+		},
+		Nobu: NobuConfig{
+			Env:                    getEnv("NOBU_ENV", "SANDBOX"),
+			ClientID:               getEnv("NOBU_CLIENT_ID", ""),
+			ClientSecret:           getEnv("NOBU_CLIENT_SECRET", ""),
+			PartnerID:              getEnv("NOBU_PARTNER_ID", ""),
+			ConnectorPublicKeyPEM:  getEnv("NOBU_PUBLIC_KEY_PEM", ""),
+			ConnectorPublicKeyPath: getEnv("NOBU_PUBLIC_KEY_PATH", ""),
+			CallbackURL:            getEnv("NOBU_CALLBACK_URL", ""),
 		},
 	}
 	if cfg.Payment.Midtrans.BaseURL == "" {

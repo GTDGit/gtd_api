@@ -107,6 +107,42 @@ type GenerateQRRequest struct {
 	ExpiredDate        string // ISO 8601 (optional)
 	MerchantName       string
 	Description        string
+	Type               string // additionalInfo.type: "statis" for a static QR, empty for dynamic
+}
+
+// RegisterQRISRequest is the input for Service 49 merchant registration.
+type RegisterQRISRequest struct {
+	PartnerReferenceNo string
+	MerchantName       string
+	MerchantEmail      string
+	MerchantType       string // "STATIS" for static QRIS
+	StoreApplication   string
+	StoreWebsite       string
+	StoreType          string
+	StoreName          string
+	Omzet              string
+	Address            string
+	City               string
+	PostalCode         string
+	Province           string
+	Country            string // "ID"
+	OwnerFirstName     string
+	OwnerLastName      string
+	OwnerEmail         string
+	OwnerPhone         string
+	OwnerIDNumber      string // KTP
+	OwnerTaxID         string // NPWP (optional)
+	OwnerDateOfBirth   string
+	OwnerPlaceOfBirth  string
+}
+
+// RegisterQRISResponse mirrors the Service 49 registration response. The QR
+// string is NOT returned here — call GenerateQRMPM(type=statis) afterwards.
+type RegisterQRISResponse struct {
+	ResponseCode    string          `json:"responseCode"`
+	ResponseMessage string          `json:"responseMessage"`
+	DetailData      map[string]any  `json:"detailData,omitempty"`
+	RawResponse     json.RawMessage `json:"-"`
 }
 
 type GenerateQRResponse struct {

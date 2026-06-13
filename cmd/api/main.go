@@ -343,7 +343,7 @@ func main() {
 		))
 		log.Info().Msg("PakaiLink payout adapter registered (bank + e-wallet)")
 	}
-	if danaClient != nil && cfg.Disbursement.Dana.Enabled {
+	if danaClient != nil {
 		payoutRouter.Register(service.NewDanaPayoutAdapter(
 			danaClient, cfg.Disbursement.Dana.MerchantPhone,
 		))
@@ -438,6 +438,21 @@ func main() {
 	paymentSvc.SetNotifier(sseNotifier)
 	adminPaymentSvc := service.NewAdminPaymentService(paymentRepo, paymentRouter)
 
+	// Static QRIS merchant wiring (shared DB; gateway owns CRUD, api owns provider
+	// calls + inbound webhooks). Merchant lookup keys on (provider, store_id).
+	qrisMerchantRepo := repository.NewQRISMerchantRepository(db)
+	qrisPaymentRepo := repository.NewQRISPaymentRepository(db)
+	qrisPaymentSvc := service.NewQRISPaymentService(qrisMerchantRepo, qrisPaymentRepo)
+	nobuConnectorSvc := service.NewNobuConnectorService(
+		qrisPaymentSvc,
+		cfg.JWTSecret,
+		cfg.Payment.Nobu.ClientSecret,
+		cfg.Payment.Nobu.ClientID,
+		cfg.Payment.Nobu.ConnectorPublicKeyPEM,
+		cfg.Payment.Nobu.ConnectorPublicKeyPath,
+		cfg.Payment.Nobu.Env,
+	)
+
 	// Resolve webhook verification material. Pakailink and DANA sign inbound
 	// callbacks with RSA (SHA256withRSA), verified with the sender's public key.
 	var pakailinkPub *rsa.PublicKey
@@ -481,7 +496,11 @@ func main() {
 			payoutRepo,
 			payoutSvc,
 			pakailinkPub,
+			danaPub,
 		),
+		NobuConnector: handler.NewNobuConnectorHandler(nobuConnectorSvc),
+		QRISWebhook:   handler.NewQRISWebhookHandler(qrisPaymentSvc, pakailinkPub),
+		InternalQRIS:  handler.NewInternalQRISHandler(pakailinkClient, cfg.Payment.Pakailink.QRISCallbackURL),
 	}
 
 	// 8. Initialize middleware
@@ -495,7 +514,7 @@ func main() {
 	router.Use(gin.Recovery())
 	router.Use(middleware.CORSMiddleware())
 	router.Use(middleware.LoggingMiddleware())
-	setupRoutes(router, handlers, authMw)
+	setupRoutes(router, handlers, authMw, cfg.InternalAPIToken)
 
 	// 10. Create context for graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
@@ -586,10 +605,13 @@ type Handlers struct {
 	AdminPayment        *handler.AdminPaymentHandler
 	PaymentWebhook      *handler.PaymentWebhookHandler
 	DisbursementWebhook *handler.DisbursementWebhookHandler
+	NobuConnector       *handler.NobuConnectorHandler
+	QRISWebhook         *handler.QRISWebhookHandler
+	InternalQRIS        *handler.InternalQRISHandler
 }
 
 // setupRoutes registers all routes.
-func setupRoutes(router *gin.Engine, handlers *Handlers, authMiddleware *middleware.AuthMiddleware) {
+func setupRoutes(router *gin.Engine, handlers *Handlers, authMiddleware *middleware.AuthMiddleware, internalToken string) {
 	// Provider webhook endpoints
 	router.POST("/v1/webhook/digiflazz", handlers.Webhook.HandleDigiflazzCallback)
 	router.POST("/v1/webhook/kiosbank", handlers.ProviderCallback.HandleKiosbankCallback)
@@ -608,6 +630,23 @@ func setupRoutes(router *gin.Engine, handlers *Handlers, authMiddleware *middlew
 
 	// Disbursement provider webhooks (public — each handler verifies its own signature).
 	router.POST("/v1/webhook/pakailink-disbursement", handlers.DisbursementWebhook.HandlePakailink)
+	router.POST("/v1/webhook/dana-disbursement", handlers.DisbursementWebhook.HandleDana)
+
+	// Static QRIS payment notifications.
+	// Pakailink signs with RSA (handler verifies). Nobu uses the connector
+	// pattern: it pulls a B2B token from us, then signs notify with HMAC.
+	router.POST("/v1/webhook/pakailink-qris", handlers.QRISWebhook.HandlePakailink)
+	router.POST("/nobu/v1.0/access-token/b2b", handlers.NobuConnector.CreateAccessToken)
+	router.POST("/nobu/v1.0/qr/qr-mpm-notify", handlers.NobuConnector.HandleNotify)
+
+	// Internal service-to-service routes (gateway → api proxy for Pakailink QRIS).
+	// Guarded by a shared internal token, not client API keys or admin JWT.
+	internal := router.Group("/v1/internal")
+	internal.Use(middleware.InternalToken(internalToken))
+	{
+		internal.POST("/qris/pakailink/register", handlers.InternalQRIS.RegisterPakailink)
+		internal.POST("/qris/pakailink/generate", handlers.InternalQRIS.GeneratePakailink)
+	}
 
 	router.GET("/v1/health", handlers.Health.GetHealth)
 	// API PPOB routes (protected with client API key + ppob scope)

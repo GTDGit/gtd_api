@@ -16,14 +16,16 @@ import (
 	"github.com/GTDGit/gtd_api/internal/models"
 	"github.com/GTDGit/gtd_api/internal/repository"
 	"github.com/GTDGit/gtd_api/internal/service"
+	"github.com/GTDGit/gtd_api/pkg/dana"
 	"github.com/GTDGit/gtd_api/pkg/pakailink"
 )
 
 // DisbursementWebhookHandler receives provider-side callbacks for payouts.
 type DisbursementWebhookHandler struct {
-	payoutRepo *repository.PayoutRepository
-	payoutSvc  *service.PayoutService
+	payoutRepo   *repository.PayoutRepository
+	payoutSvc    *service.PayoutService
 	pakailinkPub *rsa.PublicKey
+	danaPub      *rsa.PublicKey
 }
 
 // NewDisbursementWebhookHandler constructs a DisbursementWebhookHandler.
@@ -31,11 +33,13 @@ func NewDisbursementWebhookHandler(
 	payoutRepo *repository.PayoutRepository,
 	payoutSvc *service.PayoutService,
 	pakailinkPub *rsa.PublicKey,
+	danaPub *rsa.PublicKey,
 ) *DisbursementWebhookHandler {
 	return &DisbursementWebhookHandler{
-		payoutRepo: payoutRepo,
-		payoutSvc:  payoutSvc,
+		payoutRepo:   payoutRepo,
+		payoutSvc:    payoutSvc,
 		pakailinkPub: pakailinkPub,
+		danaPub:      danaPub,
 	}
 }
 
@@ -127,6 +131,86 @@ func (h *DisbursementWebhookHandler) HandlePakailink(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"responseCode": "2004400", "responseMessage": "Successful"})
+}
+
+// HandleDana processes a DANA Transfer-to-Bank Notify (Service 43) for
+// previously-pending bank payouts. Verifies the asymmetric SNAP signature,
+// persists the raw callback for audit, and updates the underlying payout.
+func (h *DisbursementWebhookHandler) HandleDana(c *gin.Context) {
+	body, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"responseCode": "4004300", "responseMessage": "Invalid body"})
+		return
+	}
+
+	timestamp := c.GetHeader("X-TIMESTAMP")
+	signature := c.GetHeader("X-SIGNATURE")
+	pathCandidates := []string{
+		c.Request.URL.Path,
+		"https://" + c.Request.Host + c.Request.URL.Path,
+	}
+
+	cb := &models.PayoutCallback{
+		Provider:         models.DisbursementProviderDANA,
+		Headers:          headersAsJSON(c.Request.Header),
+		Payload:          models.NullableRawMessage(body),
+		Signature:        nilIfEmpty(signature),
+		IsValidSignature: false,
+		IsProcessed:      false,
+	}
+	if err := h.payoutRepo.CreatePayoutCallback(c.Request.Context(), cb); err != nil {
+		log.Error().Err(err).Msg("dana disbursement webhook: persist raw callback")
+		c.JSON(http.StatusInternalServerError, gin.H{"responseCode": "5004300", "responseMessage": "Failed to record callback"})
+		return
+	}
+
+	valid := dana.VerifyWebhookSignature("POST", pathCandidates, body, timestamp, signature, h.danaPub)
+	if err := h.payoutRepo.UpdatePayoutCallbackSignature(c.Request.Context(), cb.ID, valid); err != nil {
+		log.Warn().Err(err).Msg("dana disbursement webhook: update signature flag")
+	}
+	if !valid {
+		h.markError(c.Request.Context(), cb.ID, "invalid signature")
+		c.JSON(http.StatusUnauthorized, gin.H{"responseCode": "4014300", "responseMessage": "Unauthorized signature"})
+		return
+	}
+
+	notify, err := dana.ParseDisbursementNotify(body)
+	if err != nil {
+		h.markError(c.Request.Context(), cb.ID, "invalid JSON")
+		c.JSON(http.StatusBadRequest, gin.H{"responseCode": "4004300", "responseMessage": "Invalid request body"})
+		return
+	}
+	if notify.OriginalPartnerReferenceNo == "" {
+		h.markError(c.Request.Context(), cb.ID, "missing originalPartnerReferenceNo")
+		c.JSON(http.StatusBadRequest, gin.H{"responseCode": "4004300", "responseMessage": "Missing originalPartnerReferenceNo"})
+		return
+	}
+
+	payout, err := h.payoutSvc.ApplyDanaCallback(c.Request.Context(), service.DanaCallbackEvent{
+		PartnerReference: notify.OriginalPartnerReferenceNo,
+		ReferenceNo:      notify.OriginalReferenceNo,
+		Status:           notify.LatestTransactionStatus,
+		StatusDesc:       notify.TransactionStatusDesc,
+		RawPayload:       body,
+	})
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			h.markError(c.Request.Context(), cb.ID, "payout not found")
+			c.JSON(http.StatusOK, gin.H{"responseCode": "2004300", "responseMessage": "Successful"})
+			return
+		}
+		h.markError(c.Request.Context(), cb.ID, err.Error())
+		c.JSON(http.StatusInternalServerError, gin.H{"responseCode": "5004300", "responseMessage": "Processing error"})
+		return
+	}
+
+	payoutIDPtr := payout.PayoutID
+	statusStr := string(payout.Status)
+	if err := h.markProcessed(c.Request.Context(), cb.ID, &payoutIDPtr, &statusStr); err != nil {
+		log.Warn().Err(err).Msg("dana disbursement webhook: mark processed")
+	}
+
+	c.JSON(http.StatusOK, gin.H{"responseCode": "2004300", "responseMessage": "Successful"})
 }
 
 func (h *DisbursementWebhookHandler) markError(ctx context.Context, id int, msg string) {

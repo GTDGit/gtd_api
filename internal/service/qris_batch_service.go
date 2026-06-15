@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
+	_ "embed"
 	"fmt"
 	"strconv"
 	"time"
@@ -15,35 +16,22 @@ import (
 	"github.com/GTDGit/gtd_api/internal/storage"
 )
 
-// nobuSheetName is the worksheet name in the rendered batch file. It mirrors the
-// official Nobu form's primary sheet.
+// nobuSheetName is the data worksheet inside the official Nobu template. We fill
+// rows into this sheet rather than rendering our own, so the workbook Nobu
+// receives is byte-for-byte their branded form (dropdowns, MCC/Kode Pos lookup
+// sheets, merged header) with only the merchant rows added.
 const nobuSheetName = "Formulir Pendaftaran NOBU QRIS"
 
-// nobuColumns are the headers of the Nobu registration form, in order. The
-// official template is a heavily merged spreadsheet with dropdown source sheets;
-// we emit a clean one-row-per-merchant sheet carrying the same fields, which is
-// the data Nobu consumes. An operator can paste these rows into the branded
-// template if Nobu requires the exact workbook.
-var nobuColumns = []string{
-	"NO",
-	"NAMA LENGKAP PEMILIK USAHA (sesuai e-KTP)",
-	"NIK E-KTP PEMILIK USAHA (16 Digit)",
-	"NO HANDPHONE PEMILIK USAHA (WhatsApp)",
-	"ALAMAT EMAIL (Perusahaan/PIC)",
-	"NAMA USAHA (Maks. 25 karakter & Kapital)",
-	"MCC - JENIS USAHA",
-	"ALAMAT USAHA (jalan, no, RT/RW, kelurahan, kecamatan)",
-	"KOTA / KABUPATEN",
-	"KODE POS",
-	"APAKAH MEMILIKI TOKO FISIK ? (Ya/Tidak)",
-	"KATEGORI USAHA BERDASARKAN OMZET",
-	"TIPE QRIS (Dinamis/statis/booth)",
-	"WEBSITE",
-	"KATEGORI USAHA BERDASARKAN RISK",
-	"ESTIMASI SALES VOLUME",
-	"ESTIMASI TRANSAKSI",
-	"LINK DOKUMEN",
-}
+// nobuDataStartRow is the first merchant row in the template (the header occupies
+// rows 9-10, with the address sub-headers on row 10).
+const nobuDataStartRow = 11
+
+// nobuTemplateBytes is the official Nobu registration workbook, embedded so the
+// rendered batch is the real form rather than a hand-built sheet. Sourced from
+// docs/qris/nobu and copied verbatim into templates/.
+//
+//go:embed templates/nobu_qris_form.xlsx
+var nobuTemplateBytes []byte
 
 // QRISBatchService renders pending registrations into a Nobu-format Excel file,
 // persists the file to object storage, records a qris_nobu_batches row, and
@@ -88,13 +76,14 @@ func (s *QRISBatchService) GenerateBatch(ctx context.Context, batchDate time.Tim
 		return nil, nil
 	}
 
-	periodLabel := fmt.Sprintf("%s Batch %d", day, seq)
+	periodLabel := fmt.Sprintf("%s Batch %d", formatNobuDate(batchDate), seq)
 	fileBytes, err := s.renderExcel(pending, periodLabel)
 	if err != nil {
 		return nil, fmt.Errorf("qris batch: render excel: %w", err)
 	}
 
-	fileName := fmt.Sprintf("nobu-qris-batch-%s-b%d.xlsx", day, seq)
+	// File name mirrors the official Nobu template's naming convention.
+	fileName := fmt.Sprintf("Formulir Pendaftaran NOBU QRIS (NMID Level) - Batch %d - Periode %s.xlsx", seq, formatNobuDate(batchDate))
 	storageKey := s.batchKey(day, seq, fileName)
 	const xlsxMIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 	if err := s.store.Put(ctx, storageKey, xlsxMIME, fileBytes); err != nil {
@@ -170,77 +159,65 @@ func (s *QRISBatchService) MarkBatchSent(ctx context.Context, id int) error {
 	return s.batchRepo.MarkSent(ctx, id)
 }
 
-// renderExcel builds the workbook bytes for the given registrations.
+// renderExcel fills the official Nobu template (embedded) with one row per
+// registration, starting at the template's first data row. The branded header,
+// merged cells, MCC / Kode Pos dropdown lookup sheets, and styling are left
+// untouched — Nobu receives their exact form with only the merchant rows added.
 func (s *QRISBatchService) renderExcel(regs []models.QRISRegistration, periodLabel string) ([]byte, error) {
-	f := excelize.NewFile()
+	f, err := excelize.OpenReader(bytes.NewReader(nobuTemplateBytes))
+	if err != nil {
+		return nil, fmt.Errorf("open nobu template: %w", err)
+	}
 	defer func() { _ = f.Close() }()
 
-	idx, err := f.NewSheet(nobuSheetName)
-	if err != nil {
-		return nil, err
-	}
-	f.SetActiveSheet(idx)
-	_ = f.DeleteSheet("Sheet1")
-
-	// Title + period rows.
-	_ = f.SetCellValue(nobuSheetName, "A1", "FORMULIR PENDAFTARAN NOBU QRIS")
-	_ = f.SetCellValue(nobuSheetName, "A2", "Periode Pendaftaran: "+periodLabel)
-
-	// Header row at row 4.
-	const headerRow = 4
-	headerStyle, _ := f.NewStyle(&excelize.Style{
-		Font:      &excelize.Font{Bold: true},
-		Alignment: &excelize.Alignment{Horizontal: "center", Vertical: "center", WrapText: true},
-		Fill:      excelize.Fill{Type: "pattern", Pattern: 1, Color: []string{"D9E1F2"}},
-	})
-	for i, h := range nobuColumns {
-		cell, _ := excelize.CoordinatesToCellName(i+1, headerRow)
-		_ = f.SetCellValue(nobuSheetName, cell, h)
-		_ = f.SetCellStyle(nobuSheetName, cell, cell, headerStyle)
+	if _, err := f.GetSheetIndex(nobuSheetName); err != nil {
+		return nil, fmt.Errorf("nobu template: sheet %q not found: %w", nobuSheetName, err)
 	}
 
-	// Data rows.
-	for ri, r := range regs {
-		row := headerRow + 1 + ri
-		vals := []any{
-			ri + 1,
-			r.OwnerFullName,
-			// Force NIK as text so leading zeros / 16 digits survive.
-			r.OwnerNIK,
-			r.OwnerPhone,
-			r.Email,
-			r.BusinessName,
-			r.MCC,
-			composeNobuAddress(r),
-			r.City,
-			derefStr(r.PostalCode),
-			boolToYaTidak(r.HasPhysicalStore),
-			r.OmzetCategory,
-			nobuQRISType(r.QRISType),
-			derefStr(r.Website),
-			r.RiskCategory + " Risk",
-			int64OrEmpty(r.EstimatedSalesVolume),
-			intOrEmpty(r.EstimatedTxCount),
-			derefStr(r.DocPortalURL),
+	// Period metadata cell (merged target for "Periode Pendaftaran :").
+	_ = f.SetCellStr(nobuSheetName, "D6", periodLabel)
+
+	// One merchant row per registration, mapped onto the template's columns.
+	// Address is split across I..M (jalan/RT/RW/Kelurahan/Kecamatan); the
+	// token-gated document bundle link goes in the "KELENGKAPAN DOKUMEN USAHA"
+	// column (U). Text columns (NIK, phone, MCC, postal) are written as strings
+	// to preserve leading zeros and exact digits.
+	for i, r := range regs {
+		row := nobuDataStartRow + i
+		setText := func(col, val string) {
+			_ = f.SetCellStr(nobuSheetName, fmt.Sprintf("%s%d", col, row), val)
 		}
-		for ci, v := range vals {
-			cell, _ := excelize.CoordinatesToCellName(ci+1, row)
-			_ = f.SetCellValue(nobuSheetName, cell, v)
+		setNum := func(col string, v any) {
+			_ = f.SetCellValue(nobuSheetName, fmt.Sprintf("%s%d", col, row), v)
 		}
-		// NIK + phone as text to preserve digits.
-		nikCell, _ := excelize.CoordinatesToCellName(3, row)
-		_ = f.SetCellStr(nobuSheetName, nikCell, r.OwnerNIK)
-		phoneCell, _ := excelize.CoordinatesToCellName(4, row)
-		_ = f.SetCellStr(nobuSheetName, phoneCell, r.OwnerPhone)
-	}
 
-	// Reasonable column widths.
-	_ = f.SetColWidth(nobuSheetName, "A", "A", 5)
-	_ = f.SetColWidth(nobuSheetName, "B", "B", 28)
-	_ = f.SetColWidth(nobuSheetName, "C", "E", 24)
-	_ = f.SetColWidth(nobuSheetName, "F", "H", 30)
-	_ = f.SetColWidth(nobuSheetName, "I", "Q", 18)
-	_ = f.SetColWidth(nobuSheetName, "R", "R", 48)
+		setNum("B", i+1)
+		setText("C", r.OwnerFullName)
+		setText("D", r.OwnerNIK)
+		setText("E", r.OwnerPhone)
+		setText("F", r.Email)
+		setText("G", r.BusinessName)
+		setText("H", r.MCC)
+		setText("I", r.AddressStreet)
+		setText("J", derefStr(r.AddressRT))
+		setText("K", derefStr(r.AddressRW))
+		setText("L", derefStr(r.AddressKelurahan))
+		setText("M", derefStr(r.AddressKecamatan))
+		setText("N", r.City)
+		setText("O", derefStr(r.PostalCode))
+		setText("P", boolToYaTidak(r.HasPhysicalStore))
+		setText("Q", r.OmzetCategory)
+		setText("R", nobuQRISType(r.QRISType))
+		setText("U", derefStr(r.DocPortalURL))
+		setText("W", derefStr(r.Website))
+		setText("Y", r.RiskCategory+" Risk")
+		if r.EstimatedSalesVolume != nil {
+			setNum("AA", *r.EstimatedSalesVolume)
+		}
+		if r.EstimatedTxCount != nil {
+			setNum("AB", *r.EstimatedTxCount)
+		}
+	}
 
 	var buf bytes.Buffer
 	if err := f.Write(&buf); err != nil {
@@ -257,42 +234,24 @@ func (s *QRISBatchService) batchKey(day string, seq int, fileName string) string
 	return prefix + "batches/" + day + "/b" + strconv.Itoa(seq) + "/" + fileName
 }
 
-// composeNobuAddress folds the structured address parts into the single
-// free-text address cell the Nobu form expects.
-func composeNobuAddress(r models.QRISRegistration) string {
-	parts := []string{r.AddressStreet}
-	if rt := derefStr(r.AddressRT); rt != "" {
-		rw := derefStr(r.AddressRW)
-		if rw != "" {
-			parts = append(parts, "RT/RW "+rt+"/"+rw)
-		} else {
-			parts = append(parts, "RT "+rt)
-		}
-	}
-	if kel := derefStr(r.AddressKelurahan); kel != "" {
-		parts = append(parts, "Kel. "+kel)
-	}
-	if kec := derefStr(r.AddressKecamatan); kec != "" {
-		parts = append(parts, "Kec. "+kec)
-	}
-	out := ""
-	for i, p := range parts {
-		if p == "" {
-			continue
-		}
-		if i > 0 && out != "" {
-			out += ", "
-		}
-		out += p
-	}
-	return out
-}
-
 func boolToYaTidak(b bool) string {
 	if b {
 		return "Ya"
 	}
 	return "Tidak"
+}
+
+// nobuMonths maps month number to its Indonesian name for the period label.
+var nobuMonths = [...]string{
+	"", "Januari", "Februari", "Maret", "April", "Mei", "Juni",
+	"Juli", "Agustus", "September", "Oktober", "November", "Desember",
+}
+
+// formatNobuDate renders a date as "15 Juni 2026" (WIB), matching the Nobu form.
+func formatNobuDate(t time.Time) string {
+	wib := time.FixedZone("WIB", 7*3600)
+	t = t.In(wib)
+	return fmt.Sprintf("%d %s %d", t.Day(), nobuMonths[t.Month()], t.Year())
 }
 
 // nobuQRISType maps the API enum (static|dynamic|both) onto the Nobu form's
@@ -315,18 +274,4 @@ func derefStr(s *string) string {
 		return ""
 	}
 	return *s
-}
-
-func int64OrEmpty(v *int64) any {
-	if v == nil {
-		return ""
-	}
-	return *v
-}
-
-func intOrEmpty(v *int) any {
-	if v == nil {
-		return ""
-	}
-	return *v
 }

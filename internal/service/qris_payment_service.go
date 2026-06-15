@@ -151,10 +151,15 @@ func (s *QRISPaymentService) RecordQRISPayment(ctx context.Context, e QRISPaymen
 
 	// Notify the owning client (best-effort, async). The merchant carries the
 	// client_id; static QR with no merchant client_id (legacy) is not notified.
+	// The webhook payload uses the same standardized shape as GET /v1/qris/payments.
 	if s.callbackSvc != nil && merchant.ClientID != nil {
 		pid := payment.ID
 		mid := merchant.ID
-		go s.callbackSvc.Enqueue(context.Background(), *merchant.ClientID, models.QRISEventPaymentSuccess, &mid, &pid, payment)
+		item := toQRISHistoryItem(payment)
+		if item.SubMerchantID == nil {
+			item.SubMerchantID = merchant.SubMerchantID
+		}
+		go s.callbackSvc.Enqueue(context.Background(), *merchant.ClientID, models.QRISEventPaymentSuccess, &mid, &pid, item)
 	}
 	return payment, true, nil
 }

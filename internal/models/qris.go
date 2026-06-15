@@ -130,13 +130,35 @@ const (
 	QRISRegRejected     QRISRegistrationStatus = "rejected"      // Nobu declined
 )
 
+// QRISType is the kind of QR a merchant requests. Exposed to clients as the
+// English enum static|dynamic|both (the Nobu Excel form uses its own labels,
+// mapped at batch-render time).
+type QRISType string
+
+const (
+	QRISTypeStatic  QRISType = "static"
+	QRISTypeDynamic QRISType = "dynamic"
+	QRISTypeBoth    QRISType = "both"
+)
+
+// Valid reports whether t is one of the supported QRIS types.
+func (t QRISType) Valid() bool {
+	switch t {
+	case QRISTypeStatic, QRISTypeDynamic, QRISTypeBoth:
+		return true
+	default:
+		return false
+	}
+}
+
 // QRISRegistration mirrors qris_registrations — a client's request to onboard a
 // static-QRIS merchant. Nobu has no register API, so every field of the Nobu
 // Excel form is captured here for batch rendering.
 type QRISRegistration struct {
-	ID              int    `db:"id" json:"id"`
+	ID              int    `db:"id" json:"-"`                              // internal SERIAL; never exposed
+	RegistrationID  string `db:"registration_id" json:"id"`               // public UUID v4 (client-facing `id`)
 	ClientID        *int   `db:"client_id" json:"clientId,omitempty"`
-	RegistrationRef string `db:"registration_ref" json:"registrationRef"`
+	RegistrationRef string `db:"registration_ref" json:"referenceId"`     // client idempotency key
 
 	OwnerFullName string `db:"owner_full_name" json:"ownerFullName"`
 	OwnerNIK      string `db:"owner_nik" json:"ownerNik"`
@@ -154,9 +176,9 @@ type QRISRegistration struct {
 	PostalCode       *string `db:"postal_code" json:"postalCode,omitempty"`
 	HasPhysicalStore bool    `db:"has_physical_store" json:"hasPhysicalStore"`
 
-	OmzetCategory string `db:"omzet_category" json:"omzetCategory"`
-	QRISType      string `db:"qris_type" json:"qrisType"`
-	RiskCategory  string `db:"risk_category" json:"riskCategory"`
+	OmzetCategory string   `db:"omzet_category" json:"omzetCategory"`
+	QRISType      QRISType `db:"qris_type" json:"qrisType"`
+	RiskCategory  string   `db:"risk_category" json:"riskCategory"`
 
 	Website              *string `db:"website" json:"website,omitempty"`
 	EstimatedSalesVolume *int64  `db:"estimated_sales_volume" json:"estimatedSalesVolume,omitempty"`

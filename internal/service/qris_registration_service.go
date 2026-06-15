@@ -9,8 +9,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"time"
 
+	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 
 	"github.com/GTDGit/gtd_api/internal/models"
@@ -73,36 +73,137 @@ type QRISDocRequest struct {
 	Content  string `json:"content"`  // base64 (raw or data-URI)
 }
 
-// QRISRegistrationRequest is the client-facing intake payload. It carries every
-// field the Nobu Excel form requires plus the onboarding documents.
-type QRISRegistrationRequest struct {
-	RegistrationRef string `json:"registrationRef"` // optional; generated if blank (idempotency key)
+// QRISOwner groups the merchant owner's identity fields (Nobu e-KTP section).
+type QRISOwner struct {
+	FullName string `json:"fullName"`
+	NIK      string `json:"nik"`
+	Phone    string `json:"phone"`
+	Email    string `json:"email"`
+}
 
-	OwnerFullName string `json:"ownerFullName"`
-	OwnerNIK      string `json:"ownerNik"`
-	OwnerPhone    string `json:"ownerPhone"`
-	Email         string `json:"email"`
+// QRISAddress groups the merchant's address fields (Nobu ALAMAT USAHA section).
+type QRISAddress struct {
+	Street     string `json:"street"`
+	RT         string `json:"rt"`
+	RW         string `json:"rw"`
+	Kelurahan  string `json:"kelurahan"`
+	Kecamatan  string `json:"kecamatan"`
+	City       string `json:"city"`
+	PostalCode string `json:"postalCode"`
+}
 
-	BusinessName     string `json:"businessName"`
-	MCC              string `json:"mcc"`
-	AddressStreet    string `json:"addressStreet"`
-	AddressRT        string `json:"addressRt"`
-	AddressRW        string `json:"addressRw"`
-	AddressKelurahan string `json:"addressKelurahan"`
-	AddressKecamatan string `json:"addressKecamatan"`
-	City             string `json:"city"`
-	PostalCode       string `json:"postalCode"`
-	HasPhysicalStore *bool  `json:"hasPhysicalStore"`
-
-	OmzetCategory string `json:"omzetCategory"`
-	QRISType      string `json:"qrisType"` // statis only for now
-	RiskCategory  string `json:"riskCategory"`
-
+// QRISBusiness groups the business profile fields (name, MCC, classification,
+// estimates) the Nobu form requires.
+type QRISBusiness struct {
+	Name                 string `json:"name"`
+	MCC                  string `json:"mcc"`
+	HasPhysicalStore     *bool  `json:"hasPhysicalStore"`
+	OmzetCategory        string `json:"omzetCategory"`
+	RiskCategory         string `json:"riskCategory"`
 	Website              string `json:"website"`
 	EstimatedSalesVolume *int64 `json:"estimatedSalesVolume"`
 	EstimatedTxCount     *int   `json:"estimatedTxCount"`
+}
+
+// QRISRegistrationRequest is the client-facing intake payload. Fields are grouped
+// into nested objects (owner / address / business) mirroring the Payment API
+// style. referenceId and qrisType are mandatory.
+type QRISRegistrationRequest struct {
+	ReferenceID string `json:"referenceId"` // mandatory idempotency key (unique per client)
+	QRISType    string `json:"qrisType"`    // mandatory: static | dynamic | both
+
+	Owner    QRISOwner    `json:"owner"`
+	Address  QRISAddress  `json:"address"`
+	Business QRISBusiness `json:"business"`
 
 	Documents []QRISDocRequest `json:"documents"`
+}
+
+// QRISRegistrationResponse is the client-facing representation of a registration.
+// It mirrors the Payment API: a public UUID `id`, the mandatory `referenceId`,
+// nested owner/address/business objects, and WIB (+07:00) timestamps. The same
+// mapper feeds the qris.merchant.activated webhook so API and webhook are identical.
+type QRISRegistrationResponse struct {
+	ID          string `json:"id"`          // public UUID v4
+	ReferenceID string `json:"referenceId"` // client idempotency key
+	QRISType    string `json:"qrisType"`
+	Status      string `json:"status"`
+
+	Owner    QRISOwnerResponse    `json:"owner"`
+	Address  QRISAddressResponse  `json:"address"`
+	Business QRISBusinessResponse `json:"business"`
+
+	QRISMerchantID *int   `json:"qrisMerchantId,omitempty"`
+	Note           string `json:"note,omitempty"`
+	CreatedAt      string `json:"createdAt"`
+	UpdatedAt      string `json:"updatedAt"`
+}
+
+type QRISOwnerResponse struct {
+	FullName string `json:"fullName"`
+	NIK      string `json:"nik"`
+	Phone    string `json:"phone"`
+	Email    string `json:"email"`
+}
+
+type QRISAddressResponse struct {
+	Street     string `json:"street"`
+	RT         string `json:"rt,omitempty"`
+	RW         string `json:"rw,omitempty"`
+	Kelurahan  string `json:"kelurahan,omitempty"`
+	Kecamatan  string `json:"kecamatan,omitempty"`
+	City       string `json:"city"`
+	PostalCode string `json:"postalCode,omitempty"`
+}
+
+type QRISBusinessResponse struct {
+	Name                 string `json:"name"`
+	MCC                  string `json:"mcc"`
+	HasPhysicalStore     bool   `json:"hasPhysicalStore"`
+	OmzetCategory        string `json:"omzetCategory"`
+	RiskCategory         string `json:"riskCategory"`
+	Website              string `json:"website,omitempty"`
+	EstimatedSalesVolume *int64 `json:"estimatedSalesVolume,omitempty"`
+	EstimatedTxCount     *int   `json:"estimatedTxCount,omitempty"`
+}
+
+// ToQRISRegistrationResponse maps the stored model onto the client-facing DTO.
+func ToQRISRegistrationResponse(reg *models.QRISRegistration) QRISRegistrationResponse {
+	return QRISRegistrationResponse{
+		ID:          reg.RegistrationID,
+		ReferenceID: reg.RegistrationRef,
+		QRISType:    string(reg.QRISType),
+		Status:      string(reg.Status),
+		Owner: QRISOwnerResponse{
+			FullName: reg.OwnerFullName,
+			NIK:      reg.OwnerNIK,
+			Phone:    reg.OwnerPhone,
+			Email:    reg.Email,
+		},
+		Address: QRISAddressResponse{
+			Street:     reg.AddressStreet,
+			RT:         derefStr(reg.AddressRT),
+			RW:         derefStr(reg.AddressRW),
+			Kelurahan:  derefStr(reg.AddressKelurahan),
+			Kecamatan:  derefStr(reg.AddressKecamatan),
+			City:       reg.City,
+			PostalCode: derefStr(reg.PostalCode),
+		},
+		Business: QRISBusinessResponse{
+			Name:                 reg.BusinessName,
+			MCC:                  reg.MCC,
+			HasPhysicalStore:     reg.HasPhysicalStore,
+			OmzetCategory:        reg.OmzetCategory,
+			RiskCategory:         reg.RiskCategory,
+			Website:              derefStr(reg.Website),
+			EstimatedSalesVolume: reg.EstimatedSalesVolume,
+			EstimatedTxCount:     reg.EstimatedTxCount,
+		},
+		QRISMerchantID: reg.QRISMerchantID,
+		Note:           derefStr(reg.Note),
+		CreatedAt:      formatPaymentTime(reg.CreatedAt),
+		UpdatedAt:      formatPaymentTime(reg.UpdatedAt),
+	}
 }
 
 // QRISDocCreator is the doc-service surface the registration service depends on.
@@ -203,11 +304,20 @@ func (s *QRISRegistrationService) Register(ctx context.Context, clientID int, re
 		reg.DocBundleID = &bundle.ID
 	}
 
+	// Idempotency: a repeated referenceId for the same client returns 409 rather
+	// than creating a duplicate (mirrors the Payment API).
+	if existing, gerr := s.repo.GetByRef(ctx, clientID, reg.RegistrationRef); gerr == nil && existing != nil {
+		return nil, regErr(http.StatusConflict, "DUPLICATE_REFERENCE",
+			"a registration with this referenceId already exists", nil)
+	} else if gerr != nil && !errors.Is(gerr, sql.ErrNoRows) {
+		return nil, regErr(http.StatusInternalServerError, "INTERNAL_ERROR", "failed to check referenceId", gerr)
+	}
+
 	created, err := s.repo.Create(ctx, reg)
 	if err != nil {
 		if isUniqueViolation(err) {
-			return nil, regErr(http.StatusConflict, "DUPLICATE_REGISTRATION",
-				"a registration with this registrationRef already exists", err)
+			return nil, regErr(http.StatusConflict, "DUPLICATE_REFERENCE",
+				"a registration with this referenceId already exists", err)
 		}
 		return nil, regErr(http.StatusInternalServerError, "INTERNAL_ERROR", "failed to create registration", err)
 	}
@@ -241,9 +351,9 @@ func (s *QRISRegistrationService) Register(ctx context.Context, clientID int, re
 	return created, nil
 }
 
-// Get returns a registration scoped to the client.
-func (s *QRISRegistrationService) Get(ctx context.Context, clientID int, ref string) (*models.QRISRegistration, error) {
-	reg, err := s.repo.GetByRef(ctx, clientID, strings.TrimSpace(ref))
+// Get returns a registration scoped to the client by its public UUID id.
+func (s *QRISRegistrationService) Get(ctx context.Context, clientID int, registrationID string) (*models.QRISRegistration, error) {
+	reg, err := s.repo.GetByRegistrationID(ctx, clientID, strings.TrimSpace(registrationID))
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, regErr(http.StatusNotFound, "NOT_FOUND", "registration not found", nil)
@@ -387,8 +497,12 @@ func (s *QRISRegistrationService) Activate(ctx context.Context, regID int, in QR
 	}
 
 	if s.callbackSvc != nil && reg.ClientID != nil {
+		// Reflect the activated state so the webhook payload matches a subsequent
+		// GET of the registration (same mapper, same shape as the API).
+		reg.Status = models.QRISRegActivated
+		reg.QRISMerchantID = &created.ID
 		mid := created.ID
-		s.callbackSvc.Enqueue(ctx, *reg.ClientID, models.QRISEventMerchantActivated, &mid, nil, created)
+		s.callbackSvc.Enqueue(ctx, *reg.ClientID, models.QRISEventMerchantActivated, &mid, nil, ToQRISRegistrationResponse(reg))
 	}
 
 	log.Info().
@@ -405,75 +519,73 @@ func (s *QRISRegistrationService) validate(clientID int, req QRISRegistrationReq
 		return nil, nil, regErr(http.StatusBadRequest, "INVALID_REQUEST", msg, nil)
 	}
 
-	ownerName := strings.TrimSpace(req.OwnerFullName)
-	if ownerName == "" {
-		return bad("ownerFullName is required")
-	}
-	nik := strings.TrimSpace(req.OwnerNIK)
-	if !nikPattern.MatchString(nik) {
-		return bad("ownerNik must be exactly 16 digits")
-	}
-	phone := strings.TrimSpace(req.OwnerPhone)
-	if phone == "" {
-		return bad("ownerPhone is required")
-	}
-	email := strings.TrimSpace(req.Email)
-	if email == "" || !strings.Contains(email, "@") {
-		return bad("a valid email is required")
+	ref := strings.TrimSpace(req.ReferenceID)
+	if ref == "" {
+		return bad("referenceId is required")
 	}
 
-	businessName := strings.TrimSpace(req.BusinessName)
+	qrisType := models.QRISType(strings.ToLower(strings.TrimSpace(req.QRISType)))
+	if !qrisType.Valid() {
+		return bad("qrisType must be one of static, dynamic, both")
+	}
+
+	ownerName := strings.TrimSpace(req.Owner.FullName)
+	if ownerName == "" {
+		return bad("owner.fullName is required")
+	}
+	nik := strings.TrimSpace(req.Owner.NIK)
+	if !nikPattern.MatchString(nik) {
+		return bad("owner.nik must be exactly 16 digits")
+	}
+	phone := strings.TrimSpace(req.Owner.Phone)
+	if phone == "" {
+		return bad("owner.phone is required")
+	}
+	email := strings.TrimSpace(req.Owner.Email)
+	if email == "" || !strings.Contains(email, "@") {
+		return bad("a valid owner.email is required")
+	}
+
+	businessName := strings.TrimSpace(req.Business.Name)
 	if businessName == "" {
-		return bad("businessName is required")
+		return bad("business.name is required")
 	}
 	if len([]rune(businessName)) > 25 {
-		return bad("businessName must be at most 25 characters")
+		return bad("business.name must be at most 25 characters")
 	}
 	businessName = strings.ToUpper(businessName) // form requires capitalised
 
-	mcc := strings.TrimSpace(req.MCC)
+	mcc := strings.TrimSpace(req.Business.MCC)
 	if !mccPattern.MatchString(mcc) {
-		return bad("mcc must be a 4-digit code")
+		return bad("business.mcc must be a 4-digit code")
 	}
 
-	street := strings.TrimSpace(req.AddressStreet)
+	street := strings.TrimSpace(req.Address.Street)
 	if street == "" {
-		return bad("addressStreet is required")
+		return bad("address.street is required")
 	}
-	city := strings.TrimSpace(req.City)
+	city := strings.TrimSpace(req.Address.City)
 	if city == "" {
-		return bad("city is required")
+		return bad("address.city is required")
 	}
 
-	omzet := strings.ToUpper(strings.TrimSpace(req.OmzetCategory))
+	omzet := strings.ToUpper(strings.TrimSpace(req.Business.OmzetCategory))
 	if !omzetCategories[omzet] {
-		return bad("omzetCategory must be one of UMI, UKE, UME, UBE, URE, PSO, BLU")
+		return bad("business.omzetCategory must be one of UMI, UKE, UME, UBE, URE, PSO, BLU")
 	}
 
-	qrisType := strings.ToLower(strings.TrimSpace(req.QRISType))
-	if qrisType == "" {
-		qrisType = "statis"
-	}
-	if qrisType != "statis" {
-		return bad("qrisType must be 'statis' (only static QRIS is supported)")
-	}
-
-	risk := normalizeRisk(req.RiskCategory)
+	risk := normalizeRisk(req.Business.RiskCategory)
 	if !riskCategories[risk] {
-		return bad("riskCategory must be one of Low, Medium, High")
+		return bad("business.riskCategory must be one of Low, Medium, High")
 	}
 
 	hasStore := true
-	if req.HasPhysicalStore != nil {
-		hasStore = *req.HasPhysicalStore
-	}
-
-	ref := strings.TrimSpace(req.RegistrationRef)
-	if ref == "" {
-		ref = fmt.Sprintf("QRISREG-%d-%d", clientID, time.Now().UnixNano())
+	if req.Business.HasPhysicalStore != nil {
+		hasStore = *req.Business.HasPhysicalStore
 	}
 
 	reg := &models.QRISRegistration{
+		RegistrationID:       uuid.New().String(),
 		ClientID:             &clientID,
 		RegistrationRef:      ref,
 		OwnerFullName:        ownerName,
@@ -483,19 +595,19 @@ func (s *QRISRegistrationService) validate(clientID int, req QRISRegistrationReq
 		BusinessName:         businessName,
 		MCC:                  mcc,
 		AddressStreet:        street,
-		AddressRT:            nilIfBlank(req.AddressRT),
-		AddressRW:            nilIfBlank(req.AddressRW),
-		AddressKelurahan:     nilIfBlank(req.AddressKelurahan),
-		AddressKecamatan:     nilIfBlank(req.AddressKecamatan),
+		AddressRT:            nilIfBlank(req.Address.RT),
+		AddressRW:            nilIfBlank(req.Address.RW),
+		AddressKelurahan:     nilIfBlank(req.Address.Kelurahan),
+		AddressKecamatan:     nilIfBlank(req.Address.Kecamatan),
 		City:                 city,
-		PostalCode:           nilIfBlank(req.PostalCode),
+		PostalCode:           nilIfBlank(req.Address.PostalCode),
 		HasPhysicalStore:     hasStore,
 		OmzetCategory:        omzet,
 		QRISType:             qrisType,
 		RiskCategory:         risk,
-		Website:              nilIfBlank(req.Website),
-		EstimatedSalesVolume: req.EstimatedSalesVolume,
-		EstimatedTxCount:     req.EstimatedTxCount,
+		Website:              nilIfBlank(req.Business.Website),
+		EstimatedSalesVolume: req.Business.EstimatedSalesVolume,
+		EstimatedTxCount:     req.Business.EstimatedTxCount,
 		Status:               models.QRISRegPendingBatch,
 	}
 

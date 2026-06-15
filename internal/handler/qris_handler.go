@@ -47,7 +47,7 @@ func (h *QRISHandler) CreateMerchant(c *gin.Context) {
 		h.writeServiceError(c, err)
 		return
 	}
-	utils.Success(c, http.StatusCreated, "QRIS merchant registration received", reg)
+	utils.Success(c, http.StatusCreated, "Successfully", service.ToQRISRegistrationResponse(reg))
 }
 
 // ListMerchants handles GET /v1/qris/merchants — the client's own registrations.
@@ -73,22 +73,26 @@ func (h *QRISHandler) ListMerchants(c *gin.Context) {
 	if limit <= 0 || limit > 200 {
 		limit = 20
 	}
-	utils.SuccessWithPagination(c, http.StatusOK, "Registrations retrieved", gin.H{"items": items}, page, limit, total)
+	out := make([]service.QRISRegistrationResponse, 0, len(items))
+	for i := range items {
+		out = append(out, service.ToQRISRegistrationResponse(&items[i]))
+	}
+	utils.SuccessWithPagination(c, http.StatusOK, "Successfully", gin.H{"items": out}, page, limit, total)
 }
 
-// GetMerchant handles GET /v1/qris/merchants/:ref — one registration by ref.
+// GetMerchant handles GET /v1/qris/merchants/:id — one registration by public UUID.
 func (h *QRISHandler) GetMerchant(c *gin.Context) {
 	client := middleware.GetClient(c)
 	if client == nil {
 		utils.Error(c, http.StatusUnauthorized, "UNAUTHORIZED", "missing or invalid API key")
 		return
 	}
-	reg, err := h.registrationSvc.Get(c.Request.Context(), client.ID, c.Param("ref"))
+	reg, err := h.registrationSvc.Get(c.Request.Context(), client.ID, c.Param("id"))
 	if err != nil {
 		h.writeServiceError(c, err)
 		return
 	}
-	utils.Success(c, http.StatusOK, "Registration retrieved", reg)
+	utils.Success(c, http.StatusOK, "Successfully", service.ToQRISRegistrationResponse(reg))
 }
 
 // ListPayments handles GET /v1/qris/payments — the client's standardized QRIS

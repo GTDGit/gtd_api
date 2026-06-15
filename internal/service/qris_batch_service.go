@@ -216,7 +216,7 @@ func (s *QRISBatchService) renderExcel(regs []models.QRISRegistration, periodLab
 			derefStr(r.PostalCode),
 			boolToYaTidak(r.HasPhysicalStore),
 			r.OmzetCategory,
-			r.QRISType,
+			nobuQRISType(r.QRISType),
 			derefStr(r.Website),
 			r.RiskCategory + " Risk",
 			int64OrEmpty(r.EstimatedSalesVolume),
@@ -293,6 +293,21 @@ func boolToYaTidak(b bool) string {
 		return "Ya"
 	}
 	return "Tidak"
+}
+
+// nobuQRISType maps the API enum (static|dynamic|both) onto the Nobu form's
+// Indonesian labels in the "TIPE QRIS" column.
+func nobuQRISType(t models.QRISType) string {
+	switch t {
+	case models.QRISTypeStatic:
+		return "Statis"
+	case models.QRISTypeDynamic:
+		return "Dinamis"
+	case models.QRISTypeBoth:
+		return "Statis & Dinamis"
+	default:
+		return string(t)
+	}
 }
 
 func derefStr(s *string) string {

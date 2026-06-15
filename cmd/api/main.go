@@ -758,7 +758,7 @@ func setupRoutes(router *gin.Engine, handlers *Handlers, authMiddleware *middlew
 	{
 		qris.POST("/merchants", handlers.QRIS.CreateMerchant)
 		qris.GET("/merchants", handlers.QRIS.ListMerchants)
-		qris.GET("/merchants/:ref", handlers.QRIS.GetMerchant)
+		qris.GET("/merchants/:id", handlers.QRIS.GetMerchant)
 		qris.GET("/payments", handlers.QRIS.ListPayments)
 	}
 

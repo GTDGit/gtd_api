@@ -21,7 +21,7 @@ func NewQRISRegistrationRepository(db *sqlx.DB) *QRISRegistrationRepository {
 	return &QRISRegistrationRepository{db: db}
 }
 
-const qrisRegistrationColumns = `id, client_id, registration_ref, owner_full_name, owner_nik,
+const qrisRegistrationColumns = `id, registration_id, client_id, registration_ref, owner_full_name, owner_nik,
     owner_phone, email, business_name, mcc, address_street, address_rt, address_rw,
     address_kelurahan, address_kecamatan, city, postal_code, has_physical_store,
     omzet_category, qris_type, risk_category, website, estimated_sales_volume,
@@ -31,20 +31,20 @@ const qrisRegistrationColumns = `id, client_id, registration_ref, owner_full_nam
 // Create inserts a registration and returns it with id/timestamps populated.
 func (r *QRISRegistrationRepository) Create(ctx context.Context, reg *models.QRISRegistration) (*models.QRISRegistration, error) {
 	q := `INSERT INTO qris_registrations
-	        (client_id, registration_ref, owner_full_name, owner_nik, owner_phone, email,
+	        (registration_id, client_id, registration_ref, owner_full_name, owner_nik, owner_phone, email,
 	         business_name, mcc, address_street, address_rt, address_rw, address_kelurahan,
 	         address_kecamatan, city, postal_code, has_physical_store, omzet_category,
 	         qris_type, risk_category, website, estimated_sales_volume, estimated_tx_count,
 	         doc_bundle_id, status, note)
-	      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,
-	              COALESCE(NULLIF($24,''),'pending_batch'),$25)
+	      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,
+	              COALESCE(NULLIF($25,''),'pending_batch'),$26)
 	      RETURNING ` + qrisRegistrationColumns
 	var out models.QRISRegistration
 	if err := r.db.GetContext(ctx, &out, q,
-		reg.ClientID, reg.RegistrationRef, reg.OwnerFullName, reg.OwnerNIK, reg.OwnerPhone, reg.Email,
+		reg.RegistrationID, reg.ClientID, reg.RegistrationRef, reg.OwnerFullName, reg.OwnerNIK, reg.OwnerPhone, reg.Email,
 		reg.BusinessName, reg.MCC, reg.AddressStreet, reg.AddressRT, reg.AddressRW, reg.AddressKelurahan,
 		reg.AddressKecamatan, reg.City, reg.PostalCode, reg.HasPhysicalStore, reg.OmzetCategory,
-		reg.QRISType, reg.RiskCategory, reg.Website, reg.EstimatedSalesVolume, reg.EstimatedTxCount,
+		string(reg.QRISType), reg.RiskCategory, reg.Website, reg.EstimatedSalesVolume, reg.EstimatedTxCount,
 		reg.DocBundleID, string(reg.Status), reg.Note,
 	); err != nil {
 		return nil, err
@@ -52,12 +52,24 @@ func (r *QRISRegistrationRepository) Create(ctx context.Context, reg *models.QRI
 	return &out, nil
 }
 
-// GetByRef loads a registration scoped to a client (client-facing lookup).
+// GetByRef loads a registration scoped to a client by its idempotency reference.
 func (r *QRISRegistrationRepository) GetByRef(ctx context.Context, clientID int, ref string) (*models.QRISRegistration, error) {
 	q := `SELECT ` + qrisRegistrationColumns + `
 	      FROM qris_registrations WHERE client_id = $1 AND registration_ref = $2 LIMIT 1`
 	var reg models.QRISRegistration
 	if err := r.db.GetContext(ctx, &reg, q, clientID, ref); err != nil {
+		return nil, err
+	}
+	return &reg, nil
+}
+
+// GetByRegistrationID loads a registration scoped to a client by its public
+// UUID (the client-facing `id`). This is the lookup behind GET /v1/qris/merchants/{id}.
+func (r *QRISRegistrationRepository) GetByRegistrationID(ctx context.Context, clientID int, registrationID string) (*models.QRISRegistration, error) {
+	q := `SELECT ` + qrisRegistrationColumns + `
+	      FROM qris_registrations WHERE client_id = $1 AND registration_id = $2 LIMIT 1`
+	var reg models.QRISRegistration
+	if err := r.db.GetContext(ctx, &reg, q, clientID, registrationID); err != nil {
 		return nil, err
 	}
 	return &reg, nil

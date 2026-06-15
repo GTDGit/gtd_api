@@ -9,8 +9,7 @@ import "time"
 type QRISProvider string
 
 const (
-	QRISProviderPakailink QRISProvider = "pakailink"
-	QRISProviderNobu      QRISProvider = "nobu"
+	QRISProviderNobu QRISProvider = "nobu"
 )
 
 type QRISMerchantStatus string

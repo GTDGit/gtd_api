@@ -109,8 +109,9 @@ type QRISBusiness struct {
 // into nested objects (owner / address / business) mirroring the Payment API
 // style. referenceId and qrisType are mandatory.
 type QRISRegistrationRequest struct {
-	ReferenceID string `json:"referenceId"` // mandatory idempotency key (unique per client)
-	QRISType    string `json:"qrisType"`    // mandatory: static | dynamic | both
+	ReferenceID  string `json:"referenceId"`  // mandatory idempotency key (unique per client)
+	QRISType     string `json:"qrisType"`     // mandatory: static | dynamic | both
+	MerchantType string `json:"merchantType"` // mandatory: perorangan | perusahaan
 
 	Owner    QRISOwner    `json:"owner"`
 	Address  QRISAddress  `json:"address"`
@@ -124,10 +125,11 @@ type QRISRegistrationRequest struct {
 // nested owner/address/business objects, and WIB (+07:00) timestamps. The same
 // mapper feeds the qris.merchant.activated webhook so API and webhook are identical.
 type QRISRegistrationResponse struct {
-	ID          string `json:"id"`          // public UUID v4
-	ReferenceID string `json:"referenceId"` // client idempotency key
-	QRISType    string `json:"qrisType"`
-	Status      string `json:"status"`
+	ID           string `json:"id"`          // public UUID v4
+	ReferenceID  string `json:"referenceId"` // client idempotency key
+	QRISType     string `json:"qrisType"`
+	MerchantType string `json:"merchantType"`
+	Status       string `json:"status"`
 
 	Owner    QRISOwnerResponse    `json:"owner"`
 	Address  QRISAddressResponse  `json:"address"`
@@ -170,10 +172,11 @@ type QRISBusinessResponse struct {
 // ToQRISRegistrationResponse maps the stored model onto the client-facing DTO.
 func ToQRISRegistrationResponse(reg *models.QRISRegistration) QRISRegistrationResponse {
 	return QRISRegistrationResponse{
-		ID:          reg.RegistrationID,
-		ReferenceID: reg.RegistrationRef,
-		QRISType:    string(reg.QRISType),
-		Status:      string(reg.Status),
+		ID:           reg.RegistrationID,
+		ReferenceID:  reg.RegistrationRef,
+		QRISType:     string(reg.QRISType),
+		MerchantType: string(reg.MerchantType),
+		Status:       string(reg.Status),
 		Owner: QRISOwnerResponse{
 			FullName: reg.OwnerFullName,
 			NIK:      reg.OwnerNIK,
@@ -529,6 +532,11 @@ func (s *QRISRegistrationService) validate(clientID int, req QRISRegistrationReq
 		return bad("qrisType must be one of static, dynamic, both")
 	}
 
+	merchantType := models.MerchantType(strings.ToLower(strings.TrimSpace(req.MerchantType)))
+	if !merchantType.Valid() {
+		return bad("merchantType must be one of perorangan, perusahaan")
+	}
+
 	ownerName := strings.TrimSpace(req.Owner.FullName)
 	if ownerName == "" {
 		return bad("owner.fullName is required")
@@ -605,6 +613,7 @@ func (s *QRISRegistrationService) validate(clientID int, req QRISRegistrationReq
 		OmzetCategory:        omzet,
 		QRISType:             qrisType,
 		RiskCategory:         risk,
+		MerchantType:         merchantType,
 		Website:              nilIfBlank(req.Business.Website),
 		EstimatedSalesVolume: req.Business.EstimatedSalesVolume,
 		EstimatedTxCount:     req.Business.EstimatedTxCount,
@@ -612,19 +621,62 @@ func (s *QRISRegistrationService) validate(clientID int, req QRISRegistrationReq
 	}
 
 	docs := make([]QRISDocInput, 0, len(req.Documents))
+	seenTypes := make(map[models.QRISDocType]bool, len(req.Documents))
 	for i, d := range req.Documents {
 		if strings.TrimSpace(d.Content) == "" {
 			return nil, nil, regErr(http.StatusBadRequest, "INVALID_REQUEST",
 				fmt.Sprintf("document %d: content (base64) is required", i+1), nil)
 		}
+		dt := normalizeDocType(d.DocType)
+		seenTypes[dt] = true
 		docs = append(docs, QRISDocInput{
-			DocType:  normalizeDocType(d.DocType),
+			DocType:  dt,
 			FileName: strings.TrimSpace(d.FileName),
 			Base64:   d.Content,
 		})
 	}
 
+	// Required documents depend on merchant type. Perorangan: KTP + selfie with
+	// KTP + business photo. Perusahaan: those plus akta, SK, NPWP, NIB.
+	if missing := missingRequiredDocs(merchantType, seenTypes); len(missing) > 0 {
+		return nil, nil, regErr(http.StatusBadRequest, "INVALID_REQUEST",
+			fmt.Sprintf("missing required documents for %s: %s", merchantType, strings.Join(missing, ", ")), nil)
+	}
+
 	return reg, docs, nil
+}
+
+// requiredDocsByType lists the document types Nobu requires per merchant type.
+var requiredDocsByType = map[models.MerchantType][]models.QRISDocType{
+	models.MerchantTypePerorangan: {
+		models.QRISDocKTP, models.QRISDocSelfieKTP, models.QRISDocBusinessLocation,
+	},
+	models.MerchantTypePerusahaan: {
+		models.QRISDocKTP, models.QRISDocSelfieKTP, models.QRISDocBusinessLocation,
+		models.QRISDocAkta, models.QRISDocSK, models.QRISDocNPWP, models.QRISDocNIB,
+	},
+}
+
+// docTypeLabels gives human-readable names for the missing-document error.
+var docTypeLabels = map[models.QRISDocType]string{
+	models.QRISDocKTP:              "ktp",
+	models.QRISDocSelfieKTP:        "selfie_ktp (foto diri dengan KTP)",
+	models.QRISDocBusinessLocation: "business_location (foto usaha)",
+	models.QRISDocAkta:             "akta",
+	models.QRISDocSK:               "sk",
+	models.QRISDocNPWP:             "npwp",
+	models.QRISDocNIB:              "nib",
+}
+
+// missingRequiredDocs returns the labels of required documents absent from seen.
+func missingRequiredDocs(mt models.MerchantType, seen map[models.QRISDocType]bool) []string {
+	var missing []string
+	for _, dt := range requiredDocsByType[mt] {
+		if !seen[dt] {
+			missing = append(missing, docTypeLabels[dt])
+		}
+	}
+	return missing
 }
 
 func normalizeRisk(s string) string {
@@ -648,8 +700,16 @@ func normalizeDocType(s string) models.QRISDocType {
 		return models.QRISDocKTP
 	case "selfie_ktp", "selfie", "selfie-ktp":
 		return models.QRISDocSelfieKTP
-	case "business_location", "business-location", "location", "store":
+	case "business_location", "business-location", "location", "store", "foto_usaha", "foto-usaha":
 		return models.QRISDocBusinessLocation
+	case "akta", "akta_pendirian":
+		return models.QRISDocAkta
+	case "sk", "sk_kemenkumham", "sk-kemenkumham":
+		return models.QRISDocSK
+	case "npwp":
+		return models.QRISDocNPWP
+	case "nib":
+		return models.QRISDocNIB
 	default:
 		return models.QRISDocExtra
 	}

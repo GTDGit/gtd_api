@@ -6,11 +6,13 @@ import (
 	_ "embed"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
 	"github.com/xuri/excelize/v2"
 
+	"github.com/GTDGit/gtd_api/internal/config"
 	"github.com/GTDGit/gtd_api/internal/models"
 	"github.com/GTDGit/gtd_api/internal/repository"
 	"github.com/GTDGit/gtd_api/internal/storage"
@@ -41,6 +43,7 @@ type QRISBatchService struct {
 	batchRepo *repository.QRISBatchRepository
 	store     storage.Storage
 	keyPrefix string
+	form      config.NobuFormConfig
 }
 
 func NewQRISBatchService(
@@ -48,8 +51,9 @@ func NewQRISBatchService(
 	batchRepo *repository.QRISBatchRepository,
 	store storage.Storage,
 	keyPrefix string,
+	form config.NobuFormConfig,
 ) *QRISBatchService {
-	return &QRISBatchService{regRepo: regRepo, batchRepo: batchRepo, store: store, keyPrefix: keyPrefix}
+	return &QRISBatchService{regRepo: regRepo, batchRepo: batchRepo, store: store, keyPrefix: keyPrefix, form: form}
 }
 
 // GenerateBatch builds the Excel for one slot (date + seq) from all pending
@@ -76,14 +80,16 @@ func (s *QRISBatchService) GenerateBatch(ctx context.Context, batchDate time.Tim
 		return nil, nil
 	}
 
-	periodLabel := fmt.Sprintf("%s Batch %d", formatNobuDate(batchDate), seq)
-	fileBytes, err := s.renderExcel(pending, periodLabel)
+	periodLabel := formatNobuDate(batchDate)
+	fileBytes, err := s.renderExcel(pending, periodLabel, seq)
 	if err != nil {
 		return nil, fmt.Errorf("qris batch: render excel: %w", err)
 	}
 
-	// File name mirrors the official Nobu template's naming convention.
-	fileName := fmt.Sprintf("Formulir Pendaftaran NOBU QRIS (NMID Level) - Batch %d - Periode %s.xlsx", seq, formatNobuDate(batchDate))
+	// File name mirrors the official Nobu template's naming convention:
+	// "... - PT Aggregator(Brand) Batch N - Periode <tanggal>.xlsx".
+	fileName := fmt.Sprintf("Formulir Pendaftaran NOBU QRIS (NMID Level) - %s Batch %d - Periode %s.xlsx",
+		s.aggregatorLabel(), seq, periodLabel)
 	storageKey := s.batchKey(day, seq, fileName)
 	const xlsxMIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 	if err := s.store.Put(ctx, storageKey, xlsxMIME, fileBytes); err != nil {
@@ -163,7 +169,7 @@ func (s *QRISBatchService) MarkBatchSent(ctx context.Context, id int) error {
 // registration, starting at the template's first data row. The branded header,
 // merged cells, MCC / Kode Pos dropdown lookup sheets, and styling are left
 // untouched — Nobu receives their exact form with only the merchant rows added.
-func (s *QRISBatchService) renderExcel(regs []models.QRISRegistration, periodLabel string) ([]byte, error) {
+func (s *QRISBatchService) renderExcel(regs []models.QRISRegistration, periodLabel string, seq int) ([]byte, error) {
 	f, err := excelize.OpenReader(bytes.NewReader(nobuTemplateBytes))
 	if err != nil {
 		return nil, fmt.Errorf("open nobu template: %w", err)
@@ -174,14 +180,21 @@ func (s *QRISBatchService) renderExcel(regs []models.QRISRegistration, periodLab
 		return nil, fmt.Errorf("nobu template: sheet %q not found: %w", nobuSheetName, err)
 	}
 
-	// Period metadata cell (merged target for "Periode Pendaftaran :").
-	_ = f.SetCellStr(nobuSheetName, "D6", periodLabel)
+	// Form header metadata (merged value cells next to their labels):
+	//   D4 = "Nama Perusahaan/Merchant Aggregator", D5 = "Nama PIC", D6 = "Periode".
+	_ = f.SetCellStr(nobuSheetName, "D4", s.aggregatorLabel())
+	if pic := strings.TrimSpace(s.form.PICName); pic != "" {
+		_ = f.SetCellStr(nobuSheetName, "D5", pic)
+	}
+	_ = f.SetCellStr(nobuSheetName, "D6", fmt.Sprintf("%s Batch %d", periodLabel, seq))
 
 	// One merchant row per registration, mapped onto the template's columns.
-	// Address is split across I..M (jalan/RT/RW/Kelurahan/Kecamatan); the
-	// token-gated document bundle link goes in the "KELENGKAPAN DOKUMEN USAHA"
-	// column (U). Text columns (NIK, phone, MCC, postal) are written as strings
-	// to preserve leading zeros and exact digits.
+	// Address is split across I..M (jalan/RT/RW/Kelurahan/Kecamatan). Fixed-value
+	// columns follow the Nobu form rules: TIPE QRIS uses the S/D/B dropdown code,
+	// MDR is always "Ya", the document bundle link goes in KELENGKAPAN DOKUMEN
+	// USAHA (U), foto usaha (V) points the reviewer at that bundle, PARTNER ID (X)
+	// stays blank, and KELENGKAPAN DOKUMEN LEGALITAS (AC) is "Lengkap". Text
+	// columns (NIK, phone, MCC, postal) are written as strings to keep exact digits.
 	for i, r := range regs {
 		row := nobuDataStartRow + i
 		setText := func(col, val string) {
@@ -208,9 +221,13 @@ func (s *QRISBatchService) renderExcel(regs []models.QRISRegistration, periodLab
 		setText("P", boolToYaTidak(r.HasPhysicalStore))
 		setText("Q", r.OmzetCategory)
 		setText("R", nobuQRISType(r.QRISType))
+		setText("S", "Ya") // MDR & Insentif: always mengikuti MPAN
 		setText("U", derefStr(r.DocPortalURL))
+		setText("V", "Ada di kelengkapan dokumen usaha")
 		setText("W", derefStr(r.Website))
 		setText("Y", r.RiskCategory+" Risk")
+		setText("Z", merchantTypeLabel(r.MerchantType))
+		setText("AC", "Lengkap")
 		if r.EstimatedSalesVolume != nil {
 			setNum("AA", *r.EstimatedSalesVolume)
 		}
@@ -224,6 +241,18 @@ func (s *QRISBatchService) renderExcel(regs []models.QRISRegistration, periodLab
 		return nil, err
 	}
 	return buf.Bytes(), nil
+}
+
+// aggregatorLabel renders the aggregator identity for the file name and header
+// cell, e.g. "PT Gerbang Transaksi Digital(PPOB.ID)". The brand is omitted when
+// unset.
+func (s *QRISBatchService) aggregatorLabel() string {
+	name := strings.TrimSpace(s.form.AggregatorName)
+	brand := strings.TrimSpace(s.form.BrandName)
+	if brand != "" {
+		return fmt.Sprintf("%s(%s)", name, brand)
+	}
+	return name
 }
 
 func (s *QRISBatchService) batchKey(day string, seq int, fileName string) string {
@@ -256,14 +285,29 @@ func formatNobuDate(t time.Time) string {
 
 // nobuQRISType maps the API enum (static|dynamic|both) onto the Nobu form's
 // Indonesian labels in the "TIPE QRIS" column.
+// nobuQRISType maps the API enum onto the Nobu form's TIPE QRIS dropdown codes
+// (Sheet7: S = Statis, D = Dinamis, B = Both).
 func nobuQRISType(t models.QRISType) string {
 	switch t {
 	case models.QRISTypeStatic:
-		return "Statis"
+		return "S"
 	case models.QRISTypeDynamic:
-		return "Dinamis"
+		return "D"
 	case models.QRISTypeBoth:
-		return "Statis & Dinamis"
+		return "B"
+	default:
+		return string(t)
+	}
+}
+
+// merchantTypeLabel maps the merchant type onto the Nobu form's JENIS MERCHANT
+// labels ("Perorangan" / "Badan Usaha").
+func merchantTypeLabel(t models.MerchantType) string {
+	switch t {
+	case models.MerchantTypePerorangan:
+		return "Perorangan"
+	case models.MerchantTypePerusahaan:
+		return "Badan Usaha"
 	default:
 		return string(t)
 	}

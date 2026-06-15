@@ -514,7 +514,7 @@ func main() {
 	// QRIS Nobu Excel batch service (renders pending registrations on a schedule).
 	var qrisBatchSvc *service.QRISBatchService
 	if qrisStore != nil {
-		qrisBatchSvc = service.NewQRISBatchService(qrisRegistrationRepo, qrisBatchRepo, qrisStore, cfg.Storage.KeyPrefix)
+		qrisBatchSvc = service.NewQRISBatchService(qrisRegistrationRepo, qrisBatchRepo, qrisStore, cfg.Storage.KeyPrefix, cfg.QRIS.Form)
 	}
 
 	nobuConnectorSvc := service.NewNobuConnectorService(

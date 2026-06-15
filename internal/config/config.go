@@ -63,6 +63,16 @@ type QRISConfig struct {
 	BatchTimes       []string      // WIB HH:MM slots, in order; slot index 1 = first
 	BatchTimezone    string        // IANA tz, default Asia/Jakarta
 	CallbackInterval time.Duration // qris_callbacks retry worker tick
+	Form             NobuFormConfig
+}
+
+// NobuFormConfig carries the aggregator identity stamped onto every rendered
+// Nobu batch form (file name + the "Nama Perusahaan/PIC/Periode" header cells).
+// GTD is the single aggregator submitting to Nobu, so these are fixed via env.
+type NobuFormConfig struct {
+	AggregatorName string // e.g. "PT Gerbang Transaksi Digital"
+	BrandName      string // e.g. "PPOB.ID" (appears in parentheses in the file name)
+	PICName        string // PIC pendaftaran name for the form header
 }
 
 // PaymentConfig aggregates provider credentials for the payment module.
@@ -591,6 +601,11 @@ func Load() (*Config, error) {
 		BatchTimes:       getEnvStringList("QRIS_BATCH_TIMES", []string{"10:00", "15:00"}),
 		BatchTimezone:    getEnv("QRIS_BATCH_TZ", "Asia/Jakarta"),
 		CallbackInterval: qrisCallbackInterval,
+		Form: NobuFormConfig{
+			AggregatorName: getEnv("QRIS_NOBU_AGGREGATOR_NAME", "PT Gerbang Transaksi Digital"),
+			BrandName:      getEnv("QRIS_NOBU_BRAND_NAME", "PPOB.ID"),
+			PICName:        getEnv("QRIS_NOBU_PIC_NAME", ""),
+		},
 	}
 
 	cfg.FilesPortal = FilesPortalConfig{

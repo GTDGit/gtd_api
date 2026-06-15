@@ -78,6 +78,10 @@ const (
 	QRISDocKTP              QRISDocType = "ktp"
 	QRISDocSelfieKTP        QRISDocType = "selfie_ktp"
 	QRISDocBusinessLocation QRISDocType = "business_location"
+	QRISDocAkta             QRISDocType = "akta" // akta pendirian (perusahaan)
+	QRISDocSK               QRISDocType = "sk"   // SK Kemenkumham (perusahaan)
+	QRISDocNPWP             QRISDocType = "npwp" // NPWP (perusahaan)
+	QRISDocNIB              QRISDocType = "nib"  // NIB (perusahaan)
 	QRISDocExtra            QRISDocType = "extra"
 )
 
@@ -151,6 +155,26 @@ func (t QRISType) Valid() bool {
 	}
 }
 
+// MerchantType is the kind of legal entity registering. It selects the set of
+// onboarding documents Nobu requires and is rendered into the form's "JENIS
+// MERCHANT" column.
+type MerchantType string
+
+const (
+	MerchantTypePerorangan MerchantType = "perorangan"
+	MerchantTypePerusahaan MerchantType = "perusahaan"
+)
+
+// Valid reports whether t is a supported merchant type.
+func (t MerchantType) Valid() bool {
+	switch t {
+	case MerchantTypePerorangan, MerchantTypePerusahaan:
+		return true
+	default:
+		return false
+	}
+}
+
 // QRISRegistration mirrors qris_registrations — a client's request to onboard a
 // static-QRIS merchant. Nobu has no register API, so every field of the Nobu
 // Excel form is captured here for batch rendering.
@@ -179,6 +203,7 @@ type QRISRegistration struct {
 	OmzetCategory string   `db:"omzet_category" json:"omzetCategory"`
 	QRISType      QRISType `db:"qris_type" json:"qrisType"`
 	RiskCategory  string   `db:"risk_category" json:"riskCategory"`
+	MerchantType  MerchantType `db:"merchant_type" json:"merchantType"`
 
 	Website              *string `db:"website" json:"website,omitempty"`
 	EstimatedSalesVolume *int64  `db:"estimated_sales_volume" json:"estimatedSalesVolume,omitempty"`

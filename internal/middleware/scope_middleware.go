@@ -14,6 +14,7 @@ const (
 	ScopePPOB         = models.ScopePPOB
 	ScopePayment      = models.ScopePayment
 	ScopeDisbursement = models.ScopeDisbursement
+	ScopeQRIS         = models.ScopeQRIS
 )
 
 // RequireScope enforces that the authenticated client carries the given scope.

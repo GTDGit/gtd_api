@@ -27,6 +27,7 @@ import (
 	"github.com/GTDGit/gtd_api/internal/repository"
 	"github.com/GTDGit/gtd_api/internal/service"
 	"github.com/GTDGit/gtd_api/internal/sse"
+	"github.com/GTDGit/gtd_api/internal/storage"
 	"github.com/GTDGit/gtd_api/internal/utils"
 	"github.com/GTDGit/gtd_api/internal/worker"
 	"github.com/GTDGit/gtd_api/pkg/alterra"
@@ -34,8 +35,10 @@ import (
 	"github.com/GTDGit/gtd_api/pkg/bri"
 	"github.com/GTDGit/gtd_api/pkg/dana"
 	dfg "github.com/GTDGit/gtd_api/pkg/digiflazz"
+	"github.com/GTDGit/gtd_api/pkg/filesportal"
 	"github.com/GTDGit/gtd_api/pkg/kiosbank"
 	"github.com/GTDGit/gtd_api/pkg/midtrans"
+	"github.com/GTDGit/gtd_api/pkg/nobu"
 	"github.com/GTDGit/gtd_api/pkg/ovo"
 	"github.com/GTDGit/gtd_api/pkg/pakailink"
 	"github.com/GTDGit/gtd_api/pkg/xendit"
@@ -350,10 +353,12 @@ func main() {
 		log.Info().Msg("DANA payout adapter registered (bank + DANA wallet)")
 	}
 	payoutRepo := repository.NewPayoutRepository(db)
+	payoutMethodRepo := repository.NewPayoutMethodRepository(db)
 	payoutSelector := service.NewPayoutSelector(payoutRepo, payoutRouter)
 	payoutSvc := service.NewPayoutService(
 		payoutRepo,
 		bankCodeRepo,
+		payoutMethodRepo,
 		payoutSelector,
 		payoutRouter,
 		payoutCallbackSvc,
@@ -443,6 +448,75 @@ func main() {
 	qrisMerchantRepo := repository.NewQRISMerchantRepository(db)
 	qrisPaymentRepo := repository.NewQRISPaymentRepository(db)
 	qrisPaymentSvc := service.NewQRISPaymentService(qrisMerchantRepo, qrisPaymentRepo)
+
+	// QRIS outbound client webhooks (qris.merchant.activated, qris.payment.success).
+	qrisCallbackRepo := repository.NewQRISCallbackRepository(db)
+	qrisCallbackSvc := service.NewQRISCallbackService(qrisCallbackRepo, clientRepo)
+	qrisPaymentSvc.WithCallback(qrisCallbackSvc)
+
+	// QRIS client-facing onboarding (Nobu Excel batch). Documents land in object
+	// storage; a local-disk stub is used until the real private bucket is wired.
+	qrisStore, storeErr := storage.New(cfg.Storage)
+	if storeErr != nil {
+		log.Warn().Err(storeErr).Msg("qris storage init failed; document uploads disabled")
+	} else {
+		log.Info().Str("driver", qrisStore.Driver()).Msg("qris storage ready")
+	}
+	qrisDocRepo := repository.NewQRISDocRepository(db)
+	var qrisDocSvc *service.QRISDocService
+	if qrisStore != nil {
+		qrisDocSvc = service.NewQRISDocService(qrisDocRepo, qrisStore, cfg.Storage.KeyPrefix)
+	}
+	qrisRegistrationRepo := repository.NewQRISRegistrationRepository(db)
+	qrisBatchRepo := repository.NewQRISBatchRepository(db)
+	var qrisRegDocCreator service.QRISDocCreator
+	if qrisDocSvc != nil {
+		qrisRegDocCreator = qrisDocSvc
+	}
+	qrisRegistrationSvc := service.NewQRISRegistrationService(qrisRegistrationRepo, qrisRegDocCreator)
+
+	// Nobu outbound generate client (api → Nobu qr-mpm-generate). Optional: when
+	// credentials are absent, activation falls back to manual QR-string paste.
+	var qrisGenerator service.QRISStaticQRGenerator
+	if cfg.Payment.Nobu.BaseURL != "" && (cfg.Payment.Nobu.PrivateKeyPEM != "" || cfg.Payment.Nobu.PrivateKeyPath != "") {
+		nobuClient, nErr := nobu.NewClient(nobu.Config{
+			BaseURL:        cfg.Payment.Nobu.BaseURL,
+			ClientID:       cfg.Payment.Nobu.ClientID,
+			ClientSecret:   cfg.Payment.Nobu.ClientSecret,
+			PartnerID:      cfg.Payment.Nobu.PartnerID,
+			PrivateKeyPEM:  cfg.Payment.Nobu.PrivateKeyPEM,
+			PrivateKeyPath: cfg.Payment.Nobu.PrivateKeyPath,
+		})
+		if nErr != nil {
+			log.Warn().Err(nErr).Msg("Nobu generate client init failed; QRIS activation will require manual QR paste")
+		} else {
+			qrisGenerator = &nobuGeneratorAdapter{client: nobuClient}
+			log.Info().Msg("Nobu QRIS generate client configured")
+		}
+	} else {
+		log.Info().Msg("Nobu generate config incomplete; QRIS activation will require manual QR paste")
+	}
+	qrisRegistrationSvc.WithActivation(qrisMerchantRepo, qrisGenerator, qrisCallbackSvc)
+
+	// Optional file-delivery portal: upload onboarding documents to the portal at
+	// intake so the Nobu Excel batch can embed a token-gated bundle link. Disabled
+	// when FILES_PORTAL_URL is empty (documents then live only in S3/local).
+	if portalClient := filesportal.NewClient(cfg.FilesPortal.BaseURL, nil); portalClient.Enabled() {
+		qrisRegistrationSvc.WithDocPortal(&filesPortalAdapter{
+			client:     portalClient,
+			accessMode: cfg.FilesPortal.AccessMode,
+		})
+		log.Info().Str("url", cfg.FilesPortal.BaseURL).Msg("QRIS documents files-portal upload configured")
+	} else {
+		log.Info().Msg("FILES_PORTAL_URL empty; QRIS documents will not be uploaded to the portal")
+	}
+
+	// QRIS Nobu Excel batch service (renders pending registrations on a schedule).
+	var qrisBatchSvc *service.QRISBatchService
+	if qrisStore != nil {
+		qrisBatchSvc = service.NewQRISBatchService(qrisRegistrationRepo, qrisBatchRepo, qrisStore, cfg.Storage.KeyPrefix)
+	}
+
 	nobuConnectorSvc := service.NewNobuConnectorService(
 		qrisPaymentSvc,
 		cfg.JWTSecret,
@@ -499,8 +573,7 @@ func main() {
 			danaPub,
 		),
 		NobuConnector: handler.NewNobuConnectorHandler(nobuConnectorSvc),
-		QRISWebhook:   handler.NewQRISWebhookHandler(qrisPaymentSvc, pakailinkPub),
-		InternalQRIS:  handler.NewInternalQRISHandler(pakailinkClient, cfg.Payment.Pakailink.QRISCallbackURL),
+		QRIS:          handler.NewQRISHandler(qrisRegistrationSvc, qrisPaymentSvc, qrisBatchSvc),
 	}
 
 	// 8. Initialize middleware
@@ -514,7 +587,7 @@ func main() {
 	router.Use(gin.Recovery())
 	router.Use(middleware.CORSMiddleware())
 	router.Use(middleware.LoggingMiddleware())
-	setupRoutes(router, handlers, authMw, cfg.InternalAPIToken)
+	setupRoutes(router, handlers, authMw)
 
 	// 10. Create context for graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
@@ -556,6 +629,14 @@ func main() {
 	).Start(ctx)
 	go worker.NewPaymentExpiryWorker(paymentSvc, cfg.Worker.PaymentExpiryInterval, 100).Start(ctx)
 	go worker.NewPaymentCallbackWorker(paymentCallbackSvc, cfg.Worker.PaymentCallbackInterval, 50).Start(ctx)
+
+	// QRIS Nobu Excel batch worker (renders pending registrations at WIB slots).
+	if qrisBatchSvc != nil {
+		go worker.NewQRISBatchWorker(qrisBatchSvc, cfg.QRIS.BatchTimes, cfg.QRIS.BatchTimezone).Start(ctx)
+	}
+
+	// QRIS outbound client webhook retry worker (merchant.activated, payment.success).
+	go worker.NewQRISCallbackWorker(qrisCallbackSvc, cfg.QRIS.CallbackInterval, 50).Start(ctx)
 
 	// 12. Start HTTP server
 	srv := &http.Server{
@@ -606,12 +687,11 @@ type Handlers struct {
 	PaymentWebhook      *handler.PaymentWebhookHandler
 	DisbursementWebhook *handler.DisbursementWebhookHandler
 	NobuConnector       *handler.NobuConnectorHandler
-	QRISWebhook         *handler.QRISWebhookHandler
-	InternalQRIS        *handler.InternalQRISHandler
+	QRIS                *handler.QRISHandler
 }
 
 // setupRoutes registers all routes.
-func setupRoutes(router *gin.Engine, handlers *Handlers, authMiddleware *middleware.AuthMiddleware, internalToken string) {
+func setupRoutes(router *gin.Engine, handlers *Handlers, authMiddleware *middleware.AuthMiddleware) {
 	// Provider webhook endpoints
 	router.POST("/v1/webhook/digiflazz", handlers.Webhook.HandleDigiflazzCallback)
 	router.POST("/v1/webhook/kiosbank", handlers.ProviderCallback.HandleKiosbankCallback)
@@ -633,20 +713,10 @@ func setupRoutes(router *gin.Engine, handlers *Handlers, authMiddleware *middlew
 	router.POST("/v1/webhook/dana-disbursement", handlers.DisbursementWebhook.HandleDana)
 
 	// Static QRIS payment notifications.
-	// Pakailink signs with RSA (handler verifies). Nobu uses the connector
-	// pattern: it pulls a B2B token from us, then signs notify with HMAC.
-	router.POST("/v1/webhook/pakailink-qris", handlers.QRISWebhook.HandlePakailink)
+	// Nobu uses the connector pattern: it pulls a B2B token from us, then signs
+	// notify with HMAC.
 	router.POST("/nobu/v1.0/access-token/b2b", handlers.NobuConnector.CreateAccessToken)
 	router.POST("/nobu/v1.0/qr/qr-mpm-notify", handlers.NobuConnector.HandleNotify)
-
-	// Internal service-to-service routes (gateway → api proxy for Pakailink QRIS).
-	// Guarded by a shared internal token, not client API keys or admin JWT.
-	internal := router.Group("/v1/internal")
-	internal.Use(middleware.InternalToken(internalToken))
-	{
-		internal.POST("/qris/pakailink/register", handlers.InternalQRIS.RegisterPakailink)
-		internal.POST("/qris/pakailink/generate", handlers.InternalQRIS.GeneratePakailink)
-	}
 
 	router.GET("/v1/health", handlers.Health.GetHealth)
 	// API PPOB routes (protected with client API key + ppob scope)
@@ -666,6 +736,7 @@ func setupRoutes(router *gin.Engine, handlers *Handlers, authMiddleware *middlew
 	payout.Use(authMiddleware.Handle(), middleware.RequireScope(middleware.ScopeDisbursement))
 	{
 		payout.POST("/inquiry", handlers.Transfer.CreateInquiry)
+		payout.GET("/methods", handlers.Transfer.ListMethods)
 		payout.POST("", handlers.Transfer.CreatePayout)
 		payout.GET("/:payoutId", handlers.Transfer.GetPayout)
 	}
@@ -678,6 +749,17 @@ func setupRoutes(router *gin.Engine, handlers *Handlers, authMiddleware *middlew
 		payment.POST("/create", handlers.Payment.CreatePayment)
 		payment.GET("/:paymentId", handlers.Payment.GetPayment)
 		payment.POST("/:paymentId/cancel", handlers.Payment.CancelPayment)
+	}
+
+	// Static QRIS client API (protected with client API key + qris scope).
+	// Registration is Excel-batch onboarding to Nobu; merchants activate later.
+	qris := router.Group("/v1/qris")
+	qris.Use(authMiddleware.Handle(), middleware.RequireScope(middleware.ScopeQRIS))
+	{
+		qris.POST("/merchants", handlers.QRIS.CreateMerchant)
+		qris.GET("/merchants", handlers.QRIS.ListMerchants)
+		qris.GET("/merchants/:ref", handlers.QRIS.GetMerchant)
+		qris.GET("/payments", handlers.QRIS.ListPayments)
 	}
 
 	// Admin API (protected with admin JWT). Manages canonical payment methods
@@ -695,6 +777,16 @@ func setupRoutes(router *gin.Engine, handlers *Handlers, authMiddleware *middlew
 		admin.GET("/payment-methods/:method/:code/providers", handlers.AdminPayment.ListProviders)
 		admin.PUT("/payment-methods/:method/:code/providers", handlers.AdminPayment.UpdateProviders)
 		admin.GET("/payment-methods/:method/:code/available-providers", handlers.AdminPayment.AvailableProviders)
+
+		// QRIS admin: list all registrations + activate a merchant once Nobu has
+		// returned its identifiers (api owns the Nobu generate call + client webhook).
+		admin.GET("/qris/registrations", handlers.QRIS.AdminListRegistrations)
+		admin.POST("/qris/registrations/:id/activate", handlers.QRIS.AdminActivate)
+
+		// QRIS Nobu Excel batches: list + download (for manual delivery to Nobu) + mark sent.
+		admin.GET("/qris/batches", handlers.QRIS.AdminListBatches)
+		admin.GET("/qris/batches/:id/download", handlers.QRIS.AdminDownloadBatch)
+		admin.POST("/qris/batches/:id/sent", handlers.QRIS.AdminMarkBatchSent)
 	}
 }
 

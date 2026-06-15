@@ -151,7 +151,7 @@ func danaStatusFromCode(code string) models.PayoutStatus {
 	case dana.DisbStatusFailed, dana.DisbStatusCancelled, dana.DisbStatusRefunded:
 		return models.PayoutStatusFailed
 	case dana.DisbStatusPending, dana.DisbStatusInitiated, dana.DisbStatusPaying:
-		return models.PayoutStatusPending
+		return models.PayoutStatusProcessing
 	default:
 		return models.PayoutStatusProcessing
 	}

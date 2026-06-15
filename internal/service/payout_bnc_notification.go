@@ -84,7 +84,7 @@ func (s *PayoutService) ApplyBNCNotification(ctx context.Context, notification *
 		payout.FailedReason = stringPtr(nonEmptyOrDefault(notification.TransactionStatusDesc, "Payout failed"))
 		payout.FailedCode = stringPtr(nonEmptyOrDefault(notification.LatestTransactionStatus, notification.ResponseCode))
 	case "03", "02", "01", "PENDING", "PAYING", "INITIATED":
-		payout.Status = models.PayoutStatusPending
+		payout.Status = models.PayoutStatusProcessing
 	default:
 		payout.Status = models.PayoutStatusProcessing
 	}

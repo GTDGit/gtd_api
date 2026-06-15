@@ -24,14 +24,14 @@ const (
 	TransferTypeInterbank TransferType = "INTERBANK"
 )
 
-// PayoutStatus is the lifecycle status persisted on a payout (transfer_status
-// enum: Processing/Success/Pending/Failed).
+// PayoutStatus is the lifecycle status persisted on a payout (payout_status
+// enum: Processing/Success/Failed). It mirrors the payment lifecycle: a payout
+// is created Processing and settles to Success or Failed.
 type PayoutStatus string
 
 const (
 	PayoutStatusProcessing PayoutStatus = "Processing"
 	PayoutStatusSuccess    PayoutStatus = "Success"
-	PayoutStatusPending    PayoutStatus = "Pending"
 	PayoutStatusFailed     PayoutStatus = "Failed"
 )
 
@@ -152,11 +152,11 @@ type PayoutCallback struct {
 // API request/response shapes (camelCase JSON), mirroring the payment system.
 // ----------------------------------------------------------------------------
 
-// PayoutMethod is the {type, code} selector shared by request and response.
-type PayoutMethod struct {
+// PayoutMethodRef is the {type, code} selector shared by request and response,
+// mirroring the payment PaymentMethodResponse ({type, code}).
+type PayoutMethodRef struct {
 	Type MethodType `json:"type"`
 	Code string     `json:"code"`
-	Name string     `json:"name,omitempty"`
 }
 
 // PayoutCustomer is the optional recipient descriptor.
@@ -171,34 +171,84 @@ type PayoutURL struct {
 	Callback string `json:"callback,omitempty"`
 }
 
+// PayoutAmount is the nested monetary breakdown, mirroring the payment
+// AmountResponse ({subtotal, fee, total}).
+type PayoutAmount struct {
+	Subtotal int64 `json:"subtotal"` // recipient-facing payout amount
+	Fee      int64 `json:"fee"`
+	Total    int64 `json:"total"` // amount debited from the merchant
+}
+
 // PayoutInquiryResponse is returned by the inquiry endpoint.
 type PayoutInquiryResponse struct {
-	InquiryID     string       `json:"inquiryId"`
-	PayoutMethod  PayoutMethod `json:"payoutMethod"`
-	BankName      string       `json:"bankName,omitempty"`
-	AccountNumber string       `json:"accountNumber"`
-	AccountName   string       `json:"accountName"`
-	ExpiredAt     string       `json:"expiredAt"`
+	ID            string          `json:"id"`
+	PayoutMethod  PayoutMethodRef `json:"payoutMethod"`
+	AccountNumber string          `json:"accountNumber"`
+	AccountName   string          `json:"accountName"`
+	ExpiredAt     string          `json:"expiredAt"`
 }
 
 // PayoutResponse is the unified payout view returned by create/get endpoints.
+// It mirrors PaymentResponse: id (UUID v4), nested amount, customer object.
 type PayoutResponse struct {
-	PayoutID      string          `json:"payoutId"`
+	ID            string          `json:"id"`
 	ReferenceID   string          `json:"referenceId"`
-	Status        string          `json:"status"`
-	PayoutMethod  PayoutMethod    `json:"payoutMethod"`
+	PayoutMethod  PayoutMethodRef `json:"payoutMethod"`
 	AccountNumber string          `json:"accountNumber"`
 	AccountName   string          `json:"accountName"`
-	Amount        int64           `json:"amount"`
-	Fee           int64           `json:"fee"`
-	TotalAmount   int64           `json:"totalAmount"`
+	Amount        PayoutAmount    `json:"amount"`
 	FeePaidBy     string          `json:"feePaidBy"`
+	Status        string          `json:"status"`
 	Customer      *PayoutCustomer `json:"customer,omitempty"`
 	Description   string          `json:"description,omitempty"`
-	ProviderRef   string          `json:"providerRef,omitempty"`
 	CreatedAt     string          `json:"createdAt"`
 	CompletedAt   string          `json:"completedAt,omitempty"`
 	FailedAt      string          `json:"failedAt,omitempty"`
 	FailedReason  string          `json:"failedReason,omitempty"`
 	FailedCode    string          `json:"failedCode,omitempty"`
+}
+
+// PayoutMethodCatalog is a row of the payout_methods catalog: a BANK/EWALLET
+// channel with its name, fee config, and per-channel amount limits. It mirrors
+// payment_methods and is the source of per-channel minimum payout amounts.
+type PayoutMethodCatalog struct {
+	ID                 int        `db:"id" json:"id"`
+	MethodType         MethodType `db:"method_type" json:"methodType"`
+	Code               string     `db:"code" json:"code"`
+	Name               string     `db:"name" json:"name"`
+	FeeType            string     `db:"fee_type" json:"feeType"`
+	FeeFlat            int        `db:"fee_flat" json:"feeFlat"`
+	FeePercent         float64    `db:"fee_percent" json:"feePercent"`
+	FeeMin             int        `db:"fee_min" json:"feeMin"`
+	FeeMax             int        `db:"fee_max" json:"feeMax"`
+	MinAmount          int        `db:"min_amount" json:"minAmount"`
+	MaxAmount          int        `db:"max_amount" json:"maxAmount"`
+	LogoURL            *string    `db:"logo_url" json:"logoUrl,omitempty"`
+	DisplayOrder       int        `db:"display_order" json:"displayOrder"`
+	IsActive           bool       `db:"is_active" json:"isActive"`
+	IsMaintenance      bool       `db:"is_maintenance" json:"isMaintenance"`
+	MaintenanceMessage *string    `db:"maintenance_message" json:"maintenanceMessage,omitempty"`
+	CreatedAt          time.Time  `db:"created_at" json:"createdAt"`
+	UpdatedAt          time.Time  `db:"updated_at" json:"updatedAt"`
+}
+
+// PayoutMethodEntry is a single channel on the public list endpoint.
+type PayoutMethodEntry struct {
+	Code          string `json:"code"`
+	Name          string `json:"name"`
+	FeeType       string `json:"feeType"`
+	FeeFlat       int    `json:"feeFlat"`
+	FeePercent    float64 `json:"feePercent"`
+	FeeMin        int    `json:"feeMin"`
+	FeeMax        int    `json:"feeMax"`
+	MinAmount     int    `json:"minAmount"`
+	MaxAmount     int    `json:"maxAmount"`
+	LogoURL       string `json:"logoUrl,omitempty"`
+	IsMaintenance bool   `json:"isMaintenance"`
+}
+
+// PayoutMethodsResponse groups available payout channels for the list endpoint.
+type PayoutMethodsResponse struct {
+	Bank    []PayoutMethodEntry `json:"bank"`
+	Ewallet []PayoutMethodEntry `json:"ewallet"`
 }

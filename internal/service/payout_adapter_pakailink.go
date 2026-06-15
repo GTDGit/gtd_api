@@ -162,7 +162,7 @@ func pakailinkStatusFromCode(code string) models.PayoutStatus {
 	case pakailink.TransferStatusFailed:
 		return models.PayoutStatusFailed
 	case pakailink.TransferStatusPending:
-		return models.PayoutStatusPending
+		return models.PayoutStatusProcessing
 	default:
 		return models.PayoutStatusProcessing
 	}

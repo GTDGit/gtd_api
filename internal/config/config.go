@@ -29,6 +29,40 @@ type Config struct {
 	BRI          BRIConfig
 	Disbursement DisbursementConfig
 	Payment      PaymentConfig
+	Storage      StorageConfig
+	QRIS         QRISConfig
+	FilesPortal  FilesPortalConfig
+}
+
+// FilesPortalConfig drives the optional upload of QRIS onboarding documents to
+// the GTD file-delivery portal (dev-files.gtd.co.id). An empty BaseURL disables
+// the upload (registration still works, documents stay in S3/local only).
+type FilesPortalConfig struct {
+	BaseURL    string // e.g. https://dev-files.gtd.co.id; empty disables
+	AccessMode string // open | once (default once)
+}
+
+// StorageConfig selects and configures the object-storage backend used for QRIS
+// merchant documents and rendered Nobu batch files. Driver "local" writes under
+// LocalBasePath (dev stub); "s3" uploads to a private bucket. The S3 driver is
+// wired in once the real bucket example is provided — the interface keeps
+// callers unchanged when swapping.
+type StorageConfig struct {
+	Driver        string // local | s3 (default local)
+	LocalBasePath string // local driver root, e.g. ./data/qris-storage
+	Bucket        string
+	Region        string
+	Endpoint      string // custom endpoint (MinIO); empty = AWS
+	AccessKey     string
+	SecretKey     string
+	KeyPrefix     string // object key prefix, e.g. qris/
+}
+
+// QRISConfig holds static-QRIS batch + callback runtime settings.
+type QRISConfig struct {
+	BatchTimes       []string      // WIB HH:MM slots, in order; slot index 1 = first
+	BatchTimezone    string        // IANA tz, default Asia/Jakarta
+	CallbackInterval time.Duration // qris_callbacks retry worker tick
 }
 
 // PaymentConfig aggregates provider credentials for the payment module.
@@ -68,6 +102,14 @@ type NobuConfig struct {
 	ConnectorPublicKeyPEM  string // Nobu's RSA public key (verifies token-request signature)
 	ConnectorPublicKeyPath string
 	CallbackURL            string
+
+	// Outbound generate-QR client (api → Nobu). Nobu provisions the merchant
+	// (subMerchantId/storeId/terminalId) via the Excel form; once activated we
+	// call its qr-mpm-generate API to obtain the static QR string. Signing reuses
+	// OUR private key + the symmetric ClientSecret.
+	BaseURL        string
+	PrivateKeyPEM  string
+	PrivateKeyPath string
 }
 
 type DanaConfig struct {
@@ -513,6 +555,9 @@ func Load() (*Config, error) {
 			ConnectorPublicKeyPEM:  getEnv("NOBU_PUBLIC_KEY_PEM", ""),
 			ConnectorPublicKeyPath: getEnv("NOBU_PUBLIC_KEY_PATH", ""),
 			CallbackURL:            getEnv("NOBU_CALLBACK_URL", ""),
+			BaseURL:                getEnv("NOBU_BASE_URL", ""),
+			PrivateKeyPEM:          getEnv("NOBU_PRIVATE_KEY_PEM", ""),
+			PrivateKeyPath:         getEnv("NOBU_PRIVATE_KEY_PATH", ""),
 		},
 	}
 	if cfg.Payment.Midtrans.BaseURL == "" {
@@ -525,6 +570,32 @@ func Load() (*Config, error) {
 	}
 	if cfg.Payment.Xendit.BaseURL == "" {
 		cfg.Payment.Xendit.BaseURL = "https://api.xendit.co"
+	}
+
+	cfg.Storage = StorageConfig{
+		Driver:        strings.ToLower(getEnv("STORAGE_DRIVER", "local")),
+		LocalBasePath: getEnv("STORAGE_LOCAL_PATH", "./data/qris-storage"),
+		Bucket:        getEnv("S3_BUCKET", ""),
+		Region:        getEnv("S3_REGION", "ap-southeast-3"),
+		Endpoint:      getEnv("S3_ENDPOINT", ""),
+		AccessKey:     getEnv("AWS_ACCESS_KEY_ID", ""),
+		SecretKey:     getEnv("AWS_SECRET_ACCESS_KEY", ""),
+		KeyPrefix:     getEnv("S3_KEY_PREFIX", "qris/"),
+	}
+
+	qrisCallbackInterval, err := parseDurationEnv("QRIS_CALLBACK_INTERVAL", "30s")
+	if err != nil {
+		return nil, err
+	}
+	cfg.QRIS = QRISConfig{
+		BatchTimes:       getEnvStringList("QRIS_BATCH_TIMES", []string{"10:00", "15:00"}),
+		BatchTimezone:    getEnv("QRIS_BATCH_TZ", "Asia/Jakarta"),
+		CallbackInterval: qrisCallbackInterval,
+	}
+
+	cfg.FilesPortal = FilesPortalConfig{
+		BaseURL:    strings.TrimRight(getEnv("FILES_PORTAL_URL", "https://dev-files.gtd.co.id"), "/"),
+		AccessMode: getEnv("QRIS_DOC_PORTAL_ACCESS_MODE", "once"),
 	}
 
 	// Basic validation for DB parameters — keeps messages concise and helpful.
@@ -599,6 +670,26 @@ func getEnvIntList(key string, def []int) []int {
 	}
 	if len(values) == 0 {
 		return append([]int(nil), def...)
+	}
+	return values
+}
+
+// getEnvStringList parses a comma-separated string environment variable,
+// trimming each entry and dropping empties. Falls back to def when unset/empty.
+func getEnvStringList(key string, def []string) []string {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return append([]string(nil), def...)
+	}
+	parts := strings.Split(v, ",")
+	values := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if part = strings.TrimSpace(part); part != "" {
+			values = append(values, part)
+		}
+	}
+	if len(values) == 0 {
+		return append([]string(nil), def...)
 	}
 	return values
 }

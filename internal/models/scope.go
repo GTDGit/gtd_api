@@ -7,12 +7,13 @@ const (
 	ScopePPOB         = "ppob"
 	ScopePayment      = "payment"
 	ScopeDisbursement = "disbursement"
+	ScopeQRIS         = "qris"
 )
 
 // AllScopes lists all known scope identifiers in canonical order.
 // Used as the default for newly created clients (preserves pre-scope behavior)
 // and for admin-input validation.
-var AllScopes = []string{ScopePPOB, ScopePayment, ScopeDisbursement}
+var AllScopes = []string{ScopePPOB, ScopePayment, ScopeDisbursement, ScopeQRIS}
 
 // IsValidScope reports whether s is one of the known scope identifiers.
 func IsValidScope(s string) bool {

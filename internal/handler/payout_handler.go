@@ -74,6 +74,16 @@ func (h *PayoutHandler) GetPayout(c *gin.Context) {
 	utils.Success(c, http.StatusOK, "Payout retrieved", resp)
 }
 
+// ListMethods returns the available payout channels (banks + e-wallets).
+func (h *PayoutHandler) ListMethods(c *gin.Context) {
+	resp, err := h.payoutService.ListMethods(c.Request.Context())
+	if err != nil {
+		h.handleError(c, err)
+		return
+	}
+	utils.Success(c, http.StatusOK, "Payout methods retrieved", resp)
+}
+
 func (h *PayoutHandler) handleError(c *gin.Context, err error) {
 	var payoutErr *service.PayoutServiceError
 	if errors.As(err, &payoutErr) {

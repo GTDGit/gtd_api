@@ -23,7 +23,6 @@ const (
 	DeleteVAPath      = "/snap/v1.0/transfer-va/delete-va"
 	GenerateQRPath    = "/snap/v1.0/qr/qr-mpm-generate"
 	InquiryQRPath     = "/snap/v1.0/qr/qr-mpm-status"
-	RegisterQRISPath  = "/snap/v1.0/registration/qris"
 	CreateEmoneyPath  = "/snap/v1.0/payment/emoney"
 	InquiryEmoneyPath = "/snap/v1.0/payment/emoney-status"
 	CreateRetailPath  = "/snap/v1.0/payment/modern-retail"
@@ -252,60 +251,6 @@ func (c *Client) InquiryQR(ctx context.Context, partnerReferenceNo string) (*Inq
 	body := map[string]any{"originalPartnerReferenceNo": partnerReferenceNo}
 	var resp InquiryQRResponse
 	raw, err := c.doSNAPRequest(ctx, http.MethodPost, InquiryQRPath, body, &resp)
-	if err != nil {
-		return nil, err
-	}
-	resp.RawResponse = raw
-	return &resp, nil
-}
-
-// RegisterQRISMerchant registers a static QRIS merchant via Service 49. The QR
-// string is not part of this response; call GenerateQRMPM with Type="statis"
-// afterwards to obtain qrContent.
-func (c *Client) RegisterQRISMerchant(ctx context.Context, req RegisterQRISRequest) (*RegisterQRISResponse, error) {
-	merchantType := req.MerchantType
-	if merchantType == "" {
-		merchantType = "STATIS"
-	}
-	country := req.Country
-	if country == "" {
-		country = "ID"
-	}
-	body := map[string]any{
-		"partnerReferenceNo": req.PartnerReferenceNo,
-		"merchantData": map[string]any{
-			"merchantName":  req.MerchantName,
-			"merchantType":  merchantType,
-			"merchantEmail": req.MerchantEmail,
-			"storeData": map[string]any{
-				"storeAplicationName": req.StoreApplication,
-				"storeWebsite":        req.StoreWebsite,
-				"storeType":           req.StoreType,
-				"storeName":           req.StoreName,
-				"omzet":               req.Omzet,
-				"storeAddress": map[string]any{
-					"address":    req.Address,
-					"city":       req.City,
-					"postalCode": req.PostalCode,
-					"province":   req.Province,
-					"country":    country,
-				},
-			},
-		},
-		"ownerData": map[string]any{
-			"firstName":    req.OwnerFirstName,
-			"lastName":     req.OwnerLastName,
-			"email":        req.OwnerEmail,
-			"phoneNumber":  req.OwnerPhone,
-			"idNumber":     req.OwnerIDNumber,
-			"taxId":        req.OwnerTaxID,
-			"dateOfBirth":  req.OwnerDateOfBirth,
-			"placeOfBirth": req.OwnerPlaceOfBirth,
-		},
-	}
-
-	var resp RegisterQRISResponse
-	raw, err := c.doSNAPRequest(ctx, http.MethodPost, RegisterQRISPath, body, &resp)
 	if err != nil {
 		return nil, err
 	}

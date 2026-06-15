@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -63,6 +64,7 @@ type QRISPaymentEvent struct {
 type QRISPaymentService struct {
 	merchantRepo *repository.QRISMerchantRepository
 	paymentRepo  *repository.QRISPaymentRepository
+	callbackSvc  QRISActivationCallback
 }
 
 func NewQRISPaymentService(
@@ -73,6 +75,13 @@ func NewQRISPaymentService(
 		merchantRepo: merchantRepo,
 		paymentRepo:  paymentRepo,
 	}
+}
+
+// WithCallback wires the client-webhook enqueuer so a newly recorded payment
+// fires qris.payment.success. Optional: nil leaves payments un-notified.
+func (s *QRISPaymentService) WithCallback(callbackSvc QRISActivationCallback) *QRISPaymentService {
+	s.callbackSvc = callbackSvc
+	return s
 }
 
 // RecordQRISPayment resolves the merchant by (provider, store_id) and inserts the
@@ -139,6 +148,14 @@ func (s *QRISPaymentService) RecordQRISPayment(ctx context.Context, e QRISPaymen
 		Str("reference_no", payment.ReferenceNo).
 		Int64("amount", payment.Amount).
 		Msg("qris payment recorded")
+
+	// Notify the owning client (best-effort, async). The merchant carries the
+	// client_id; static QR with no merchant client_id (legacy) is not notified.
+	if s.callbackSvc != nil && merchant.ClientID != nil {
+		pid := payment.ID
+		mid := merchant.ID
+		go s.callbackSvc.Enqueue(context.Background(), *merchant.ClientID, models.QRISEventPaymentSuccess, &mid, &pid, payment)
+	}
 	return payment, true, nil
 }
 
@@ -155,4 +172,66 @@ func nilIfZeroInt64(v int64) *int64 {
 		return nil
 	}
 	return &v
+}
+
+// QRISPaymentHistoryItem is the standardized (ASPI-style) payment record returned
+// by GET /v1/qris/payments. Amounts are SNAP money strings ("10000.00").
+type QRISPaymentHistoryItem struct {
+	ReferenceNumber    string  `json:"referenceNumber"`              // provider reference (idempotency key)
+	PartnerReferenceNo *string `json:"partnerReferenceNo,omitempty"` // partner reference if any
+	OrderID            string  `json:"orderId"`                      // = referenceNumber (client-facing alias)
+	StoreID            string  `json:"storeId"`                      // NMID
+	SubMerchantID      *string `json:"subMerchantId,omitempty"`      // Nobu MID
+	TerminalID         *string `json:"terminalId,omitempty"`
+	TransactionDate    string  `json:"transactionDate"` // ISO 8601 (+07:00)
+	Amount             string  `json:"amount"`          // 2-decimal money string
+	Currency           string  `json:"currency"`        // IDR
+	Status             string  `json:"status"`          // SUCCESS
+	PayerName          *string `json:"payerName,omitempty"`
+}
+
+// ListPaymentsForClient returns the client's QRIS payment history in the
+// standardized response shape, plus a total count for pagination.
+func (s *QRISPaymentService) ListPaymentsForClient(ctx context.Context, f repository.QRISPaymentFilter) ([]QRISPaymentHistoryItem, int, error) {
+	if s.paymentRepo == nil {
+		return nil, 0, &QRISPaymentServiceError{HTTPStatus: http.StatusServiceUnavailable, Message: "qris payment service unavailable"}
+	}
+	rows, total, err := s.paymentRepo.ListForClient(ctx, f)
+	if err != nil {
+		return nil, 0, &QRISPaymentServiceError{HTTPStatus: http.StatusInternalServerError, Message: "list qris payments", Err: err}
+	}
+	out := make([]QRISPaymentHistoryItem, 0, len(rows))
+	for i := range rows {
+		out = append(out, toQRISHistoryItem(&rows[i]))
+	}
+	return out, total, nil
+}
+
+func toQRISHistoryItem(p *models.QRISPayment) QRISPaymentHistoryItem {
+	wib := time.FixedZone("WIB", 7*3600)
+	txTime := p.CreatedAt
+	if p.PaidAt != nil {
+		txTime = *p.PaidAt
+	}
+	item := QRISPaymentHistoryItem{
+		ReferenceNumber:    p.ReferenceNo,
+		PartnerReferenceNo: p.PartnerReferenceNo,
+		OrderID:            p.ReferenceNo,
+		StoreID:            p.StoreID,
+		TerminalID:         p.TerminalID,
+		TransactionDate:    txTime.In(wib).Format("2006-01-02T15:04:05-07:00"),
+		Amount:             formatSNAPMoney(p.Amount),
+		Currency:           "IDR",
+		Status:             "SUCCESS",
+		PayerName:          p.PayerName,
+	}
+	if p.PartnerReferenceNo != nil && *p.PartnerReferenceNo != "" {
+		item.OrderID = *p.PartnerReferenceNo
+	}
+	return item
+}
+
+// formatSNAPMoney renders whole-rupiah units as a 2-decimal SNAP money string.
+func formatSNAPMoney(v int64) string {
+	return strconv.FormatInt(v, 10) + ".00"
 }

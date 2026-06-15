@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 
 	"github.com/GTDGit/gtd_api/internal/models"
@@ -33,6 +34,7 @@ var payoutPurposeDescriptions = map[string]string{
 type PayoutService struct {
 	repo           *repository.PayoutRepository
 	bankRepo       *repository.BankCodeRepository
+	methodRepo     *repository.PayoutMethodRepository
 	selector       *PayoutSelector
 	router         *PayoutProviderRouter
 	callbackSvc    *PayoutCallbackService
@@ -42,6 +44,7 @@ type PayoutService struct {
 func NewPayoutService(
 	repo *repository.PayoutRepository,
 	bankRepo *repository.BankCodeRepository,
+	methodRepo *repository.PayoutMethodRepository,
 	selector *PayoutSelector,
 	router *PayoutProviderRouter,
 	callbackSvc *PayoutCallbackService,
@@ -50,6 +53,7 @@ func NewPayoutService(
 	return &PayoutService{
 		repo:           repo,
 		bankRepo:       bankRepo,
+		methodRepo:     methodRepo,
 		selector:       selector,
 		router:         router,
 		callbackSvc:    callbackSvc,
@@ -68,15 +72,15 @@ func (s *PayoutService) Available() bool {
 
 // PayoutInquiryRequest validates a recipient before a payout.
 type PayoutInquiryRequest struct {
-	PayoutMethod models.PayoutMethod `json:"payoutMethod"`
-	AccountNo    string              `json:"accountNo"`
-	Amount       int64               `json:"amount"`
+	PayoutMethod models.PayoutMethodRef `json:"payoutMethod"`
+	AccountNo    string                 `json:"accountNo"`
 }
 
-// CreatePayoutRequest is the unified payout create request.
+// CreatePayoutRequest is the unified payout create request, mirroring the
+// payment create request (nested paymentMethod/customer/url, feePaidBy).
 type CreatePayoutRequest struct {
 	ReferenceID  string                 `json:"referenceId"`
-	PayoutMethod models.PayoutMethod    `json:"payoutMethod"`
+	PayoutMethod models.PayoutMethodRef `json:"payoutMethod"`
 	AccountNo    string                 `json:"accountNo"`
 	Amount       int64                  `json:"amount"`
 	FeePaidBy    string                 `json:"feePaidBy"`
@@ -84,7 +88,6 @@ type CreatePayoutRequest struct {
 	Customer     *models.PayoutCustomer `json:"customer"`
 	Description  string                 `json:"description"`
 	Purpose      string                 `json:"purpose"`
-	Remark       string                 `json:"remark"`
 }
 
 // ---------------------------------------------------------------------------
@@ -111,20 +114,17 @@ func (s *PayoutService) Inquiry(ctx context.Context, req *PayoutInquiryRequest, 
 		return nil, err
 	}
 
-	inquiry, _, err := s.runInquiry(ctx, mt, channel, accountNo, req.Amount, client.ID, isSandbox, bank)
+	inquiry, _, err := s.runInquiry(ctx, mt, channel, accountNo, 0, client.ID, isSandbox, bank)
 	if err != nil {
 		return nil, err
 	}
 
-	bankName := derefString(inquiry.BankName)
 	return &models.PayoutInquiryResponse{
-		InquiryID: inquiry.InquiryID,
-		PayoutMethod: models.PayoutMethod{
+		ID: inquiry.InquiryID,
+		PayoutMethod: models.PayoutMethodRef{
 			Type: mt,
 			Code: channel,
-			Name: payoutMethodName(mt, channel, bank),
 		},
-		BankName:      bankName,
 		AccountNumber: accountNo,
 		AccountName:   derefString(inquiry.AccountName),
 		ExpiredAt:     formatPayoutTime(inquiry.ExpiredAt),
@@ -222,7 +222,8 @@ func (s *PayoutService) Create(ctx context.Context, req *CreatePayoutRequest, cl
 	if err != nil {
 		return nil, err
 	}
-	if err := s.validateCreateRequest(req, mt); err != nil {
+	minAmount := s.resolveMinAmount(ctx, mt, channel)
+	if err := s.validateCreateRequest(req, mt, minAmount); err != nil {
 		return nil, err
 	}
 
@@ -251,7 +252,7 @@ func (s *PayoutService) Create(ctx context.Context, req *CreatePayoutRequest, cl
 	if feePaidBy == models.FeePaidByCustomer {
 		sendAmount = amount - fee
 		totalAmount = amount
-		if sendAmount < payoutMinAmount {
+		if sendAmount < minAmount {
 			return nil, newPayoutError(400, "AMOUNT_TOO_LOW", "Amount net of fee is below the minimum", nil)
 		}
 	} else {
@@ -265,10 +266,7 @@ func (s *PayoutService) Create(ctx context.Context, req *CreatePayoutRequest, cl
 		customerEmail = stringPtr(req.Customer.Email)
 		customerPhone = stringPtr(req.Customer.Phone)
 	}
-	var callbackURL *string
-	if req.URL != nil {
-		callbackURL = stringPtr(req.URL.Callback)
-	}
+	callbackURL := stringPtr(req.URL.Callback)
 
 	payout := &models.Payout{
 		ReferenceID:   req.ReferenceID,
@@ -289,7 +287,6 @@ func (s *PayoutService) Create(ctx context.Context, req *CreatePayoutRequest, cl
 		FeePaidBy:     feePaidBy,
 		Status:        models.PayoutStatusProcessing,
 		PurposeCode:   stringPtr(req.Purpose),
-		Remark:        stringPtr(req.Remark),
 		Description:   stringPtr(req.Description),
 		CustomerName:  customerName,
 		CustomerEmail: customerEmail,
@@ -301,6 +298,10 @@ func (s *PayoutService) Create(ctx context.Context, req *CreatePayoutRequest, cl
 	if err := s.createPayoutWithGeneratedID(ctx, payout); err != nil {
 		return nil, err
 	}
+
+	// Emit payout.processing immediately so clients learn the payout was
+	// accepted, mirroring the payment lifecycle's pending notification.
+	s.trySendProcessingCallback(ctx, payout)
 
 	if err := s.submitWithFallback(ctx, payout); err != nil {
 		return nil, err
@@ -357,11 +358,11 @@ func (s *PayoutService) submitWithFallback(ctx context.Context, payout *models.P
 
 		lastErr = perr
 		if isUncertainPayoutError(perr) {
-			// Indeterminate: keep pending, reconcile via status worker.
+			// Indeterminate: keep Processing, reconcile via status worker.
 			log.Warn().Err(perr).Str("payout_id", payout.PayoutID).Str("provider", string(adapter.Code())).
-				Msg("payout submission uncertain, keeping pending")
+				Msg("payout submission uncertain, keeping processing")
 			payout.Provider = adapter.Code()
-			payout.Status = models.PayoutStatusPending
+			payout.Status = models.PayoutStatusProcessing
 			payout.ProviderData = mergePayoutProviderData(payout.ProviderData, "submit_error", payoutErrorPayload(perr))
 			if err := s.repo.UpdatePayout(ctx, payout); err != nil {
 				return err
@@ -392,14 +393,14 @@ func (s *PayoutService) submitWithFallback(ctx context.Context, payout *models.P
 		return appErr
 	}
 
-	// All candidates exhausted with retryable errors → keep pending so the
+	// All candidates exhausted with retryable errors → keep Processing so the
 	// status worker can retry rather than losing the payout.
-	payout.Status = models.PayoutStatusPending
+	payout.Status = models.PayoutStatusProcessing
 	if err := s.repo.UpdatePayout(ctx, payout); err != nil {
 		return err
 	}
 	if lastErr != nil {
-		log.Warn().Err(lastErr).Str("payout_id", payout.PayoutID).Msg("all payout providers unavailable, kept pending")
+		log.Warn().Err(lastErr).Str("payout_id", payout.PayoutID).Msg("all payout providers unavailable, kept processing")
 	}
 	return nil
 }
@@ -421,7 +422,7 @@ func (s *PayoutService) GetPayout(ctx context.Context, payoutID string, clientID
 	}
 
 	if s.Available() &&
-		(payout.Status == models.PayoutStatusProcessing || payout.Status == models.PayoutStatusPending) &&
+		payout.Status == models.PayoutStatusProcessing &&
 		time.Since(payout.UpdatedAt) >= 15*time.Second {
 		if _, err := s.refreshStatus(ctx, payout, 0); err != nil {
 			log.Warn().Err(err).Str("payout_id", payout.PayoutID).Msg("failed to refresh payout status on read")
@@ -519,7 +520,7 @@ func (s *PayoutService) refreshStatus(ctx context.Context, payout *models.Payout
 	return payout.Status != prevStatus, nil
 }
 
-// applyStatus transitions the payout to a terminal/pending state.
+// applyStatus transitions the payout to a terminal/processing state.
 func (s *PayoutService) applyStatus(payout *models.Payout, status models.PayoutStatus, failedReason, failedCode string) {
 	switch status {
 	case models.PayoutStatusSuccess:
@@ -539,10 +540,6 @@ func (s *PayoutService) applyStatus(payout *models.Payout, status models.PayoutS
 			payout.FailedCode = stringPtr(nonEmptyOrDefault(failedCode, ""))
 			payout.FailedAt = &now
 			payout.CompletedAt = nil
-		}
-	case models.PayoutStatusPending:
-		if payout.Status != models.PayoutStatusPending {
-			payout.Status = models.PayoutStatusPending
 		}
 	default:
 		if payout.Status != models.PayoutStatusProcessing {
@@ -599,13 +596,26 @@ func (s *PayoutService) trySendFinalCallback(ctx context.Context, payout *models
 	payout.CallbackSentAt = &now
 }
 
+// trySendProcessingCallback emits the payout.processing webhook right after the
+// payout is accepted. It is best-effort and does not touch callback_sent (which
+// tracks the authoritative final-state delivery), so a processing-callback
+// failure never blocks the success/failed callback.
+func (s *PayoutService) trySendProcessingCallback(ctx context.Context, payout *models.Payout) {
+	if s.callbackSvc == nil || payout == nil {
+		return
+	}
+	if err := s.callbackSvc.SendProcessing(ctx, payout); err != nil {
+		log.Warn().Err(err).Str("payout_id", payout.PayoutID).Msg("failed to deliver payout.processing callback")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Validation + helpers
 // ---------------------------------------------------------------------------
 
 // validateMethod resolves the payout method into a normalized (type, channel)
 // and, for BANK, the bank record. It rejects unknown methods/banks.
-func (s *PayoutService) validateMethod(ctx context.Context, m models.PayoutMethod) (models.MethodType, string, *models.BankCode, error) {
+func (s *PayoutService) validateMethod(ctx context.Context, m models.PayoutMethodRef) (models.MethodType, string, *models.BankCode, error) {
 	mt := models.MethodType(strings.ToUpper(strings.TrimSpace(string(m.Type))))
 	code := strings.ToUpper(strings.TrimSpace(m.Code))
 	if code == "" {
@@ -631,19 +641,21 @@ func (s *PayoutService) validateMethod(ctx context.Context, m models.PayoutMetho
 	}
 }
 
-func (s *PayoutService) validateCreateRequest(req *CreatePayoutRequest, mt models.MethodType) error {
+func (s *PayoutService) validateCreateRequest(req *CreatePayoutRequest, mt models.MethodType, minAmount int64) error {
 	req.ReferenceID = strings.TrimSpace(req.ReferenceID)
 	req.AccountNo = strings.TrimSpace(req.AccountNo)
-	req.Remark = strings.TrimSpace(req.Remark)
+	req.Description = strings.TrimSpace(req.Description)
 	req.Purpose = strings.TrimSpace(req.Purpose)
 
 	switch {
 	case req.ReferenceID == "":
 		return newPayoutError(400, "MISSING_FIELD", "referenceId is required", nil)
-	case req.Amount < payoutMinAmount:
+	case req.URL == nil || strings.TrimSpace(req.URL.Callback) == "":
+		return newPayoutError(400, "MISSING_FIELD", "url.callback is required", nil)
+	case req.Amount < minAmount:
 		return newPayoutError(400, "AMOUNT_TOO_LOW", "Amount is below minimum payout amount", nil)
-	case len(req.Remark) > 50:
-		return newPayoutError(400, "INVALID_REMARK", "Remark must be 50 characters or fewer", nil)
+	case len(req.Description) > 200:
+		return newPayoutError(400, "INVALID_DESCRIPTION", "Description must be 200 characters or fewer", nil)
 	}
 	if req.FeePaidBy != "" &&
 		!strings.EqualFold(req.FeePaidBy, string(models.FeePaidByMerchant)) &&
@@ -656,6 +668,28 @@ func (s *PayoutService) validateCreateRequest(req *CreatePayoutRequest, mt model
 		}
 	}
 	return validatePayoutAccount(mt, req.AccountNo)
+}
+
+// resolveMinAmount returns the per-channel minimum payout amount from the
+// payout_methods catalog. BANK uses the shared 'DEFAULT' row; each e-wallet has
+// its own row (e.g. DANA accepts payouts from a lower floor than other wallets).
+// Falls back to payoutMinAmount when no row matches.
+func (s *PayoutService) resolveMinAmount(ctx context.Context, mt models.MethodType, channel string) int64 {
+	if s.methodRepo == nil {
+		return payoutMinAmount
+	}
+	code := channel
+	if mt == models.MethodTypeBank {
+		code = "DEFAULT"
+	}
+	method, err := s.methodRepo.GetMethod(ctx, mt, code)
+	if err != nil || method == nil {
+		return payoutMinAmount
+	}
+	if method.MinAmount <= 0 {
+		return payoutMinAmount
+	}
+	return int64(method.MinAmount)
 }
 
 // resolveFee picks the fee for a payout: the provider-reported inquiry fee when
@@ -671,7 +705,7 @@ func (s *PayoutService) resolveFee(_ context.Context, mt models.MethodType, _ st
 func (s *PayoutService) createInquiryWithGeneratedID(ctx context.Context, inquiry *models.PayoutInquiry) error {
 	var lastErr error
 	for attempt := 0; attempt < 5; attempt++ {
-		inquiry.InquiryID = newPayoutPublicID("INQ")
+		inquiry.InquiryID = uuid.New().String()
 		lastErr = s.repo.CreateInquiry(ctx, inquiry)
 		if lastErr == nil {
 			return nil
@@ -686,7 +720,7 @@ func (s *PayoutService) createInquiryWithGeneratedID(ctx context.Context, inquir
 func (s *PayoutService) createPayoutWithGeneratedID(ctx context.Context, payout *models.Payout) error {
 	var lastErr error
 	for attempt := 0; attempt < 5; attempt++ {
-		payout.PayoutID = newPayoutPublicID("PAY")
+		payout.PayoutID = uuid.New().String()
 		lastErr = s.repo.CreatePayout(ctx, payout)
 		if lastErr == nil {
 			return nil
@@ -703,24 +737,25 @@ func (s *PayoutService) createPayoutWithGeneratedID(ctx context.Context, payout 
 
 func (s *PayoutService) buildResponse(ctx context.Context, payout *models.Payout, bank *models.BankCode) *models.PayoutResponse {
 	_ = ctx
+	_ = bank
 	resp := &models.PayoutResponse{
-		PayoutID:    payout.PayoutID,
+		ID:          payout.PayoutID,
 		ReferenceID: payout.ReferenceID,
 		Status:      string(payout.Status),
-		PayoutMethod: models.PayoutMethod{
+		PayoutMethod: models.PayoutMethodRef{
 			Type: payout.MethodType,
 			Code: payout.ChannelCode,
-			Name: payoutMethodName(payout.MethodType, payout.ChannelCode, bank),
 		},
 		AccountNumber: payout.AccountNumber,
 		AccountName:   derefString(payout.AccountName),
-		Amount:        payout.Amount,
-		Fee:           payout.Fee,
-		TotalAmount:   payout.TotalAmount,
-		FeePaidBy:     string(payout.FeePaidBy),
-		Description:   derefString(payout.Description),
-		ProviderRef:   derefString(payout.ProviderRef),
-		CreatedAt:     formatPayoutTime(payout.CreatedAt),
+		Amount: models.PayoutAmount{
+			Subtotal: payout.Amount,
+			Fee:      payout.Fee,
+			Total:    payout.TotalAmount,
+		},
+		FeePaidBy:   string(payout.FeePaidBy),
+		Description: derefString(payout.Description),
+		CreatedAt:   formatPayoutTime(payout.CreatedAt),
 	}
 	if name := derefString(payout.CustomerName); name != "" || derefString(payout.CustomerEmail) != "" || derefString(payout.CustomerPhone) != "" {
 		resp.Customer = &models.PayoutCustomer{
@@ -740,6 +775,70 @@ func (s *PayoutService) buildResponse(ctx context.Context, payout *models.Payout
 		resp.FailedCode = derefString(payout.FailedCode)
 	}
 	return resp
+}
+
+// ListMethods returns the available payout channels grouped by method type.
+// BANK entries are the disbursement-enabled banks (they share the BANK/DEFAULT
+// catalog row for fee + amount limits); EWALLET entries come straight from the
+// payout_methods catalog. Maintenance/inactive channels are surfaced/hidden the
+// same way the payment method list does.
+func (s *PayoutService) ListMethods(ctx context.Context) (*models.PayoutMethodsResponse, error) {
+	resp := &models.PayoutMethodsResponse{
+		Bank:    []models.PayoutMethodEntry{},
+		Ewallet: []models.PayoutMethodEntry{},
+	}
+
+	// BANK: each disbursement-enabled bank, with limits/fee from BANK/DEFAULT.
+	bankDefault, _ := s.methodRepo.GetMethod(ctx, models.MethodTypeBank, "DEFAULT")
+	banks, err := s.bankRepo.GetDisbursementBanks(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for i := range banks {
+		entry := models.PayoutMethodEntry{
+			Code:      banks[i].Code,
+			Name:      banks[i].Name,
+			MinAmount: int(payoutMinAmount),
+		}
+		if bankDefault != nil {
+			applyCatalogToEntry(&entry, bankDefault)
+		}
+		resp.Bank = append(resp.Bank, entry)
+	}
+
+	// EWALLET: active catalog rows for the e-wallet method type.
+	methods, err := s.methodRepo.ListActive(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for i := range methods {
+		if methods[i].MethodType != models.MethodTypeEwallet {
+			continue
+		}
+		entry := models.PayoutMethodEntry{
+			Code: methods[i].Code,
+			Name: methods[i].Name,
+		}
+		applyCatalogToEntry(&entry, &methods[i])
+		resp.Ewallet = append(resp.Ewallet, entry)
+	}
+	return resp, nil
+}
+
+// applyCatalogToEntry copies fee + amount-limit config from a catalog row onto a
+// public method entry.
+func applyCatalogToEntry(entry *models.PayoutMethodEntry, m *models.PayoutMethodCatalog) {
+	entry.FeeType = m.FeeType
+	entry.FeeFlat = m.FeeFlat
+	entry.FeePercent = m.FeePercent
+	entry.FeeMin = m.FeeMin
+	entry.FeeMax = m.FeeMax
+	if m.MinAmount > 0 {
+		entry.MinAmount = m.MinAmount
+	}
+	entry.MaxAmount = m.MaxAmount
+	entry.LogoURL = derefString(m.LogoURL)
+	entry.IsMaintenance = m.IsMaintenance
 }
 
 func validatePayoutAccount(mt models.MethodType, accountNo string) error {
@@ -763,20 +862,9 @@ func bankCodeFor(mt models.MethodType, channel string) string {
 	return ""
 }
 
-func payoutMethodName(mt models.MethodType, channel string, bank *models.BankCode) string {
-	if mt == models.MethodTypeBank && bank != nil {
-		return bank.Name
-	}
-	return channel
-}
-
 func payoutFailedCode(err error) string {
 	if info, ok := extractSNAPError(err); ok && info.ResponseCode != "" {
 		return info.ResponseCode
 	}
 	return "UNKNOWN"
-}
-
-func payoutPurposeDescription(code string) string {
-	return payoutPurposeDescriptions[strings.TrimSpace(code)]
 }

@@ -31,7 +31,7 @@ func testMidtrans(ctx context.Context, ts string) {
 	fmt.Println("--- [1] MIDTRANS ---")
 	serverKey := os.Getenv("MIDTRANS_SERVER_KEY")
 	if serverKey == "" {
-		fmt.Println("  SKIP: MIDTRANS_SERVER_KEY not set\n")
+		fmt.Print("  SKIP: MIDTRANS_SERVER_KEY not set\n\n")
 		return
 	}
 	client, err := midtrans.NewClient(midtrans.Config{
@@ -61,7 +61,7 @@ func testXendit(ctx context.Context, ts string) {
 	fmt.Println("--- [2] XENDIT ---")
 	apiKey := os.Getenv("XENDIT_API_KEY")
 	if apiKey == "" {
-		fmt.Println("  SKIP: XENDIT_API_KEY not set\n")
+		fmt.Print("  SKIP: XENDIT_API_KEY not set\n\n")
 		return
 	}
 	client, err := xendit.NewClient(xendit.Config{APIKey: apiKey})
@@ -87,7 +87,7 @@ func testXendit(ctx context.Context, ts string) {
 	qr := resp.ChannelProperties.QRString
 	if qr == "" {
 		for _, a := range resp.Actions {
-			if m, ok := a.(map[string]interface{}); ok {
+			if m, ok := a.(map[string]any); ok {
 				if v, ok := m["value"].(string); ok && v != "" {
 					qr = v
 					break
@@ -111,7 +111,7 @@ func testPakailink(ctx context.Context, ts string) {
 		baseURL = "https://api.pakailink.id"
 	}
 	if clientID == "" || clientSecret == "" {
-		fmt.Println("  SKIP: PAKAILINK_CLIENT_ID or PAKAILINK_CLIENT_SECRET not set\n")
+		fmt.Print("  SKIP: PAKAILINK_CLIENT_ID or PAKAILINK_CLIENT_SECRET not set\n\n")
 		return
 	}
 	if keyPath == "" {

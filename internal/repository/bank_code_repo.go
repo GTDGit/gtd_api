@@ -104,8 +104,32 @@ func (r *BankCodeRepository) Update(ctx context.Context, b *models.BankCode) err
 }
 
 func (r *BankCodeRepository) GetVABanks(ctx context.Context) ([]models.BankCode, error) {
-	query := `SELECT id, code, short_name, name, swift_code, support_va, support_disbursement, is_active, created_at, updated_at 
+	query := `SELECT id, code, short_name, name, swift_code, support_va, support_disbursement, is_active, created_at, updated_at
 	          FROM bank_codes WHERE is_active = true AND support_va = true ORDER BY code`
+
+	rows, err := r.db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var banks []models.BankCode
+	for rows.Next() {
+		var bank models.BankCode
+		if err := rows.Scan(&bank.ID, &bank.Code, &bank.ShortName, &bank.Name, &bank.SwiftCode,
+			&bank.SupportVA, &bank.SupportDisbursement, &bank.IsActive, &bank.CreatedAt, &bank.UpdatedAt); err != nil {
+			return nil, err
+		}
+		banks = append(banks, bank)
+	}
+	return banks, rows.Err()
+}
+
+// GetDisbursementBanks returns active banks available as payout destinations,
+// sorted by code. It backs the BANK section of GET /v1/payout/methods.
+func (r *BankCodeRepository) GetDisbursementBanks(ctx context.Context) ([]models.BankCode, error) {
+	query := `SELECT id, code, short_name, name, swift_code, support_va, support_disbursement, is_active, created_at, updated_at
+	          FROM bank_codes WHERE is_active = true AND support_disbursement = true ORDER BY code`
 
 	rows, err := r.db.QueryContext(ctx, query)
 	if err != nil {

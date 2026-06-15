@@ -150,7 +150,7 @@ func bankStatusFromCode(code string) models.PayoutStatus {
 	case "06", "05":
 		return models.PayoutStatusFailed
 	case "03", "02", "01":
-		return models.PayoutStatusPending
+		return models.PayoutStatusProcessing
 	default:
 		return models.PayoutStatusProcessing
 	}

@@ -72,6 +72,9 @@ services:
       - NOBU_PUBLIC_KEY_PATH=${NOBU_PUBLIC_KEY_PATH}
       - NOBU_PUBLIC_KEY_PEM=${NOBU_PUBLIC_KEY_PEM}
       - NOBU_CALLBACK_URL=${NOBU_CALLBACK_URL}
+      - NOBU_BASE_URL=${NOBU_BASE_URL}
+      - NOBU_PRIVATE_KEY_PATH=${NOBU_PRIVATE_KEY_PATH}
+      - NOBU_PRIVATE_KEY_PEM=${NOBU_PRIVATE_KEY_PEM}
       - INTERNAL_API_TOKEN=${INTERNAL_API_TOKEN}
       # Payment & Disbursement - BCA Direct
       - BCA_ENV=${BCA_ENV}
@@ -187,6 +190,13 @@ services:
       - S3_BUCKET=${S3_BUCKET}
       - S3_REGION=${S3_REGION}
       - S3_ENDPOINT=${S3_ENDPOINT}
+      # QRIS storage (docs + Nobu Excel batches) + batch/callback runtime
+      - STORAGE_DRIVER=${STORAGE_DRIVER}
+      - STORAGE_LOCAL_PATH=${STORAGE_LOCAL_PATH}
+      - S3_KEY_PREFIX=${S3_KEY_PREFIX}
+      - QRIS_BATCH_TIMES=${QRIS_BATCH_TIMES}
+      - QRIS_BATCH_TZ=${QRIS_BATCH_TZ}
+      - QRIS_CALLBACK_INTERVAL=${QRIS_CALLBACK_INTERVAL}
     dns:
       - 8.8.8.8
       - 8.8.4.4
@@ -194,6 +204,7 @@ services:
     volumes:
       - ./keys:/app/keys:ro
       - ./certs:/app/certs:ro
+      - ./data/qris-storage:/app/data/qris-storage
     depends_on:
       redis:
         condition: service_healthy

@@ -50,6 +50,14 @@ ON CONFLICT (method_type, code) DO NOTHING;
 -- --------------------------------------------
 CREATE TYPE payout_status AS ENUM ('Processing', 'Success', 'Failed');
 
+-- The partial index from 000006 (created on the old `transfers` table, renamed
+-- with it in 000063 but keeping its original name) embeds a `status IN
+-- ('Success','Failed')` predicate bound to transfer_status. ALTER COLUMN TYPE
+-- would re-check that predicate against the new type and fail with
+-- `operator does not exist: payout_status = transfer_status`. Drop it first,
+-- recreate after the type swap.
+DROP INDEX IF EXISTS idx_transfers_callback_pending;
+
 -- Convert payouts.status from transfer_status to payout_status, folding any
 -- legacy 'Pending' rows into 'Processing'. transfer_status itself is left intact
 -- (it is a shared type and is never dropped per the migration rules).
@@ -58,3 +66,7 @@ ALTER TABLE payouts
     ALTER COLUMN status TYPE payout_status
     USING (CASE WHEN status::text = 'Pending' THEN 'Processing' ELSE status::text END)::payout_status;
 ALTER TABLE payouts ALTER COLUMN status SET DEFAULT 'Processing';
+
+-- Recreate the callback-pending partial index now that status is payout_status.
+CREATE INDEX idx_transfers_callback_pending ON payouts(callback_sent)
+    WHERE callback_sent = false AND status IN ('Success', 'Failed');

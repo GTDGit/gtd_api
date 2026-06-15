@@ -311,7 +311,7 @@ func (r *PayoutRepository) UpdatePayout(ctx context.Context, p *models.Payout) e
 func (r *PayoutRepository) ListPayoutsForStatusCheck(ctx context.Context, updatedBefore, createdAfter time.Time, limit int) ([]models.Payout, error) {
 	q := `SELECT ` + payoutColumns + `
 		FROM payouts
-		WHERE status IN ('Processing', 'Pending')
+		WHERE status = 'Processing'
 		  AND updated_at <= $1
 		  AND created_at >= $2
 		ORDER BY updated_at ASC
@@ -443,7 +443,7 @@ func (r *PayoutRepository) Stats(ctx context.Context, f PayoutFilter) (*PayoutSt
         COUNT(*) AS total,
         COUNT(*) FILTER (WHERE status = 'Success') AS total_success,
         COUNT(*) FILTER (WHERE status = 'Processing') AS total_processing,
-        COUNT(*) FILTER (WHERE status = 'Pending') AS total_pending,
+        0 AS total_pending,
         COUNT(*) FILTER (WHERE status = 'Failed') AS total_failed,
         COALESCE(SUM(total_amount) FILTER (WHERE status = 'Success'), 0) AS total_volume
     FROM payouts WHERE ` + strings.Join(where, " AND ")

@@ -31,7 +31,7 @@ func New(cfg config.StorageConfig) (Storage, error) {
 	case "", "local":
 		return NewLocalStorage(cfg.LocalBasePath)
 	case "s3":
-		return nil, fmt.Errorf("storage: s3 driver not yet implemented; set STORAGE_DRIVER=local")
+		return NewS3Storage(cfg)
 	default:
 		return nil, fmt.Errorf("storage: unknown driver %q", cfg.Driver)
 	}
